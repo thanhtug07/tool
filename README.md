@@ -72,6 +72,18 @@ cargo check
 npm run tauri dev
 ```
 
+## Worker (Python) — dev guide
+
+- **Python version:** 3.11 (canonical; dev machine 3.13.7, range `>=3.11,<3.14`).
+- **Cài đặt:** `cd worker && python -m pip install -e ".[dev]"`.
+- **Test:** `cd worker && python -m pytest` (hoặc từ root: `python -m pytest worker/tests` — bỏ qua `ai` marker mặc định).
+- **Chạy worker:** `cd worker && python -m src.main --port 8765` — bind **chỉ `127.0.0.1`** (không LAN). Port mặc định `8765` (đổi qua `--port` hoặc biến môi trường `WORKER_PORT`); contract port thật (random) sẽ do TASK-006 đưa.
+- **Health:** `GET /health` trả `{"status": "ok", "version": "0.1.0", "gpu": null}` — deterministic, không rò secret/path/env. Yêu cầu header `Authorization: Bearer <token>` (mặc định placeholder `dev-placeholder-token`, override qua `WORKER_AUTH_TOKEN`; token thật qua stdin ở TASK-006).
+  ```powershell
+  Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -Headers @{ Authorization = "Bearer dev-placeholder-token" }
+  ```
+- Chưa có STT / translation / GPU detect / sidecar lifecycle (các task sau).
+
 ## Lệnh thường dùng
 
 | Action             | Command               |
