@@ -1,10 +1,11 @@
-"""Worker HTTP routes (TASK-005).
+"""Worker HTTP routes (TASK-005, TASK-006 sidecar auth).
 
 Only ``GET /health`` exists. No job/media/AI endpoints yet.
 """
 
 import os
 import secrets
+import threading
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
@@ -12,14 +13,32 @@ from src import __version__
 from src.api.schemas import HealthResponse
 
 # Placeholder token for local development (TASK-005).
-# TASK-006 will inject a random per-session token over stdin; it replaces this
-# default via the WORKER_AUTH_TOKEN environment variable.
+# TASK-006 injects a random per-session token over stdin via
+# ``configure_auth_token``; it takes precedence over the WORKER_AUTH_TOKEN
+# environment override and the placeholder default.
 PLACEHOLDER_TOKEN = "dev-placeholder-token"
 
 router = APIRouter()
 
+_token_lock = threading.Lock()
+_session_token: str | None = None
+
+
+def configure_auth_token(token: str | None) -> None:
+    """Set the per-session bearer token received from the sidecar parent.
+
+    ``None`` restores the dev-mode fallback chain (env → placeholder).
+    """
+    global _session_token
+    with _token_lock:
+        _session_token = token
+
 
 def _expected_token() -> str:
+    with _token_lock:
+        configured = _session_token
+    if configured:
+        return configured
     return os.environ.get("WORKER_AUTH_TOKEN", PLACEHOLDER_TOKEN)
 
 
