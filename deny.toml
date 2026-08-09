@@ -1,0 +1,19 @@
+# cargo-deny configuration
+# Whitelist = licenses verified commercial-safe per MASTER_PLAN.md §21.
+# Re-verify each dependency's actual LICENSE file at release time (MASTER_PLAN §21 rule).
+
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+]
+
+# Root workspace crate: project license is TBD (README: "TODO — CHƯA QUYẾT ĐỊNH"),
+# so skip it in the license audit. Third-party deps must still be whitelisted above.
+skip = [{ name = "ai-video-localization", version = "0.1.0" }]

@@ -33,7 +33,8 @@
 | Frontend typecheck | `npm run typecheck` (tsc --noEmit) |
 | Frontend lint | `npm run lint` (eslint) |
 | Frontend format | `npm run format` (prettier) |
-| Rust | `cargo check` / `cargo test` |
+| Frontend test | `npm run test` (vitest) |
+| Rust | `cargo check` / `cargo test` (CI thêm: `cargo fmt --check`, `cargo clippy -- -D warnings`) |
 | Worker | `python -m pytest worker/tests` (subset nhanh, không chạy `ai` marker) |
 | Secret scan | `gitleaks detect` (CI từ TASK-002) |
 

@@ -22,6 +22,7 @@ include = ["src*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not ai'"
 markers = [
     "ai: slow AI-dependent tests (run separately)",
 ]

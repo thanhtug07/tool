@@ -80,9 +80,27 @@ npm run tauri dev
 | Frontend typecheck | `npm run typecheck`   |
 | Frontend lint      | `npm run lint`        |
 | Frontend format    | `npm run format`      |
+| Frontend test      | `npm run test`        |
 | Rust check         | `cargo check`         |
 | Rust test          | `cargo test`          |
 | Worker test        | `pytest worker/tests` |
+
+## CI (GitHub Actions)
+
+Workflow: `.github/workflows/ci.yml` — chạy trên mọi **Pull Request** và **push lên `main`**.
+
+| Job        | Runner         | Checks                                                                             |
+| ---------- | -------------- | ---------------------------------------------------------------------------------- |
+| `frontend` | windows-latest | `npm ci` + typecheck + lint + format:check + test (vitest) + build                 |
+| `rust`     | windows-latest | `cargo fmt --check` + `cargo check` + `cargo clippy -- -D warnings` + `cargo test` |
+| `worker`   | ubuntu-latest  | Python 3.11 + `pip install -e .[dev]` + `pytest` (bỏ `ai` marker)                  |
+| `licenses` | ubuntu-latest  | cargo-deny license audit (whitelist trong `deny.toml`)                             |
+| `security` | ubuntu-latest  | gitleaks secret scan (fail nếu có secret/credential)                               |
+
+- CI dùng lockfiles: `package-lock.json` (npm) + `Cargo.lock`.
+- Không có workflow release/deploy ở TASK-002 — CI sign/release sẽ được thêm ở phase sau.
+- Branch protection cho `main` (PR bắt buộc + required status checks) cấu hình trên GitHub sau khi repo được push.
+- **CI badge:** thêm sau khi repo có remote/owner trên GitHub (`/action/workflows/ci.yml/badge.svg`).
 
 ## Tài liệu liên quan (hiện có)
 
