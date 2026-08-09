@@ -1,8 +1,21 @@
+import { useState } from "react";
+
+import Sidebar, { type NavKey } from "@/components/layout/Sidebar";
+import ProjectsPage from "@/pages/Projects";
+import SettingsPage from "@/pages/Settings";
+import AboutPage from "@/pages/About";
+
 export default function App() {
+  const [active, setActive] = useState<NavKey>("projects");
+
   return (
-    <main>
-      <h1>AI Video Localization Studio</h1>
-      <p>Foundation scaffold — Sprint 0 (TASK-001). UI ships in later tasks.</p>
-    </main>
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar active={active} onNavigate={setActive} />
+      <main className="flex-1 overflow-y-auto p-6">
+        {active === "projects" && <ProjectsPage />}
+        {active === "settings" && <SettingsPage />}
+        {active === "about" && <AboutPage />}
+      </main>
+    </div>
   );
 }

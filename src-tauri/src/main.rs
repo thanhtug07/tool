@@ -1,7 +1,7 @@
 //! AI Video Localization Studio — Rust core (Tauri shell).
-//! Foundation scaffold (TASK-001). Tauri dependencies arrive in TASK-003.
 
-#[cfg(not(target_arch = "wasm32"))]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 fn main() {
-    println!("AI Video Localization Studio — foundation scaffold (TASK-001)");
+    ai_video_localization_lib::run()
 }

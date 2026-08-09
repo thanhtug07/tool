@@ -22,3 +22,4 @@ schemas/
 # Build artifacts
 node_modules/
 dist/
+target/

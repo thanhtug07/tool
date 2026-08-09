@@ -3,8 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import App from "../App";
 
 describe("App", () => {
-  it("renders the foundation scaffold heading", () => {
+  it("renders the desktop shell with sidebar navigation", () => {
     const html = renderToStaticMarkup(<App />);
-    expect(html).toContain("AI Video Localization Studio");
+    expect(html).toContain("AI Video Localization");
+    expect(html).toContain("Projects");
+    expect(html).toContain("Settings");
+    expect(html).toContain("About");
   });
 });

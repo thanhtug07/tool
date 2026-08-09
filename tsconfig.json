@@ -19,6 +19,10 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
 
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
     "types": ["vite/client"]
   },
   "include": ["src", "vite.config.ts", "eslint.config.js"]

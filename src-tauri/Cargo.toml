@@ -4,13 +4,19 @@ version.workspace = true
 edition.workspace = true
 description = "AI Video Localization Studio — Tauri Rust core"
 default-run = "ai-video-localization"
+# Desktop app, not published to crates.io; excluded from cargo-deny license audit (license TBD).
+publish = false
 
 [lib]
 name = "ai_video_localization_lib"
 crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+tauri = { version = "2.11.5", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]

@@ -3,17 +3,24 @@
 # Re-verify each dependency's actual LICENSE file at release time (MASTER_PLAN §21 rule).
 
 [licenses]
-unlicensed = "deny"
+unused-allowed-license = "warn"
+confidence-threshold = 0.93
 allow = [
     "MIT",
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "Zlib",
     "CC0-1.0",
+    "Unicode-3.0",
+    "MPL-2.0",
 ]
 
-# Root workspace crate: project license is TBD (README: "TODO — CHƯA QUYẾT ĐỊNH"),
-# so skip it in the license audit. Third-party deps must still be whitelisted above.
-skip = [{ name = "ai-video-localization", version = "0.1.0" }]
+# Root workspace crate (ai-video-localization): project license is TBD
+# (README: "TODO — CHƯA QUYẾT ĐỊNH"), so it is marked private/unpublished and
+# excluded from the license audit. Third-party deps must still be whitelisted above.
+[licenses.private]
+ignore = true
+
