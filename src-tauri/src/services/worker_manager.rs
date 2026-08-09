@@ -29,7 +29,7 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::worker_client::{HttpError, WorkerClient, HOST_LOOPBACK};
 
@@ -44,7 +44,7 @@ const POLL_STEP: Duration = Duration::from_millis(200);
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Lifecycle state of the Python sidecar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkerState {
     Stopped,
@@ -55,7 +55,7 @@ pub enum WorkerState {
 }
 
 /// Serialized snapshot exposed over IPC (never contains the token).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerStateInfo {
     pub state: WorkerState,
     pub pid: Option<u32>,

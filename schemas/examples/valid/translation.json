@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "target_language": "vi",
+  "model": "gemini-2.5-flash-lite",
+  "blocks": [
+    {
+      "block_idx": 0,
+      "translations": [
+        {
+          "idx": 0,
+          "segment_id": "seg_0001",
+          "source_text": "你最近怎么样？",
+          "translated_text": "Dạo này cậu thế nào?",
+          "confidence": 0.94
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "job_x123",
+  "project_id": "proj_001",
+  "type": "burn",
+  "status": "running",
+  "progress": 1.5,
+  "stage": "transcribing",
+  "error_code": null,
+  "error_message": null,
+  "params": {"model": "large-v3"},
+  "created_at": "2026-08-10T10:00:00Z",
+  "started_at": "2026-08-10T10:00:01Z",
+  "finished_at": null
+}

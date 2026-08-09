@@ -2,7 +2,7 @@
 
 Desktop app (Windows 10/11) dành cho localization video: tự động **transcribe (STT)**, **dịch (translation)**, **tạo subtitle**, và **render** video có subtitle đã dịch sang ngôn ngữ khác.
 
-> **Trạng thái: Sprint 0 — Foundation (TASK-001).** Đang xây nền tảng repo; chưa có tính năng UI/worker nào. Đừng dùng cho production.
+> **Trạng thái: Sprint 0 — Foundation.** Scaffold (TASK-001), typed IPC (TASK-004), Python sidecar + `/health` + lifecycle (TASK-005/006) và shared schemas/contracts (TASK-007) đã xong. Chưa có tính năng UI/worker AI; đừng dùng cho production.
 
 ## Mục tiêu (MVP scope)
 
@@ -85,6 +85,15 @@ npm run tauri dev
 - **Sidecar mode (TASK-006):** Rust (`WorkerManager`) tự spawn worker khi app khởi động — port ephemeral random trên `127.0.0.1`, token 256-bit random mỗi session truyền qua **stdin** (không qua argv/env/log/UI). Worker echo `READY <token>` trên stdout sau khi bind; Rust poll `/health` có auth → `READY`; nhận `SHUTDOWN` trên stdin → graceful exit. Override interpreter dev bằng biến môi trường `WORKER_PYTHON` (mặc định dùng `python` trên PATH).
 - Chưa có STT / translation / GPU detect (các task sau).
 
+## Shared schemas / contracts (TASK-007)
+
+- **Source of truth:** `schemas/*.schema.json` — JSON Schema (draft 2020-12) cho toàn bộ contract dùng chung giữa TS frontend, Rust core và Python worker. KHÔNG có Zod/Pydantic/Serde-only hay interface trùng lặp thủ công làm source of truth.
+- **Bộ contract hiện tại:** worker health, worker state, error envelope (`{"error": {code, message, recoverable}}`), job state, và data document transcript / translation / subtitle (MASTER_PLAN §24). `schemas/examples/valid/` + `schemas/examples/invalid/` chứa fixture hợp lệ/bị reject dùng chung cho cả 3 tầng.
+- **Python:** `worker/src/api/schemas.py` **được generate** từ `schemas/` bằng `datamodel-code-generator` — không sửa tay. Re-gen: `python scripts/generate_schemas.py` (idempotent, có test).
+- **TypeScript:** `src/types/api.ts` mirror schema; `src/types/api.test.ts` kiểm tra drift (so canonical fixtures với type + schema).
+- **Rust:** struct mirror trong `src-tauri/src/services/` (`HealthResponse`, `WorkerStateInfo`, `ErrorResponse`) + test cross-language parse fixtures (`services/contract_tests.rs`).
+- **Quy tắc:** schema không bao giờ chứa secret (token runtime-only — MASTER_PLAN §24). Thay đổi contract → sửa JSON Schema → re-gen Python → cập nhật TS/Rust nếu cần → chạy test 3 tầng.
+
 ## Lệnh thường dùng
 
 | Action             | Command               |
@@ -97,6 +106,7 @@ npm run tauri dev
 | Rust check         | `cargo check`         |
 | Rust test          | `cargo test`          |
 | Worker test        | `pytest worker/tests` |
+| Re-gen worker schemas | `python scripts/generate_schemas.py` |
 
 ## CI (GitHub Actions)
 

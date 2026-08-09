@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "project_id": "proj_001",
+  "language": "zh",
+  "model": "faster-whisper:large-v3:int8",
+  "segments": [
+    {
+      "id": "seg_0001",
+      "idx": 0,
+      "speaker": "speaker_01",
+      "start": 10.25,
+      "end": 13.72,
+      "text": "你最近怎么样？",
+      "language": "zh",
+      "confidence": 0.96,
+      "words": [
+        {"word": "你", "start": 10.26, "end": 10.35, "speaker": "speaker_01"}
+      ]
+    }
+  ]
+}

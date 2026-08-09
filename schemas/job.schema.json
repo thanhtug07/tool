@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Job",
+  "description": "Job status object shared across the pipeline (MASTER_PLAN 24.4). Runtime protocol contract: emitted over IPC (job.get) and events (job:status). Shape follows the frozen 24.4 example exactly.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "project_id", "type", "status", "progress", "stage", "error_code", "error_message", "params", "created_at", "started_at", "finished_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^job_[0-9]+$"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "$ref": "#/$defs/JobType"
+    },
+    "status": {
+      "$ref": "#/$defs/JobStatus"
+    },
+    "progress": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "error_code": {
+      "type": ["string", "null"]
+    },
+    "error_message": {
+      "type": ["string", "null"]
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "created_at": {
+      "$ref": "#/$defs/ISO8601"
+    },
+    "started_at": {
+      "$ref": "#/$defs/ISO8601OrNull"
+    },
+    "finished_at": {
+      "$ref": "#/$defs/ISO8601OrNull"
+    }
+  },
+  "$defs": {
+    "JobType": {
+      "type": "string",
+      "enum": ["transcribe", "translate", "subtitle", "render"]
+    },
+    "JobStatus": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "failed", "cancelled"]
+    },
+    "ISO8601": {
+      "type": "string"
+    },
+    "ISO8601OrNull": {
+      "type": ["string", "null"]
+    }
+  }
+}

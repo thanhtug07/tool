@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "E_FFMPEG_RENDER",
+    "message": "ffmpeg render failed: encoder not available",
+    "recoverable": true
+  }
+}

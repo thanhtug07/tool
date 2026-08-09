@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "project_id": "proj_001",
+  "style": {
+    "font": "Arial",
+    "font_size": 44,
+    "stroke": 2,
+    "shadow": 1,
+    "position": "middle",
+    "bg_box": false,
+    "max_chars_per_line": 42,
+    "max_cps": 18
+  },
+  "cues": [
+    {
+      "cue_number": 0,
+      "start": 10.25,
+      "end": 13.72,
+      "text": "Dạo này cậu thế nào?"
+    }
+  ],
+  "output": {
+    "ass_path": "output/out.ass",
+    "srt_path": "output/out.srt"
+  }
+}

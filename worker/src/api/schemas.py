@@ -1,16 +1,201 @@
-"""API schemas for the worker HTTP surface (TASK-005)."""
+# DO NOT EDIT - generated from schemas/*.schema.json by scripts/generate_schemas.py
+# Source of truth: schemas/ (single source of truth - MASTER_PLAN.md 24 / TASK-007).
+# Re-run `python scripts/generate_schemas.py` after changing any schema file.
 
-from typing import Literal
 
-from pydantic import BaseModel
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, confloat, conint, constr
+
+
+
+class HealthStatus(RootModel[Literal['ok']]):
+    root: Literal['ok']
 
 
 class HealthResponse(BaseModel):
-    """Deterministic health payload returned by ``GET /health``.
-
-    ``gpu`` is always ``null`` until a real hardware probe exists (later task).
-    """
-
-    status: Literal["ok"]
-    version: str
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    status: HealthStatus
+    version: constr(min_length=1)
     gpu: None
+
+
+class WorkerState(
+    RootModel[Literal['stopped', 'starting', 'ready', 'stopping', 'failed']]
+):
+    root: Literal['stopped', 'starting', 'ready', 'stopping', 'failed']
+
+
+class WorkerStateInfo(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    state: WorkerState
+    pid: conint(ge=0) | None
+    port: conint(ge=0, le=65535) | None
+    restarts: conint(ge=0)
+    last_error: str | None
+
+
+class ErrorEnvelope(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    code: constr(pattern=r'^E_[A-Z0-9_]+$')
+    message: constr(min_length=1)
+    recoverable: bool
+
+
+class ErrorResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    error: ErrorEnvelope
+
+
+class JobType(RootModel[Literal['transcribe', 'translate', 'subtitle', 'render']]):
+    root: Literal['transcribe', 'translate', 'subtitle', 'render']
+
+
+class JobStatus(
+    RootModel[Literal['queued', 'running', 'succeeded', 'failed', 'cancelled']]
+):
+    root: Literal['queued', 'running', 'succeeded', 'failed', 'cancelled']
+
+
+class ISO8601(RootModel[str]):
+    root: str
+
+
+class ISO8601OrNull(RootModel[str | None]):
+    root: str | None
+
+
+class Job(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: constr(pattern=r'^job_[0-9]+$')
+    project_id: constr(min_length=1)
+    type: JobType
+    status: JobStatus
+    progress: confloat(ge=0.0, le=1.0)
+    stage: constr(min_length=1)
+    error_code: str | None
+    error_message: str | None
+    params: dict[str, Any]
+    created_at: ISO8601
+    started_at: ISO8601OrNull | None
+    finished_at: ISO8601OrNull | None
+
+
+class SubtitleStyle(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    font: constr(min_length=1)
+    font_size: conint(ge=1, le=500)
+    stroke: conint(ge=0)
+    shadow: conint(ge=0)
+    position: Literal['bottom_center', 'top_center']
+    bg_box: bool
+    max_chars_per_line: conint(ge=1)
+    max_cps: conint(ge=1)
+
+
+class Cue(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    cue_number: conint(ge=1)
+    start: confloat(ge=0.0)
+    end: confloat(ge=0.0)
+    text: constr(min_length=1)
+
+
+class SubtitleOutput(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    ass_path: str | None = None
+    srt_path: str | None = None
+
+
+class Subtitle(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    schema_version: Literal[1]
+    project_id: constr(min_length=1)
+    style: SubtitleStyle
+    cues: list[Cue] = Field(..., min_length=1)
+    output: SubtitleOutput
+
+
+class Word(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    word: constr(min_length=1)
+    start: confloat(ge=0.0)
+    end: confloat(ge=0.0)
+    speaker: str | None = None
+
+
+class TranslationItem(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    idx: conint(ge=0)
+    segment_id: constr(pattern=r'^seg_[0-9]+$')
+    source_text: constr(min_length=1)
+    translated_text: constr(min_length=1)
+    confidence: confloat(ge=0.0, le=1.0)
+
+
+class TranscriptSegment(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: constr(pattern=r'^seg_[0-9]+$')
+    idx: conint(ge=0)
+    speaker: str | None = None
+    start: confloat(ge=0.0)
+    end: confloat(ge=0.0)
+    text: constr(min_length=1)
+    language: constr(min_length=2, max_length=8)
+    confidence: confloat(ge=0.0, le=1.0)
+    words: list[Word] | None = None
+
+
+class Transcript(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    schema_version: Literal[1]
+    project_id: constr(min_length=1)
+    language: constr(min_length=2, max_length=8)
+    model: constr(min_length=1)
+    segments: list[TranscriptSegment] = Field(..., min_length=1)
+
+
+class TranslationBlock(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    block_idx: conint(ge=0)
+    translations: list[TranslationItem] = Field(..., min_length=1)
+
+
+class Translation(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    schema_version: Literal[1]
+    target_language: constr(min_length=2, max_length=8)
+    model: constr(min_length=1)
+    blocks: list[TranslationBlock] = Field(..., min_length=1)

@@ -1,0 +1,7 @@
+{
+  "state": "ready",
+  "pid": 1234,
+  "port": 8765,
+  "restarts": 0,
+  "last_error": null
+}

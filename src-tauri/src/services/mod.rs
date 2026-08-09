@@ -6,3 +6,6 @@
 
 pub mod worker_client;
 pub mod worker_manager;
+
+#[cfg(test)]
+mod contract_tests;

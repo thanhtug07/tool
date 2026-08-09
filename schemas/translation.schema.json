@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Translation",
+  "description": "Translation document output by the LLM translation stage (MASTER_PLAN 24.2), organized per block with merged segment translations. Persisted artifact, versioned via schema_version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "target_language", "model", "blocks"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "target_language": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 8
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "blocks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/TranslationBlock"
+      }
+    }
+  },
+  "$defs": {
+    "TranslationBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block_idx", "translations"],
+      "properties": {
+        "block_idx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "translations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/TranslationItem"
+          }
+        }
+      }
+    },
+    "TranslationItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["idx", "segment_id", "source_text", "translated_text", "confidence"],
+      "properties": {
+        "idx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "segment_id": {
+          "type": "string",
+          "pattern": "^seg_[0-9]+$"
+        },
+        "source_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "translated_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  }
+}

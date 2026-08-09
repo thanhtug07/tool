@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "not-an-error-code",
+    "message": "",
+    "recoverable": "yes"
+  }
+}

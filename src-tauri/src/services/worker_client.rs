@@ -34,6 +34,23 @@ pub struct HealthResponse {
     pub gpu: Option<serde_json::Value>,
 }
 
+/// Error envelope returned by worker HTTP endpoints (canonical `api.schema.json`).
+///
+/// Mirrors `{"error": {"code": ..., "message": ..., "recoverable": ...}}` from
+/// MASTER_PLAN.md §25.3. Never contains stack traces, tokens, or filesystem paths.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ErrorEnvelope {
+    pub code: String,
+    pub message: String,
+    pub recoverable: bool,
+}
+
+/// Full worker error body: `{"error": { ... }}`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ErrorResponse {
+    pub error: ErrorEnvelope,
+}
+
 /// Errors from talking to the worker over HTTP.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpError {

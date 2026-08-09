@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkerApi",
+  "description": "Shared API contracts for the worker HTTP surface and sidecar lifecycle (MASTER_PLAN §25, TASK-006). This is a container of contract definitions; individual payloads are validated against the referenced $def. The health and worker-state payloads intentionally carry no schema_version field so they keep matching the existing runtime (TASK-005 /health, TASK-006 get_worker_state).",
+  "type": "object",
+  "properties": {},
+  "$defs": {
+    "HealthStatus": {
+      "type": "string",
+      "enum": ["ok"]
+    },
+    "HealthResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "version", "gpu"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gpu": {
+          "type": "null"
+        }
+      }
+    },
+    "WorkerState": {
+      "type": "string",
+      "enum": ["stopped", "starting", "ready", "stopping", "failed"]
+    },
+    "WorkerStateInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "pid", "port", "restarts", "last_error"],
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/WorkerState"
+        },
+        "pid": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "port": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "restarts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_error": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "ErrorEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "recoverable"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^E_[A-Z0-9_]+$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recoverable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorEnvelope"
+        }
+      }
+    }
+  }
+}
