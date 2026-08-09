@@ -1,0 +1,16 @@
+[package]
+name = "ai-video-localization"
+version.workspace = true
+edition.workspace = true
+description = "AI Video Localization Studio — Tauri Rust core"
+default-run = "ai-video-localization"
+
+[lib]
+name = "ai_video_localization_lib"
+crate-type = ["lib", "cdylib"]
+
+[build-dependencies]
+
+[dependencies]
+
+[dev-dependencies]

@@ -1,0 +1,50 @@
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Secrets / credentials (never commit) ---
+.env
+.env.*
+!.env.example
+*.key
+*.pfx
+*.pem
+*.p12
+
+# --- Node / frontend ---
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+*.log
+
+# --- Rust / Tauri ---
+target/
+src-tauri/gen/
+src-tauri/target/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Vendor binaries / models (downloaded, not committed) ---
+vendor/ffmpeg/
+vendor/models/
+models/
+
+# --- Temporary / local ---
+*.tmp
+tmp/

@@ -1,0 +1,24 @@
+# Frozen source-of-truth docs — DO NOT reformat
+MASTER_PLAN.md
+ARCHITECTURE_DECISION.md
+IMPLEMENTATION_ROADMAP.md
+TASKS.md
+QUALITY_BENCHMARK.md
+GOLDEN_VIDEO_TEST.md
+MASTER_PLAN_REVIEW.md
+PHASE_0_CHANGELOG.md
+PHASE_0_FINAL_CHANGELOG.md
+AGENTS.md
+
+# Non-frontend layers (scoped to their own tooling)
+src-tauri/
+worker/
+vendor/
+docs/
+scripts/
+schemas/
+.github/
+
+# Build artifacts
+node_modules/
+dist/
