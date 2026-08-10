@@ -1,6 +1,7 @@
-"""Worker HTTP routes (TASK-005, TASK-006 sidecar auth).
+"""Worker HTTP routes (TASK-005, TASK-006 sidecar auth, TASK-013 STT).
 
-Only ``GET /health`` exists. No job/media/AI endpoints yet.
+- ``GET /health`` — cheap liveness probe (no heavy imports).
+- ``POST /v1/stt/transcribe`` — STT stage (faster-whisper, lazy-loaded).
 """
 
 import os
@@ -8,6 +9,7 @@ import secrets
 import threading
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field
 
 from src import __version__
 from src.api.schemas import HealthResponse
@@ -59,3 +61,48 @@ def health() -> HealthResponse:
     so the endpoint stays cheap and deterministic.
     """
     return HealthResponse(status="ok", version=__version__, gpu=None)
+
+
+class TranscribeRequest(BaseModel):
+    """Request body for ``/v1/stt/transcribe`` (request-only contract; the
+    Transcript response is the canonical artifact in schemas/)."""
+
+    audio_path: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    model: str = "large-v3"
+    device: str = "auto"
+    language: str | None = None
+    total_duration_seconds: float | None = Field(default=None, ge=0.0)
+
+
+@router.post(
+    "/v1/stt/transcribe",
+    dependencies=[Depends(require_bearer)],
+)
+def stt_transcribe(request: TranscribeRequest) -> dict:
+    """Transcribe ``audio_path`` and return a canonical Transcript document.
+
+    STT is AI-dependent: without a downloaded model this returns a clean
+    ``E_STT_*`` error, never a shell/stack-trace leak.
+    """
+    from fastapi.responses import JSONResponse
+
+    from src.services.stt_service import STTError, transcribe  # noqa: PLC0415 - lazy
+
+    try:
+        result = transcribe(
+            request.audio_path,
+            project_id=request.project_id,
+            model_name=request.model,
+            device=request.device,
+            language=request.language,
+            total_duration_seconds=request.total_duration_seconds,
+        )
+    except STTError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {"code": exc.code, "message": exc.message, "recoverable": False}
+            },
+        )
+    return result.transcript
