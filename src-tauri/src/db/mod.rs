@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, TransactionBehavior};
 
 pub use migrations::{run_migrations, MIGRATIONS};
+pub use repo::job::{Job, JobStatus, JobType};
 pub use repo::project::{Project, ProjectStatus};
 
 /// How long a connection waits for a write lock before failing (WAL readers do

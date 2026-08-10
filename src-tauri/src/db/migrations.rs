@@ -46,6 +46,32 @@ pub const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_projects_updated_at ON projects(updated_at);
         "#,
     },
+    Migration {
+        version: 3,
+        name: "create jobs table",
+        sql: r#"
+            CREATE TABLE jobs (
+                id TEXT PRIMARY KEY,           -- job_NNNN (canonical Job schema)
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                type TEXT NOT NULL,            -- transcribe/translate/subtitle/render
+                status TEXT NOT NULL,          -- queued/running/succeeded/failed/cancelled
+                progress REAL NOT NULL DEFAULT 0,
+                stage TEXT NOT NULL DEFAULT 'queued',
+                error_code TEXT,
+                error_message TEXT,
+                error_log TEXT,
+                params_json TEXT NOT NULL DEFAULT '{}',
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            );
+            CREATE INDEX idx_jobs_project_id ON jobs(project_id);
+            CREATE INDEX idx_jobs_status ON jobs(status);
+        "#,
+    },
 ];
 
 /// Apply every pending migration (versions greater than `user_version`) in order.

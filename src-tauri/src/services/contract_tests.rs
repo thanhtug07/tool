@@ -73,3 +73,32 @@ fn project_example_parses_into_project_and_round_trips() {
     assert_eq!(serialized["name"], json!("Bộ phim mẫu"));
     assert_eq!(serialized["created_at"], json!("2026-08-10T09:15:00.000Z"));
 }
+
+#[test]
+fn job_example_parses_into_job_and_round_trips() {
+    let value = example("job");
+    let job: crate::db::Job = serde_json::from_value(value).expect("job parses");
+    assert_eq!(job.id, "job_0123");
+    assert_eq!(job.status, crate::db::JobStatus::Running);
+    assert_eq!(job.job_type, crate::db::JobType::Transcribe);
+    assert_eq!(job.progress, 0.42);
+    assert_eq!(job.stage, "transcribing");
+    assert_eq!(job.error_code, None);
+    assert_eq!(job.error_message, None);
+    assert_eq!(job.params["model"], json!("large-v3"));
+    assert_eq!(job.created_at, "2026-08-10T10:00:00Z");
+    assert_eq!(job.started_at.as_deref(), Some("2026-08-10T10:00:01Z"));
+    assert_eq!(job.finished_at, None);
+
+    // Serialized back out, the canonical field names and lowercase enums
+    // survive, and no DB-internal column leaks into the wire payload.
+    let serialized = serde_json::to_value(&job).expect("job serializes");
+    assert_eq!(serialized["type"], json!("transcribe"));
+    assert_eq!(serialized["status"], json!("running"));
+    assert_eq!(serialized["progress"], json!(0.42));
+    assert!(serialized.get("retry_count").is_none());
+    assert!(serialized.get("cancel_requested").is_none());
+    assert!(serialized.get("error_log").is_none());
+    assert!(serialized.get("updated_at").is_none());
+    assert!(serialized.get("error_code").is_some_and(|v| v.is_null()));
+}

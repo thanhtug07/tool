@@ -5,6 +5,7 @@
 //! (authenticated loopback HTTP). TASK-008 adds `project_service`
 //! (SQLite-backed project CRUD + working directories).
 
+pub mod job_service;
 pub mod project_service;
 pub mod worker_client;
 pub mod worker_manager;

@@ -4,16 +4,36 @@
 //! app startup, reaches `Ready`, and is gracefully shut down on app exit.
 //! TASK-008: SQLite + ProjectService — the database lives in the OS user-data
 //! directory and project CRUD is exposed over `project.*` IPC commands.
+//! TASK-010: JobService — the pipeline job orchestrator exposed over `job.*`
+//! IPC; its `job:status`/`job:log` events are forwarded to the frontend.
 
 pub mod commands;
 pub mod db;
 pub mod logging;
 pub mod services;
 
-use tauri::{Manager, WindowEvent};
+use std::sync::Arc;
 
+use tauri::{Emitter, Manager, WindowEvent};
+
+use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig, NotWiredRunner};
 use services::project_service::ProjectService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
+
+/// Forwards `JobEvent`s to the frontend as Tauri events (`job:status`,
+/// `job:log` — MASTER_PLAN.md §25.2).
+struct AppEventSink {
+    app: tauri::AppHandle,
+}
+
+impl JobEventSink for AppEventSink {
+    fn emit(&self, event: JobEvent) {
+        let _ = match event {
+            JobEvent::Status(payload) => self.app.emit("job:status", payload),
+            JobEvent::Log(payload) => self.app.emit("job:log", payload),
+        };
+    }
+}
 
 pub fn run() {
     logging::init();
@@ -27,6 +47,11 @@ pub fn run() {
             commands::project::open,
             commands::project::save,
             commands::project::delete,
+            commands::job::submit,
+            commands::job::get,
+            commands::job::list,
+            commands::job::cancel,
+            commands::job::retry,
         ])
         .setup(|app| {
             // The app keeps running even if the worker cannot start (e.g. no
@@ -40,7 +65,19 @@ pub fn run() {
             // `ProjectService::open` captures init failures internally, so the
             // app still runs and `project.*` commands report the error cleanly.
             let data_dir = app.path().app_data_dir()?;
-            app.manage(ProjectService::open(data_dir));
+            app.manage(ProjectService::open(data_dir.clone()));
+
+            // Job orchestrator over the same `app.db` (WAL allows concurrent
+            // connections). TASK-010 ships the lifecycle with a placeholder
+            // runner; concrete executors are wired by later pipeline tasks.
+            app.manage(JobService::open(
+                data_dir,
+                Arc::new(NotWiredRunner),
+                Arc::new(AppEventSink {
+                    app: app.handle().clone(),
+                }),
+                JobServiceConfig::default(),
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -56,6 +93,9 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(manager) = app_handle.try_state::<WorkerManager>() {
                     manager.stop();
+                }
+                if let Some(jobs) = app_handle.try_state::<JobService>() {
+                    jobs.stop();
                 }
             }
         });

@@ -1,6 +1,6 @@
 runner_version: "1.0"
-current_task: null
-current_status: PASS
+current_task: TASK-010
+current_status: IN_PROGRESS
 last_completed_task: TASK-009
 next_task: TASK-010
 
