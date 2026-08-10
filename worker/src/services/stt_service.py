@@ -34,7 +34,9 @@ from __future__ import annotations
 import logging
 import math
 import os
+import threading
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from src.core.job import CancelledError, CancellationToken
@@ -44,6 +46,14 @@ logger = logging.getLogger(__name__)
 E_STT_MODEL_UNAVAILABLE = "E_STT_MODEL_UNAVAILABLE"
 E_STT_FAILED = "E_STT_FAILED"
 E_STT_NO_SPEECH = "E_STT_NO_SPEECH"
+
+#: TASK-015 mitigation 3: whisper.cpp model spawns are serialized behind this
+#: lock so two concurrent STT jobs can never race the ggml/Vulkan init
+#: (whisper.cpp issue #3638).
+_WHISPER_INIT_LOCK = threading.Lock()
+
+BACKEND_FASTER_WHISPER = "faster-whisper"
+BACKEND_WHISPER_CPP = "whisper-cpp"
 
 #: Approximate int8 VRAM footprint per model (MASTER_PLAN §5 / §14.2).
 MODEL_VRAM_REQUIREMENTS_MB: dict[str, float] = {
@@ -229,13 +239,45 @@ def transcribe(
     cancel: CancellationToken | None = None,
     on_progress: ProgressCallback | None = None,
     whisper_model: Any | None = None,
+    backend: str = BACKEND_FASTER_WHISPER,
+    strategy: Any | None = None,
+    whisper_cli: Callable | None = None,
+    model_path: str | None = None,
+    num_threads: int | None = None,
+    beam_size: int | None = 5,
+    no_flash_attn: bool = False,
 ) -> TranscribeResult:
     """Transcribe ``audio_path`` into a canonical Transcript.
 
     ``whisper_model`` is a test seam: when provided the guard/load steps are
     skipped and it is used as-is (it must expose ``transcribe(audio, ...)``
     returning ``(segments, info)`` like faster-whisper 1.x).
+
+    ``backend`` selects the engine (TASK-015): ``faster-whisper`` (default),
+    ``whisper-cpp`` (AMD/Intel/CPU fallback), or ``auto`` which defers to the
+    resolved ``strategy`` (TASK-014): a strategy whose ``stt_backend`` is
+    ``whisper-cpp`` routes here. ``whisper_cli`` is a test seam for the
+    whisper-cpp runner (same ``(args, *, cancel, on_progress)`` contract).
     """
+    if backend == "auto":
+        strategy_backend = getattr(strategy, "stt_backend", BACKEND_FASTER_WHISPER)
+        backend = BACKEND_WHISPER_CPP if strategy_backend == BACKEND_WHISPER_CPP else BACKEND_FASTER_WHISPER
+
+    if backend == BACKEND_WHISPER_CPP:
+        return _transcribe_whisper_cpp(
+            audio_path,
+            project_id=project_id,
+            language=language,
+            total_duration_seconds=total_duration_seconds,
+            cancel=cancel,
+            on_progress=on_progress,
+            model_path=model_path,
+            num_threads=num_threads,
+            beam_size=beam_size,
+            no_flash_attn=no_flash_attn,
+            whisper_cli=whisper_cli,
+        )
+
     if not os.path.isfile(audio_path):
         raise STTError(E_STT_FAILED, "Audio file does not exist.")
     if cancel is not None and cancel.is_cancelled():
@@ -297,4 +339,88 @@ def transcribe(
         transcript=transcript,
         model_used=effective_model,
         device_used=resolved_device,
+    )
+
+
+def _transcribe_whisper_cpp(
+    audio_path: str,
+    *,
+    project_id: str,
+    language: str | None,
+    total_duration_seconds: float | None,
+    cancel: CancellationToken | None,
+    on_progress: ProgressCallback | None,
+    model_path: str | None,
+    num_threads: int | None,
+    beam_size: int | None,
+    no_flash_attn: bool,
+    whisper_cli: Callable | None,
+) -> TranscribeResult:
+    """TASK-015: transcribe via the whisper-cli sidecar (Vulkan/CPU fallback).
+
+    Applies the three mandatory mitigations (MASTER_PLAN §14.2):
+    1. ``beam_size`` capped at 6 by ``build_transcribe_args``.
+    2. ``--no-flash-attn`` when the caller resolved an AMD/Intel Vulkan device.
+    3. Model spawn serialized behind ``_WHISPER_INIT_LOCK``.
+    """
+    from src.core.whisper_cpp import (  # noqa: PLC0415 - lazy sidecar module
+        WhisperCppError,
+        build_transcribe_args,
+        parse_json_output,
+        resolve_whisper_cli,
+        run_whisper_cli,
+    )
+
+    if not os.path.isfile(audio_path):
+        raise STTError(E_STT_FAILED, "Audio file does not exist.")
+    if cancel is not None and cancel.is_cancelled():
+        raise CancelledError("transcription cancelled before it started")
+    if not model_path:
+        raise STTError(E_STT_FAILED, "whisper-cpp backend requires a model_path.")
+
+    binary = resolve_whisper_cli()
+    args = [binary] + build_transcribe_args(
+        model_path,
+        audio_path,
+        language=language,
+        num_threads=num_threads,
+        beam_size=beam_size,
+        no_flash_attn=no_flash_attn,
+    )
+
+    with _WHISPER_INIT_LOCK:
+        try:
+            if whisper_cli is not None:
+                result = whisper_cli(args, cancel=cancel, on_progress=on_progress)
+            else:
+                result = run_whisper_cli(args, cancel=cancel, on_progress=on_progress)
+        except CancelledError:
+            raise
+        except WhisperCppError as exc:
+            raise STTError(exc.code, exc.message) from exc
+        except Exception as exc:  # noqa: BLE001 - map every runner failure
+            raise STTError(E_STT_FAILED, "whisper.cpp transcription failed.") from exc
+
+    if result.returncode != 0:
+        raise STTError(E_STT_FAILED, "whisper.cpp transcription failed.")
+
+    parsed = parse_json_output(result.output_json)
+    segments = [
+        SimpleNamespace(text=seg["text"], start=seg["start"], end=seg["end"])
+        for seg in parsed["segments"]
+    ]
+    transcript = build_transcript(
+        segments,
+        project_id=project_id,
+        model_name="whisper-cpp",
+        language_override=language,
+        detected_language=parsed.get("language"),
+        total_duration_seconds=total_duration_seconds,
+        cancel=cancel,
+        on_progress=on_progress,
+    )
+    return TranscribeResult(
+        transcript=transcript,
+        model_used="whisper-cpp",
+        device_used="cpu",
     )
