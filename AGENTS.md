@@ -51,3 +51,22 @@ Thứ tự trước khi báo xong: **typecheck + lint + format + test layer liê
 ## Environment (đã detect trên máy dev)
 
 Node 24.16.0 / npm 11.13.0 / Rust 1.96.0 / Python 3.13.7 (architecture chốt worker = Python 3.11 — xem ADR). Git 2.52.0. Không dùng `"latest"` cho dependency critical.
+
+## Autonomous runner (scripts/autonomous_runner.py)
+
+Repo được điều khiển bởi autonomous orchestrator — chạy từ **current task → TASK-030** mà không cần copy prompt thủ công:
+
+```powershell
+python scripts/autonomous_runner.py --dry-run   # preview (không thay đổi gì)
+python scripts/autonomous_runner.py --status    # trạng thái hiện tại
+python scripts/autonomous_runner.py --resume    # tiếp tục từ state đã lưu
+python scripts/autonomous_runner.py             # chạy vòng lặp
+```
+
+- **State:** `docs/AUTONOMOUS_PROGRESS.md` (machine + human readable) — nguồn continuity, không bao giờ fake PASS trước khi gate pass.
+- **Handoff:** `docs/AUTONOMOUS_HANDOFF.md` — session mới resume từ đây (không cần conversation history).
+- **Blockers:** `docs/AUTONOMOUS_BLOCKERS.md` — blocker thật (cần quyết định product/architecture) thì ghi vào đây và dừng.
+- **Config:** `config/autonomous.json` — `agent_command`, retry, session policy, auto_commit, start_task. KHÔNG lưu secret trong config.
+- **Agent prompt:** `scripts/autonomous_agent_prompt.md` — master instructions cho mỗi coding-agent session; runner tự nối task brief vào.
+- **Thứ tự nguồn sự thật:** `TASKS.md` → `MASTER_PLAN.md` → `ARCHITECTURE_DECISION.md` → `IMPLEMENTATION_ROADMAP.md` → `AGENTS.md` → repo code/tests → state files.
+- **Test infra:** `scripts/tests/` — test cho chính orchestrator (`python -m pytest scripts/tests -q`), không invoke coding agent thật.
