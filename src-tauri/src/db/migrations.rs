@@ -72,6 +72,24 @@ pub const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_jobs_status ON jobs(status);
         "#,
     },
+    Migration {
+        version: 4,
+        name: "create cache entries table",
+        sql: r#"
+            CREATE TABLE cache_entries (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,               -- canonical content-addressed key (§3.7)
+                stage TEXT NOT NULL,             -- audio/stt/tr/subtitle/render
+                file_name TEXT NOT NULL,         -- <stage>_<sha256(key)>
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                last_accessed_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, key)
+            );
+            CREATE INDEX idx_cache_entries_last_access ON cache_entries(last_accessed_at);
+            CREATE INDEX idx_cache_entries_stage ON cache_entries(stage);
+        "#,
+    },
 ];
 
 /// Apply every pending migration (versions greater than `user_version`) in order.

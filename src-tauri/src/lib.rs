@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager, WindowEvent};
 
+use services::cache_service::{CacheService, CacheServiceConfig};
 use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig, NotWiredRunner};
 use services::project_service::ProjectService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
@@ -71,13 +72,17 @@ pub fn run() {
             // connections). TASK-010 ships the lifecycle with a placeholder
             // runner; concrete executors are wired by later pipeline tasks.
             app.manage(JobService::open(
-                data_dir,
+                data_dir.clone(),
                 Arc::new(NotWiredRunner),
                 Arc::new(AppEventSink {
                     app: app.handle().clone(),
                 }),
                 JobServiceConfig::default(),
             ));
+
+            // Content-addressed cache over the same DB (TASK-011). Quota LRU
+            // with the frozen 10 GB default (ARCHITECTURE_DECISION.md §3.7).
+            app.manage(CacheService::open(data_dir, CacheServiceConfig::default()));
             Ok(())
         })
         .on_window_event(|window, event| {

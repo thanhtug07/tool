@@ -3,8 +3,11 @@
 //! TASK-006 adds the Python sidecar lifecycle: `worker_manager` (process
 //! lifecycle: spawn / READY / restart / shutdown) and `worker_client`
 //! (authenticated loopback HTTP). TASK-008 adds `project_service`
-//! (SQLite-backed project CRUD + working directories).
+//! (SQLite-backed project CRUD + working directories). TASK-010 adds
+//! `job_service` (pipeline job orchestrator). TASK-011 adds `cache_service`
+//! (content-addressed cache, quota LRU, downstream invalidation).
 
+pub mod cache_service;
 pub mod job_service;
 pub mod project_service;
 pub mod worker_client;
