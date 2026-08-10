@@ -138,6 +138,62 @@ export type Project = {
   settings_json: string | null;
 };
 
+// ---- schemas/media.schema.json ----------------------------------------------
+
+export type Rational = {
+  numerator: number;
+  denominator: number;
+};
+
+export type Rotation = 0 | 90 | 180 | 270;
+
+export type VideoStream = {
+  index: number;
+  codec: string | null;
+  profile: string | null;
+  width: number | null;
+  height: number | null;
+  fps: Rational;
+  pixel_format: string | null;
+  aspect_ratio: string | null;
+  bitrate: number | null;
+  duration: number | null;
+};
+
+export type AudioStream = {
+  index: number;
+  codec: string | null;
+  channels: number | null;
+  sample_rate: number | null;
+  bitrate: number | null;
+  duration: number | null;
+  language: string | null;
+};
+
+export type SubtitleStream = {
+  index: number;
+  codec: string | null;
+  language: string | null;
+  title: string | null;
+  duration: number | null;
+};
+
+export type MediaMetadata = {
+  schema_version: 1;
+  duration: number;
+  width: number | null;
+  height: number | null;
+  fps: Rational;
+  codec: string | null;
+  bitrate: number | null;
+  rotation: Rotation;
+  format: string;
+  aspect_ratio: string | null;
+  video_streams: VideoStream[];
+  audio_streams: AudioStream[];
+  subtitle_streams: SubtitleStream[];
+};
+
 // ---- schemas/translation.schema.json ----------------------------------------
 
 export type TranslationItem = {

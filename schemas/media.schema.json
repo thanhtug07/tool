@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MediaMetadata",
+  "description": "Canonical result of probing a source video with ffprobe (MASTER_PLAN §17.1 media_metadata, §24; TASK-009). Produced by the worker's MediaProbeService.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "duration",
+    "width",
+    "height",
+    "fps",
+    "codec",
+    "bitrate",
+    "rotation",
+    "format",
+    "aspect_ratio",
+    "video_streams",
+    "audio_streams",
+    "subtitle_streams"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "duration": {
+      "type": "number",
+      "minimum": 0
+    },
+    "width": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "height": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "fps": {
+      "$ref": "#/$defs/Rational"
+    },
+    "codec": {
+      "type": ["string", "null"]
+    },
+    "bitrate": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "rotation": {
+      "$ref": "#/$defs/Rotation"
+    },
+    "format": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aspect_ratio": {
+      "type": ["string", "null"]
+    },
+    "video_streams": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/VideoStream"
+      }
+    },
+    "audio_streams": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AudioStream"
+      }
+    },
+    "subtitle_streams": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SubtitleStream"
+      }
+    }
+  },
+  "$defs": {
+    "Rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "integer"
+        },
+        "denominator": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "Rotation": {
+      "type": "integer",
+      "enum": [0, 90, 180, 270]
+    },
+    "VideoStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "codec",
+        "profile",
+        "width",
+        "height",
+        "fps",
+        "pixel_format",
+        "aspect_ratio",
+        "bitrate",
+        "duration"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codec": {
+          "type": ["string", "null"]
+        },
+        "profile": {
+          "type": ["string", "null"]
+        },
+        "width": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "height": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "fps": {
+          "$ref": "#/$defs/Rational"
+        },
+        "pixel_format": {
+          "type": ["string", "null"]
+        },
+        "aspect_ratio": {
+          "type": ["string", "null"]
+        },
+        "bitrate": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "duration": {
+          "type": ["number", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "AudioStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "codec", "channels", "sample_rate", "bitrate", "duration", "language"],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codec": {
+          "type": ["string", "null"]
+        },
+        "channels": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "sample_rate": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "bitrate": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "duration": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "language": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "SubtitleStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "codec", "language", "title", "duration"],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codec": {
+          "type": ["string", "null"]
+        },
+        "language": {
+          "type": ["string", "null"]
+        },
+        "title": {
+          "type": ["string", "null"]
+        },
+        "duration": {
+          "type": ["number", "null"],
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "duration": 2.0,
+  "width": 320,
+  "height": 240,
+  "fps": {
+    "numerator": 25,
+    "denominator": 1
+  },
+  "codec": "h264",
+  "bitrate": 220000,
+  "rotation": 0,
+  "format": "mov,mp4,m4a,3gp,3g2,mj2",
+  "aspect_ratio": "4:3",
+  "video_streams": [
+    {
+      "index": 0,
+      "codec": "h264",
+      "profile": "High",
+      "width": 320,
+      "height": 240,
+      "fps": {
+        "numerator": 25,
+        "denominator": 1
+      },
+      "pixel_format": "yuv420p",
+      "aspect_ratio": "4:3",
+      "bitrate": 160000,
+      "duration": 2.0
+    }
+  ],
+  "audio_streams": [
+    {
+      "index": 1,
+      "codec": "aac",
+      "channels": 2,
+      "sample_rate": 44100,
+      "bitrate": 64000,
+      "duration": 2.0,
+      "language": null
+    }
+  ],
+  "subtitle_streams": []
+}

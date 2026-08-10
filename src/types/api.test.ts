@@ -12,6 +12,7 @@ import { expectTypeOf } from "vitest";
 
 import apiSchema from "../../schemas/api.schema.json";
 import jobSchema from "../../schemas/job.schema.json";
+import mediaSchema from "../../schemas/media.schema.json";
 import projectSchema from "../../schemas/project.schema.json";
 import subtitleSchema from "../../schemas/subtitle.schema.json";
 import transcriptSchema from "../../schemas/transcript.schema.json";
@@ -25,6 +26,7 @@ import translationValid from "../../schemas/examples/valid/translation.json";
 import subtitleValid from "../../schemas/examples/valid/subtitle.json";
 import jobValid from "../../schemas/examples/valid/job.json";
 import projectValid from "../../schemas/examples/valid/project.json";
+import mediaValid from "../../schemas/examples/valid/media.json";
 
 import healthInvalid from "../../schemas/examples/invalid/health.json";
 import workerStateInvalid from "../../schemas/examples/invalid/worker_state.json";
@@ -33,11 +35,13 @@ import transcriptInvalid from "../../schemas/examples/invalid/transcript.json";
 import subtitleInvalid from "../../schemas/examples/invalid/subtitle.json";
 import jobInvalid from "../../schemas/examples/invalid/job.json";
 import projectInvalid from "../../schemas/examples/invalid/project.json";
+import mediaInvalid from "../../schemas/examples/invalid/media.json";
 
 import type {
   ErrorResponse,
   HealthResponse,
   Job,
+  MediaMetadata,
   Project,
   Subtitle,
   Transcript,
@@ -153,5 +157,14 @@ describe("shared schema contracts — TS layer", () => {
 
   it("project: invalid example is rejected at the type level", () => {
     expectTypeOf(projectInvalid).not.toMatchTypeOf<Project>();
+  });
+
+  it("media: valid example matches MediaMetadata", () => {
+    expectTypeOf(mediaValid).toMatchTypeOf<Widen<MediaMetadata>>();
+    assertConforms(mediaValid, mediaSchema, "#");
+  });
+
+  it("media: invalid example is rejected at the type level", () => {
+    expectTypeOf(mediaInvalid).not.toMatchTypeOf<MediaMetadata>();
   });
 });

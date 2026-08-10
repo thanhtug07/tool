@@ -7,7 +7,16 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, confloat, conint, constr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveInt,
+    RootModel,
+    confloat,
+    conint,
+    constr,
+)
 
 
 
@@ -91,6 +100,77 @@ class Job(BaseModel):
     created_at: ISO8601
     started_at: ISO8601OrNull | None
     finished_at: ISO8601OrNull | None
+
+
+class Rational(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    numerator: int
+    denominator: PositiveInt
+
+
+class Rotation(RootModel[Literal[0, 90, 180, 270]]):
+    root: Literal[0, 90, 180, 270]
+
+
+class VideoStream(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    index: conint(ge=0)
+    codec: str | None
+    profile: str | None
+    width: conint(ge=0) | None
+    height: conint(ge=0) | None
+    fps: Rational
+    pixel_format: str | None
+    aspect_ratio: str | None
+    bitrate: conint(ge=0) | None
+    duration: confloat(ge=0.0) | None
+
+
+class AudioStream(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    index: conint(ge=0)
+    codec: str | None
+    channels: conint(ge=0) | None
+    sample_rate: conint(ge=0) | None
+    bitrate: conint(ge=0) | None
+    duration: confloat(ge=0.0) | None
+    language: str | None
+
+
+class SubtitleStream(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    index: conint(ge=0)
+    codec: str | None
+    language: str | None
+    title: str | None
+    duration: confloat(ge=0.0) | None
+
+
+class MediaMetadata(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    schema_version: Literal[1]
+    duration: confloat(ge=0.0)
+    width: conint(ge=0) | None
+    height: conint(ge=0) | None
+    fps: Rational
+    codec: str | None
+    bitrate: conint(ge=0) | None
+    rotation: Rotation
+    format: constr(min_length=1)
+    aspect_ratio: str | None
+    video_streams: list[VideoStream]
+    audio_streams: list[AudioStream]
+    subtitle_streams: list[SubtitleStream]
 
 
 class ProjectStatus(

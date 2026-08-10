@@ -19,6 +19,8 @@ from src.api.schemas import (
     ErrorResponse,
     HealthResponse,
     Job,
+    MediaMetadata,
+    Project,
     Subtitle,
     Transcript,
     Translation,
@@ -40,6 +42,8 @@ EXAMPLE_SCHEMA = {
     "translation": ("translation.schema.json", "#"),
     "subtitle": ("subtitle.schema.json", "#"),
     "job": ("job.schema.json", "#"),
+    "media": ("media.schema.json", "#"),
+    "project": ("project.schema.json", "#"),
 }
 
 # example name -> generated Pydantic model
@@ -51,9 +55,16 @@ EXAMPLE_MODEL = {
     "translation": Translation,
     "subtitle": Subtitle,
     "job": Job,
+    "media": MediaMetadata,
+    "project": Project,
 }
 
-SCHEMA_VERSIONED = ("transcript.schema.json", "translation.schema.json", "subtitle.schema.json")
+SCHEMA_VERSIONED = (
+    "transcript.schema.json",
+    "translation.schema.json",
+    "subtitle.schema.json",
+    "media.schema.json",
+)
 
 FORBIDDEN_SCHEMA_FIELDS = ("api_key", "password", "private_key", "worker_auth_token", "secret")
 

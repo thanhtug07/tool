@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "duration": 2.023,
+  "width": 320,
+  "height": 240,
+  "fps": {
+    "numerator": 25,
+    "denominator": 1
+  },
+  "codec": "h264",
+  "bitrate": 168719,
+  "rotation": 0,
+  "format": "matroska,webm",
+  "aspect_ratio": "4:3",
+  "video_streams": [
+    {
+      "index": 0,
+      "codec": "h264",
+      "profile": "Constrained Baseline",
+      "width": 320,
+      "height": 240,
+      "fps": {
+        "numerator": 25,
+        "denominator": 1
+      },
+      "pixel_format": "yuv420p",
+      "aspect_ratio": "4:3",
+      "bitrate": null,
+      "duration": null
+    }
+  ],
+  "audio_streams": [
+    {
+      "index": 1,
+      "codec": "aac",
+      "channels": 2,
+      "sample_rate": 44100,
+      "bitrate": null,
+      "duration": null,
+      "language": null
+    }
+  ],
+  "subtitle_streams": []
+}
