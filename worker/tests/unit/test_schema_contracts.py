@@ -20,6 +20,7 @@ from src.api.schemas import (
     HealthResponse,
     Job,
     MediaMetadata,
+    Model,
     Project,
     Subtitle,
     Transcript,
@@ -44,6 +45,7 @@ EXAMPLE_SCHEMA = {
     "job": ("job.schema.json", "#"),
     "media": ("media.schema.json", "#"),
     "project": ("project.schema.json", "#"),
+    "model": ("model.schema.json", "#"),
 }
 
 # example name -> generated Pydantic model
@@ -57,6 +59,7 @@ EXAMPLE_MODEL = {
     "job": Job,
     "media": MediaMetadata,
     "project": Project,
+    "model": Model,
 }
 
 SCHEMA_VERSIONED = (

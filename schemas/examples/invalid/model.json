@@ -1,0 +1,10 @@
+{
+  "id": "whisper-large-v3",
+  "name": "Whisper large-v3",
+  "version": "v3",
+  "download_url": "not a uri",
+  "checksum": "1234",
+  "license": "MIT",
+  "required_vram_mb": 2900,
+  "supported_backend": ["cuda"]
+}

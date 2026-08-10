@@ -1,0 +1,12 @@
+{
+  "id": "whisper-large-v3",
+  "name": "Whisper large-v3 (faster-whisper)",
+  "version": "v3",
+  "source": "HuggingFace Systran/faster-whisper-large-v3",
+  "download_url": "https://huggingface.co/Systran/faster-whisper-large-v3",
+  "expected_size_bytes": 0,
+  "checksum": "",
+  "license": "MIT",
+  "required_vram_mb": 2900,
+  "supported_backend": ["faster-whisper"]
+}

@@ -173,6 +173,24 @@ class MediaMetadata(BaseModel):
     subtitle_streams: list[SubtitleStream]
 
 
+class Model(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: constr(pattern=r'^[a-z0-9][a-z0-9._-]*$', min_length=1)
+    name: constr(min_length=1)
+    version: constr(min_length=1)
+    source: constr(min_length=1)
+    download_url: constr(min_length=1)
+    expected_size_bytes: conint(ge=0)
+    checksum: constr(pattern=r'^([0-9a-f]{64}|)$')
+    license: constr(min_length=1)
+    required_vram_mb: confloat(ge=0.0)
+    supported_backend: list[Literal['faster-whisper', 'whisper-cpp']] = Field(
+        ..., min_length=1
+    )
+
+
 class ProjectStatus(
     RootModel[Literal['draft', 'analyzed', 'transcribed', 'translated', 'rendered']]
 ):
