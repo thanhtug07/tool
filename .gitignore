@@ -43,7 +43,9 @@ venv/
 # --- Vendor binaries / models (downloaded, not committed) ---
 vendor/ffmpeg/
 vendor/models/
-models/
+models/*
+# The model manifest is config (registry source of truth, TASK-016A), not a binary.
+!models/manifest.json
 
 # --- Temporary / local ---
 *.tmp
