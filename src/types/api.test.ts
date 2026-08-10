@@ -12,6 +12,7 @@ import { expectTypeOf } from "vitest";
 
 import apiSchema from "../../schemas/api.schema.json";
 import jobSchema from "../../schemas/job.schema.json";
+import projectSchema from "../../schemas/project.schema.json";
 import subtitleSchema from "../../schemas/subtitle.schema.json";
 import transcriptSchema from "../../schemas/transcript.schema.json";
 import translationSchema from "../../schemas/translation.schema.json";
@@ -23,6 +24,7 @@ import transcriptValid from "../../schemas/examples/valid/transcript.json";
 import translationValid from "../../schemas/examples/valid/translation.json";
 import subtitleValid from "../../schemas/examples/valid/subtitle.json";
 import jobValid from "../../schemas/examples/valid/job.json";
+import projectValid from "../../schemas/examples/valid/project.json";
 
 import healthInvalid from "../../schemas/examples/invalid/health.json";
 import workerStateInvalid from "../../schemas/examples/invalid/worker_state.json";
@@ -30,11 +32,13 @@ import errorInvalid from "../../schemas/examples/invalid/error.json";
 import transcriptInvalid from "../../schemas/examples/invalid/transcript.json";
 import subtitleInvalid from "../../schemas/examples/invalid/subtitle.json";
 import jobInvalid from "../../schemas/examples/invalid/job.json";
+import projectInvalid from "../../schemas/examples/invalid/project.json";
 
 import type {
   ErrorResponse,
   HealthResponse,
   Job,
+  Project,
   Subtitle,
   Transcript,
   Translation,
@@ -140,5 +144,14 @@ describe("shared schema contracts — TS layer", () => {
 
   it("job: invalid example is rejected at the type level", () => {
     expectTypeOf(jobInvalid).not.toMatchTypeOf<Job>();
+  });
+
+  it("project: valid example matches Project", () => {
+    expectTypeOf(projectValid).toMatchTypeOf<Widen<Project>>();
+    assertConforms(projectValid, projectSchema, "#");
+  });
+
+  it("project: invalid example is rejected at the type level", () => {
+    expectTypeOf(projectInvalid).not.toMatchTypeOf<Project>();
   });
 });

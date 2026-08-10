@@ -96,16 +96,16 @@ npm run tauri dev
 
 ## Lệnh thường dùng
 
-| Action             | Command               |
-| ------------------ | --------------------- |
-| Frontend dev       | `npm run dev`         |
-| Frontend typecheck | `npm run typecheck`   |
-| Frontend lint      | `npm run lint`        |
-| Frontend format    | `npm run format`      |
-| Frontend test      | `npm run test`        |
-| Rust check         | `cargo check`         |
-| Rust test          | `cargo test`          |
-| Worker test        | `pytest worker/tests` |
+| Action                | Command                              |
+| --------------------- | ------------------------------------ |
+| Frontend dev          | `npm run dev`                        |
+| Frontend typecheck    | `npm run typecheck`                  |
+| Frontend lint         | `npm run lint`                       |
+| Frontend format       | `npm run format`                     |
+| Frontend test         | `npm run test`                       |
+| Rust check            | `cargo check`                        |
+| Rust test             | `cargo test`                         |
+| Worker test           | `pytest worker/tests`                |
 | Re-gen worker schemas | `python scripts/generate_schemas.py` |
 
 ## CI (GitHub Actions)

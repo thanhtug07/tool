@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project",
+  "description": "A video localization project (MASTER_PLAN §17.1 projects table, TASK-008). Shared contract for the `project.*` IPC commands and the SQLite `projects` row.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "source_video_path", "status", "created_at", "updated_at", "settings_json"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "source_video_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "$ref": "#/$defs/ProjectStatus"
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "updated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "settings_json": {
+      "type": ["string", "null"]
+    }
+  },
+  "$defs": {
+    "ProjectStatus": {
+      "type": "string",
+      "enum": ["draft", "analyzed", "transcribed", "translated", "rendered"]
+    }
+  }
+}

@@ -93,6 +93,27 @@ class Job(BaseModel):
     finished_at: ISO8601OrNull | None
 
 
+class ProjectStatus(
+    RootModel[Literal['draft', 'analyzed', 'transcribed', 'translated', 'rendered']]
+):
+    root: Literal['draft', 'analyzed', 'transcribed', 'translated', 'rendered']
+
+
+class Project(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: constr(
+        pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    )
+    name: constr(min_length=1, max_length=200)
+    source_video_path: constr(min_length=1)
+    status: ProjectStatus
+    created_at: constr(pattern=r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$')
+    updated_at: constr(pattern=r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$')
+    settings_json: str | None
+
+
 class SubtitleStyle(BaseModel):
     model_config = ConfigDict(
         extra='forbid',

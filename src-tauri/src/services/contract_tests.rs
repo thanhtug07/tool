@@ -8,6 +8,8 @@
 
 use serde_json::json;
 
+use crate::db::{Project, ProjectStatus};
+
 use super::worker_client::{ErrorResponse, HealthResponse};
 use super::worker_manager::WorkerStateInfo;
 
@@ -55,4 +57,19 @@ fn error_example_parses_into_error_response() {
     assert_eq!(response.error.code, "E_FFMPEG_RENDER");
     assert!(!response.error.message.is_empty());
     assert!(response.error.recoverable);
+}
+
+#[test]
+fn project_example_parses_into_project_and_round_trips() {
+    let value = example("project");
+    let project: Project = serde_json::from_value(value).expect("project parses");
+    assert_eq!(project.status, ProjectStatus::Draft);
+    assert_eq!(project.created_at, "2026-08-10T09:15:00.000Z");
+    assert_eq!(project.settings_json, None);
+
+    // Serialized back out, the canonical field names and lowercase enum survive.
+    let serialized = serde_json::to_value(&project).expect("project serializes");
+    assert_eq!(serialized["status"], json!("draft"));
+    assert_eq!(serialized["name"], json!("Bộ phim mẫu"));
+    assert_eq!(serialized["created_at"], json!("2026-08-10T09:15:00.000Z"));
 }

@@ -124,6 +124,20 @@ export type Transcript = {
   segments: TranscriptSegment[];
 };
 
+// ---- schemas/project.schema.json --------------------------------------------
+
+export type ProjectStatus = "draft" | "analyzed" | "transcribed" | "translated" | "rendered";
+
+export type Project = {
+  id: string;
+  name: string;
+  source_video_path: string;
+  status: ProjectStatus;
+  created_at: string;
+  updated_at: string;
+  settings_json: string | null;
+};
+
 // ---- schemas/translation.schema.json ----------------------------------------
 
 export type TranslationItem = {

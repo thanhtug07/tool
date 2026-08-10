@@ -2,13 +2,17 @@
 //! TASK-001: foundation scaffold. TASK-004: first typed IPC command
 //! (`system::ping`). TASK-006: Python sidecar lifecycle — the worker starts at
 //! app startup, reaches `Ready`, and is gracefully shut down on app exit.
+//! TASK-008: SQLite + ProjectService — the database lives in the OS user-data
+//! directory and project CRUD is exposed over `project.*` IPC commands.
 
 pub mod commands;
+pub mod db;
 pub mod logging;
 pub mod services;
 
 use tauri::{Manager, WindowEvent};
 
+use services::project_service::ProjectService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
 
 pub fn run() {
@@ -19,6 +23,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
             commands::worker::get_worker_state,
+            commands::project::create,
+            commands::project::open,
+            commands::project::save,
+            commands::project::delete,
         ])
         .setup(|app| {
             // The app keeps running even if the worker cannot start (e.g. no
@@ -27,6 +35,12 @@ pub fn run() {
             if let Err(e) = app.state::<WorkerManager>().start() {
                 log::error!("worker failed to start: {e}");
             }
+
+            // Project database in the OS user-data dir (never the source tree).
+            // `ProjectService::open` captures init failures internally, so the
+            // app still runs and `project.*` commands report the error cleanly.
+            let data_dir = app.path().app_data_dir()?;
+            app.manage(ProjectService::open(data_dir));
             Ok(())
         })
         .on_window_event(|window, event| {
