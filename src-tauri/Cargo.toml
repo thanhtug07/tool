@@ -24,5 +24,10 @@ getrandom = "0.2"
 # SQLite via rusqlite (chosen in ARCHITECTURE_DECISION.md §2.3 / MASTER_PLAN §17.1).
 # `bundled` compiles SQLite from source so the app ships self-contained on Windows.
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+# SecretStore (TASK-030): API keys go to the OS credential vault (Windows
+# Credential Manager) via `keyring` — NEVER the SQLite DB. FIX #8: when the
+# credential service is unavailable the save is blocked with a clear error;
+# there is deliberately NO encrypted-file / custom-crypto fallback.
+keyring = "3"
 
 [dev-dependencies]

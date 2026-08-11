@@ -5,16 +5,55 @@ vi.mock("@/api/bridge", () => ({
   ping: vi.fn(),
 }));
 
+vi.mock("@/api/settings", () => ({
+  getSettings: vi.fn(),
+  setSetting: vi.fn(),
+  setApiKey: vi.fn(),
+  getApiKeyMasked: vi.fn(),
+  deleteApiKey: vi.fn(),
+}));
+
+import { ToastProvider } from "@/components/toast";
 import { ConnectionStatus, default as SettingsPage } from "./index";
+
+function renderPage() {
+  return renderToStaticMarkup(
+    <ToastProvider>
+      <SettingsPage />
+    </ToastProvider>,
+  );
+}
 
 describe("SettingsPage (unit — mocked bridge, no Tauri IPC)", () => {
   it("renders the About section and an idle connection state", () => {
-    const html = renderToStaticMarkup(<SettingsPage />);
+    const html = renderPage();
 
     expect(html).toContain("Settings");
     expect(html).toContain("About");
     expect(html).toContain("Test connection");
     expect(html).toContain("Not tested yet.");
+  });
+
+  it("renders AI, GPU, API, Cache and Privacy sections", () => {
+    const html = renderPage();
+    expect(html).toContain("AI");
+    expect(html).toContain("GPU");
+    expect(html).toContain("API");
+    expect(html).toContain("Cache");
+    expect(html).toContain("Privacy");
+    expect(html).toContain("STT model");
+    expect(html).toContain("Acceleration");
+  });
+
+  it("explains that keys live in the credential vault, not the DB", () => {
+    const html = renderPage();
+    expect(html).toContain("Windows Credential Manager");
+    expect(html).not.toContain("sk-");
+  });
+
+  it("renders the toast viewport from the provider", () => {
+    const html = renderPage();
+    expect(html).toContain('data-role="toast-viewport"');
   });
 });
 

@@ -35,6 +35,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::db::{is_valid_uuid_v4, utc_iso8601_now, Database, DbError};
 
@@ -72,10 +73,13 @@ pub struct CacheStats {
 
 /// The cache service, managed as Tauri app state. Owns its own connection to
 /// `{data_dir}/app.db` (WAL allows concurrent connections, same as JobService).
+///
+/// The LRU quota is an atomic so it can be changed at runtime (TASK-030
+/// settings) from a shared reference.
 pub struct CacheService {
     data_dir: PathBuf,
     db: Result<Database, DbError>,
-    config: CacheServiceConfig,
+    max_bytes: AtomicU64,
 }
 
 impl CacheService {
@@ -93,7 +97,7 @@ impl CacheService {
         let svc = Self {
             data_dir,
             db,
-            config,
+            max_bytes: AtomicU64::new(config.max_bytes),
         };
         svc.cleanup_temp_files();
         svc
@@ -261,14 +265,15 @@ impl CacheService {
         let db = self.db()?;
         let conn = db.conn();
         let repo = CacheRepo::new(&conn);
+        let quota = self.max_bytes.load(Ordering::Relaxed);
         let mut total = repo.total_bytes()?;
-        if total <= self.config.max_bytes {
+        if total <= quota {
             self.cleanup_temp_files();
             return Ok(0);
         }
         let mut evicted = 0u64;
         for (key, file_name, size) in repo.oldest_first()? {
-            if total <= self.config.max_bytes {
+            if total <= quota {
                 break;
             }
             let project_id = key.0.clone();
@@ -290,6 +295,13 @@ impl CacheService {
             entry_count: repo.count()?,
             total_bytes: repo.total_bytes()?,
         })
+    }
+
+    /// Update the LRU quota at runtime (TASK-030 settings). The new quota is
+    /// enforced immediately — eviction runs right away if already over.
+    pub fn set_max_bytes(&self, max_bytes: u64) -> Result<u64, DbError> {
+        self.max_bytes.store(max_bytes, Ordering::Relaxed);
+        self.evict_to_quota()
     }
 
     /// SHA-256 hex digest of `data` (public so other services and the worker

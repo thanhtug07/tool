@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import JobFailBanner from "@/components/JobFailBanner";
 import Sidebar, { type NavKey } from "@/components/layout/Sidebar";
 import ProjectsPage from "@/pages/Projects";
 import DictionaryPage from "@/pages/Dictionary";
@@ -22,6 +23,7 @@ export default function App() {
         {active === "settings" && <SettingsPage />}
         {active === "about" && <AboutPage />}
       </main>
+      <JobFailBanner />
     </div>
   );
 }

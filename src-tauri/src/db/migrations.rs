@@ -134,6 +134,17 @@ pub const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_subtitle_cues_project ON subtitle_cues(project_id);
         "#,
     },
+    Migration {
+        version: 7,
+        name: "create app settings table",
+        sql: r#"
+            CREATE TABLE settings (
+                key TEXT PRIMARY KEY,              -- whitelisted key (see SettingsService)
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        "#,
+    },
 ];
 
 /// Apply every pending migration (versions greater than `user_version`) in order.

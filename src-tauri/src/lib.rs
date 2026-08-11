@@ -11,16 +11,19 @@ pub mod commands;
 pub mod db;
 pub mod logging;
 pub mod media;
+pub mod security;
 pub mod services;
 
 use std::sync::Arc;
 
 use tauri::{Emitter, Manager, WindowEvent};
 
+use security::secret_store::SecretStore;
 use services::cache_service::{CacheService, CacheServiceConfig};
 use services::dictionary_service::DictionaryService;
 use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig, NotWiredRunner};
 use services::project_service::ProjectService;
+use services::settings_service::SettingsService;
 use services::subtitle_service::SubtitleService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
 
@@ -73,6 +76,11 @@ pub fn run() {
             commands::subtitle::update_cue,
             commands::export::export_video,
             commands::export::export_subtitles,
+            commands::settings::set_api_key,
+            commands::settings::get_api_key_masked,
+            commands::settings::delete_api_key,
+            commands::settings::get_all,
+            commands::settings::set,
         ])
         .setup(|app| {
             // The app keeps running even if the worker cannot start (e.g. no
@@ -116,6 +124,14 @@ pub fn run() {
             // reads/edits cues; the worker's SubtitleEngine output replaces a
             // project's cues atomically via `subtitle.replace_cues`.
             app.manage(SubtitleService::open(data_dir.clone()));
+
+            // API keys → OS credential vault (TASK-030, FIX #8): never in the
+            // SQLite DB, never in files, never logged. Saves are blocked with a
+            // clear error when the credential service is unavailable.
+            app.manage(SecretStore::new());
+
+            // Whitelisted non-secret app settings (TASK-030).
+            app.manage(SettingsService::open(data_dir.clone()));
             Ok(())
         })
         .on_window_event(|window, event| {
