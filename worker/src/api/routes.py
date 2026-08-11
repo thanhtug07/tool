@@ -7,6 +7,7 @@ TASK-029 export).
 - ``POST /v1/export/subtitles`` — export a subtitle file (optionally converted).
 """
 
+import logging
 import os
 import secrets
 import threading
@@ -23,6 +24,8 @@ from src.api.schemas import HealthResponse
 # ``configure_auth_token``; it takes precedence over the WORKER_AUTH_TOKEN
 # environment override and the placeholder default.
 PLACEHOLDER_TOKEN = "dev-placeholder-token"
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -77,6 +80,8 @@ class TranscribeRequest(BaseModel):
     device: str = "auto"
     language: str | None = None
     total_duration_seconds: float | None = Field(default=None, ge=0.0)
+    # Pipeline wiring (RELEASE-P0): per-job cancellation + progress logging.
+    job_id: str | None = None
 
 
 @router.post(
@@ -89,16 +94,28 @@ def stt_transcribe(request: TranscribeRequest) -> dict:
     STT is AI-dependent: without a downloaded model this returns a clean
     ``E_STT_*`` error, never a shell/stack-trace leak.
     """
+    from src.api.pipeline import _cancel_scope  # noqa: PLC0415 - loopback cancel registry
+    from src.core.job import CancelledError  # noqa: PLC0415
     from src.services.stt_service import STTError, transcribe  # noqa: PLC0415 - lazy
 
     try:
-        result = transcribe(
-            request.audio_path,
-            project_id=request.project_id,
-            model_name=request.model,
-            device=request.device,
-            language=request.language,
-            total_duration_seconds=request.total_duration_seconds,
+        with _cancel_scope(request.job_id) as cancel:
+            result = transcribe(
+                request.audio_path,
+                project_id=request.project_id,
+                model_name=request.model,
+                device=request.device,
+                language=request.language,
+                total_duration_seconds=request.total_duration_seconds,
+                cancel=cancel,
+                on_progress=lambda fraction: logger.info(
+                    "transcribe %.0f%%", fraction * 100
+                ),
+            )
+    except CancelledError:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": {"code": "E_CANCELLED", "message": "Transcription was cancelled.", "recoverable": False}},
         )
     except STTError as exc:
         return JSONResponse(

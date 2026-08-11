@@ -21,6 +21,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from src import __version__
+from src.api.pipeline import router as pipeline_router
 from src.api.routes import configure_auth_token, router
 from src.core.logging import setup_logging
 
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
         lifespan=_make_lifespan(),
     )
     app.include_router(router)
+    app.include_router(pipeline_router)
     return app
 
 
