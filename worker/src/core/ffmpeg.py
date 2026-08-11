@@ -216,11 +216,14 @@ def run_ffmpeg(
     cancel: CancellationToken | None = None,
     timeout: float | None = None,
     on_progress: callable | None = None,
+    cwd: str | None = None,
 ) -> FFmpegResult:
     """Run ffmpeg from an argument array, streaming ``-progress pipe:1`` output.
 
     - ``on_progress`` receives each parsed progress dict (see
       ``parse_progress_line``).
+    - ``cwd`` sets the working directory of the ffmpeg subprocess (used by
+      render to resolve subtitle files via their bare filename).
     - Cancellation and timeout kill the whole process tree; ``CancelledError`` /
       ``ProcessTimeoutError`` are raised like ``src.core.job.run_process``.
     - ``E_FFMPEG_NOT_FOUND`` is raised when the binary cannot be spawned.
@@ -241,6 +244,7 @@ def run_ffmpeg(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            cwd=cwd,
             **kwargs,
         )
     except FileNotFoundError as exc:
