@@ -1,13 +1,14 @@
-import { Captions, FolderKanban, Settings, Info, BookMarked } from "lucide-react";
+import { Captions, Clapperboard, FolderKanban, Settings, Info, BookMarked } from "lucide-react";
 
 import { cn } from "@/components/ui/utils";
 
-export type NavKey = "projects" | "settings" | "about" | "dictionary" | "subtitles";
+export type NavKey = "projects" | "settings" | "about" | "dictionary" | "subtitles" | "preview";
 
 const NAV_ITEMS: { key: NavKey; label: string; icon: typeof FolderKanban }[] = [
   { key: "projects", label: "Projects", icon: FolderKanban },
   { key: "dictionary", label: "Dictionary", icon: BookMarked },
   { key: "subtitles", label: "Subtitles", icon: Captions },
+  { key: "preview", label: "Preview", icon: Clapperboard },
   { key: "settings", label: "Settings", icon: Settings },
   { key: "about", label: "About", icon: Info },
 ];

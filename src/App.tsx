@@ -4,6 +4,7 @@ import Sidebar, { type NavKey } from "@/components/layout/Sidebar";
 import ProjectsPage from "@/pages/Projects";
 import DictionaryPage from "@/pages/Dictionary";
 import SubtitleEditorView from "@/pages/Project";
+import PreviewView from "@/pages/Project/PreviewView";
 import SettingsPage from "@/pages/Settings";
 import AboutPage from "@/pages/About";
 
@@ -17,6 +18,7 @@ export default function App() {
         {active === "projects" && <ProjectsPage />}
         {active === "dictionary" && <DictionaryPage />}
         {active === "subtitles" && <SubtitleEditorView />}
+        {active === "preview" && <PreviewView />}
         {active === "settings" && <SettingsPage />}
         {active === "about" && <AboutPage />}
       </main>

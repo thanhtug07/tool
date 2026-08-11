@@ -10,6 +10,7 @@
 pub mod commands;
 pub mod db;
 pub mod logging;
+pub mod media;
 pub mod services;
 
 use std::sync::Arc;
@@ -42,6 +43,11 @@ pub fn run() {
     logging::init();
 
     tauri::Builder::default()
+        // Scoped `media://` protocol for the video preview (TASK-026): only a
+        // registered project's source video is streamed, never arbitrary files.
+        .register_uri_scheme_protocol(media::MEDIA_SCHEME, |ctx, request| {
+            media::media_response(ctx.app_handle(), &request)
+        })
         .manage(WorkerManager::new(WorkerManagerConfig::default()))
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
