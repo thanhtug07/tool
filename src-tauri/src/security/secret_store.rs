@@ -138,6 +138,14 @@ impl SecretStore {
         }
     }
 
+    /// Full stored key for `provider` — Rust-core-side use only (e.g. the
+    /// pipeline runner sending it to the loopback worker). NEVER exposed over
+    /// IPC; the frontend only ever sees `get_api_key_masked`.
+    pub fn get_api_key(&self, provider: &str) -> Result<Option<String>, SecretStoreError> {
+        let provider = validate_provider(provider)?;
+        self.vault.get(CREDENTIAL_SERVICE, &provider)
+    }
+
     /// Masked form of the stored key for display, e.g. `AIz****abcd`.
     ///
     /// The full secret NEVER crosses the IPC boundary — the frontend only ever

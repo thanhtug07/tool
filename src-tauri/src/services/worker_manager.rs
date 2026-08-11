@@ -137,10 +137,14 @@ enum ReadyPhase {
 
 /// The managed sidecar. `start()`/`stop()` are the public API; a background
 /// supervisor thread drives readiness, crash-restart and shutdown.
+///
+/// Cloneable: the pipeline runner holds a clone so it can fetch a fresh
+/// authenticated client per job run (the port/token rotate across restarts).
+#[derive(Clone)]
 pub struct WorkerManager {
     inner: Arc<Mutex<Inner>>,
     config: WorkerManagerConfig,
-    control: Mutex<Option<Control>>,
+    control: Arc<Mutex<Option<Control>>>,
 }
 
 struct Control {
@@ -159,7 +163,7 @@ impl WorkerManager {
                 restarts: 0,
             })),
             config,
-            control: Mutex::new(None),
+            control: Arc::new(Mutex::new(None)),
         }
     }
 

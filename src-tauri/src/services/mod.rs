@@ -13,6 +13,7 @@ pub mod cache_service;
 pub mod dictionary_service;
 pub mod hardware_probe;
 pub mod job_service;
+pub mod pipeline_runner;
 pub mod project_service;
 pub mod settings_service;
 pub mod subtitle_service;

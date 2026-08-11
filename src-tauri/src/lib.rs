@@ -21,7 +21,8 @@ use tauri::{Emitter, Manager, WindowEvent};
 use security::secret_store::SecretStore;
 use services::cache_service::{CacheService, CacheServiceConfig};
 use services::dictionary_service::DictionaryService;
-use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig, NotWiredRunner};
+use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig};
+use services::pipeline_runner::PipelineRunner;
 use services::project_service::ProjectService;
 use services::settings_service::SettingsService;
 use services::subtitle_service::SubtitleService;
@@ -93,45 +94,44 @@ pub fn run() {
             // Project database in the OS user-data dir (never the source tree).
             // `ProjectService::open` captures init failures internally, so the
             // app still runs and `project.*` commands report the error cleanly.
+            // All services are shared with the pipeline runner via `Arc`.
             let data_dir = app.path().app_data_dir()?;
-            app.manage(ProjectService::open(data_dir.clone()));
+            let projects = Arc::new(ProjectService::open(data_dir.clone()));
+            let settings = Arc::new(SettingsService::open(data_dir.clone()));
+            let secrets = Arc::new(SecretStore::new());
+            let subtitles = Arc::new(SubtitleService::open(data_dir.clone()));
+            let dictionary = Arc::new(DictionaryService::open(data_dir.clone()));
+            let cache = Arc::new(CacheService::open(
+                data_dir.clone(),
+                CacheServiceConfig::default(),
+            ));
 
             // Job orchestrator over the same `app.db` (WAL allows concurrent
-            // connections). TASK-010 ships the lifecycle with a placeholder
-            // runner; concrete executors are wired by later pipeline tasks.
+            // connections). RELEASE-P0-003 wires the real pipeline executor:
+            // each job type dispatches to the Python worker stages through the
+            // loopback HTTP API, with per-project artifacts.
             app.manage(JobService::open(
                 data_dir.clone(),
-                Arc::new(NotWiredRunner),
+                Arc::new(PipelineRunner::new(
+                    Arc::new(app.state::<WorkerManager>().inner().clone()),
+                    projects.clone(),
+                    settings.clone(),
+                    secrets.clone(),
+                    subtitles.clone(),
+                    dictionary.clone(),
+                )),
                 Arc::new(AppEventSink {
                     app: app.handle().clone(),
                 }),
                 JobServiceConfig::default(),
             ));
 
-            // Content-addressed cache over the same DB (TASK-011). Quota LRU
-            // with the frozen 10 GB default (ARCHITECTURE_DECISION.md §3.7).
-            app.manage(CacheService::open(
-                data_dir.clone(),
-                CacheServiceConfig::default(),
-            ));
-
-            // Project-scoped glossary + character dictionary over the same DB
-            // (TASK-023). The glossary fingerprint feeds the worker's
-            // translation-memory versioning.
-            app.manage(DictionaryService::open(data_dir.clone()));
-
-            // Project-scoped subtitle cue persistence (TASK-025): the editor
-            // reads/edits cues; the worker's SubtitleEngine output replaces a
-            // project's cues atomically via `subtitle.replace_cues`.
-            app.manage(SubtitleService::open(data_dir.clone()));
-
-            // API keys → OS credential vault (TASK-030, FIX #8): never in the
-            // SQLite DB, never in files, never logged. Saves are blocked with a
-            // clear error when the credential service is unavailable.
-            app.manage(SecretStore::new());
-
-            // Whitelisted non-secret app settings (TASK-030).
-            app.manage(SettingsService::open(data_dir.clone()));
+            app.manage(projects);
+            app.manage(settings);
+            app.manage(secrets);
+            app.manage(subtitles);
+            app.manage(dictionary);
+            app.manage(cache);
             Ok(())
         })
         .on_window_event(|window, event| {

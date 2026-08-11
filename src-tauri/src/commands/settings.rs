@@ -11,6 +11,8 @@
 //! errors are mapped to a fixed user-facing message), and command arguments
 //! that carry keys are never logged.
 
+use std::sync::Arc;
+
 use tauri::State;
 
 use crate::db::DbError;
@@ -21,7 +23,7 @@ use crate::services::settings_service::SettingsService;
 /// `secrets.set_api_key(provider, key) → ()`
 #[tauri::command(rename = "secrets.set_api_key")]
 pub fn set_api_key(
-    store: State<'_, SecretStore>,
+    store: State<'_, Arc<SecretStore>>,
     provider: String,
     key: String,
 ) -> Result<(), String> {
@@ -31,7 +33,7 @@ pub fn set_api_key(
 /// `secrets.get_api_key_masked(provider) → string | null`
 #[tauri::command(rename = "secrets.get_api_key_masked")]
 pub fn get_api_key_masked(
-    store: State<'_, SecretStore>,
+    store: State<'_, Arc<SecretStore>>,
     provider: String,
 ) -> Result<Option<String>, String> {
     store.get_api_key_masked(&provider).map_err(secret_err)
@@ -39,21 +41,21 @@ pub fn get_api_key_masked(
 
 /// `secrets.delete_api_key(provider) → ()`
 #[tauri::command(rename = "secrets.delete_api_key")]
-pub fn delete_api_key(store: State<'_, SecretStore>, provider: String) -> Result<(), String> {
+pub fn delete_api_key(store: State<'_, Arc<SecretStore>>, provider: String) -> Result<(), String> {
     store.delete_api_key(&provider).map_err(secret_err)
 }
 
 /// `settings.get_all() → object` (every key, typed values)
 #[tauri::command(rename = "settings.get_all")]
-pub fn get_all(service: State<'_, SettingsService>) -> Result<serde_json::Value, String> {
+pub fn get_all(service: State<'_, Arc<SettingsService>>) -> Result<serde_json::Value, String> {
     service.get_all().map_err(db_err)
 }
 
 /// `settings.set(key, value) → updated object`
 #[tauri::command(rename = "settings.set")]
 pub fn set(
-    service: State<'_, SettingsService>,
-    cache: State<'_, CacheService>,
+    service: State<'_, Arc<SettingsService>>,
+    cache: State<'_, Arc<CacheService>>,
     key: String,
     value: String,
 ) -> Result<serde_json::Value, String> {
