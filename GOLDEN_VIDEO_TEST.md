@@ -135,7 +135,34 @@ Chi tiết JSON: `golden/results/latest.json`.
 - **Tolerance:** STT text (so theo phrase chứ không từng từ — model nhỏ có thể chuẩn hoá số "five five five" → "555-1234"); thời lượng ±1.5s; số cue ≥ min_cues (phụ thuộc segmentation của model).
 - **Real provider:** `--provider gemini` chạy translation thật (cần API key trong Windows Credential Manager) — kết quả không deterministic, chỉ kiểm tra non-empty.
 
-### 8.5 Lưu ý vận hành
+### 8.5 Packaged-worker mode (RELEASE-P0-007)
+
+Same runner, packaged binary instead of the source interpreter:
+
+```powershell
+py worker/packaging/build_worker.py --clean   # PyInstaller onedir -> worker-dist/worker/worker.exe
+py golden/scripts/run_golden.py --provider mock --worker-exe worker-dist/worker/worker.exe
+```
+
+`--worker-exe` spawns the packaged worker exactly as the release app does:
+stdin token handshake, `FFMPEG_BIN`/`FFPROBE_BIN` pointed at the vendored
+binaries (`vendor/ffmpeg/`), no `python -m src.main`, no Python on PATH.
+
+Measured (2026-08-12): **16/16 checks PASS in 3.9s** — startup, handshake,
+audio extract, real STT (faster-whisper from the bundle), translation,
+subtitle generation, FFmpeg/libass render, export QC.
+
+Two PyInstaller gotchas were fixed during packaging:
+
+- `faster-whisper` ships data assets (`silero_vad_v6.onnx` for the VAD
+  filter); `--collect-all faster_whisper` is required or the first transcribe
+  fails inside the frozen bundle.
+- `fsspec` (a `huggingface_hub` dependency) statically imports pandas, whose
+  PyInstaller hook pulls SQLAlchemy and breaks the build; heavy dev packages
+  are excluded via `--exclude-module`.
+
+### 8.6 Lưu ý vận hành
 
 - Runner đặt `HF_HUB_OFFLINE=1` sau khi warm model để tránh stall trên Hugging Face API giữa pipeline (đã quan sát: revision-check treo ~3 phút).
 - Lần đầu chạy cần tải model whisper (~75MB `tiny`): `py -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"`.
+- Model cache chia sẻ giữa dev interpreter và packaged worker (cùng `~/.cache/huggingface`); máy sạch tải model lần đầu chạy (MASTER_PLAN §32.4 — không bundle model).

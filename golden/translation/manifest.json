@@ -3,9 +3,7 @@
   "version": "1.0.0",
   "date": "2026-08-12",
   "source": "golden/scripts/build_translation_dataset.py (generated; expected translations hand-curated)",
-  "reviewed_by": [
-    "maintainer"
-  ],
+  "reviewed_by": ["maintainer"],
   "language_pair": {
     "source": "zh",
     "target": "vi"

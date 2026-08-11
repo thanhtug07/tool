@@ -71,6 +71,13 @@ pub struct WorkerManagerConfig {
     pub python: Option<PathBuf>,
     /// Directory to run `python -m src.main` from. `None` → resolved (repo layout).
     pub worker_dir: Option<PathBuf>,
+    /// Bundled worker executable (release mode, MASTER_PLAN §32.2). When set,
+    /// it is spawned directly — no `python -m src.main`, no Python on PATH.
+    pub worker_bin: Option<PathBuf>,
+    /// App resource directory (release mode, MASTER_PLAN §32.3). When set and
+    /// it contains `ffmpeg/ffmpeg.exe` / `ffprobe.exe`, the worker is pointed
+    /// at those bundled binaries via `FFMPEG_BIN` / `FFPROBE_BIN`.
+    pub resource_dir: Option<PathBuf>,
     /// Maximum automatic restarts after an unexpected exit before `Failed`.
     pub max_restarts: u32,
     pub health_poll_attempts: usize,
@@ -85,6 +92,8 @@ impl Default for WorkerManagerConfig {
         Self {
             python: None,
             worker_dir: None,
+            worker_bin: None,
+            resource_dir: None,
             max_restarts: MAX_RESTARTS_DEFAULT,
             health_poll_attempts: HEALTH_POLL_ATTEMPTS_DEFAULT,
             health_poll_interval: HEALTH_POLL_INTERVAL_DEFAULT,
@@ -698,34 +707,65 @@ fn read_into_channel(
 }
 
 fn spawn_worker(config: &WorkerManagerConfig) -> Result<WorkerProcess, String> {
-    let python = resolve_python(config)?;
-    let worker_dir = resolve_worker_dir(config)?;
     let port =
         pick_ephemeral_port().map_err(|e| format!("failed to allocate ephemeral port: {e}"))?;
     let token = generate_token().map_err(|e| format!("failed to generate session token: {e}"))?;
 
-    log::info!(
-        "spawning worker: {} -m src.main --port {port} (dir={})",
-        python.display(),
-        worker_dir.display()
-    );
+    let mut cmd = if let Some(bin) = &config.worker_bin {
+        if !bin.is_file() {
+            return Err(format!("bundled worker `{}` does not exist", bin.display()));
+        }
+        log::info!("spawning bundled worker: {} --port {port}", bin.display());
+        let mut c = Command::new(bin);
+        c.arg("--port").arg(port.to_string());
+        // PyInstaller onedir resolves its own runtime paths; run from the
+        // bundle directory so relative lookups (e.g. `_internal`) never
+        // depend on the caller's cwd.
+        if let Some(parent) = bin.parent() {
+            c.current_dir(parent);
+        }
+        c
+    } else {
+        let python = resolve_python(config)?;
+        let worker_dir = resolve_worker_dir(config)?;
+        log::info!(
+            "spawning worker: {} -m src.main --port {port} (dir={})",
+            python.display(),
+            worker_dir.display()
+        );
+        let mut c = Command::new(&python);
+        c.arg("-m")
+            .arg("src.main")
+            .arg("--port")
+            .arg(port.to_string());
+        c.current_dir(&worker_dir);
+        // The sidecar must not write `.pyc` caches into the source tree (it
+        // would trip the `tauri dev` file watcher and slow the first import).
+        c.env("PYTHONDONTWRITEBYTECODE", "1");
+        c
+    };
 
-    let mut cmd = Command::new(&python);
-    cmd.arg("-m")
-        .arg("src.main")
-        .arg("--port")
-        .arg(port.to_string());
-    cmd.current_dir(&worker_dir);
-    // The sidecar must not write `.pyc` caches into the source tree (it would
-    // trip the `tauri dev` file watcher and slow the first import).
-    cmd.env("PYTHONDONTWRITEBYTECODE", "1");
+    // Release mode: point the worker at the bundled FFmpeg/FFprobe (never
+    // rely on the target machine's PATH). Only allowlisted basenames are
+    // honored by the worker's resolver.
+    if let Some(res) = &config.resource_dir {
+        let ffmpeg = res.join("ffmpeg/ffmpeg.exe");
+        let ffprobe = res.join("ffmpeg/ffprobe.exe");
+        if ffmpeg.is_file() {
+            cmd.env("FFMPEG_BIN", &ffmpeg);
+        }
+        if ffprobe.is_file() {
+            cmd.env("FFPROBE_BIN", &ffprobe);
+        }
+    }
+
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn python worker `{}`: {e}", python.display()))?;
+        .map_err(|e| format!("failed to spawn worker process: {e}"))?;
     let pid = child.id();
     let mut stdin = child
         .stdin
@@ -765,9 +805,9 @@ fn generate_token() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Resolve the Python interpreter: config → `WORKER_PYTHON` → PATH `python`.
-///
-/// Bundled (release) binary resolution is a later packaging phase.
+/// Resolve the Python interpreter for dev mode: config → `WORKER_PYTHON` →
+/// PATH `python`. Release mode never reaches this — it spawns the bundled
+/// ``worker_bin`` directly.
 fn resolve_python(config: &WorkerManagerConfig) -> Result<PathBuf, String> {
     if let Some(p) = &config.python {
         // A bare command name (no separator) is resolved via PATH; only explicit
@@ -913,13 +953,92 @@ mod tests {
         let manager = WorkerManager::new(config);
         // start fails deterministically (no such interpreter) -> Failed state.
         let err = manager.start().unwrap_err();
-        assert!(err.contains("python"), "got: {err}");
+        assert!(err.contains("spawn"), "got: {err}");
         assert_eq!(manager.state_info().state, WorkerState::Failed);
         // starting again from Failed is allowed; it fails again deterministically.
         assert!(manager.start().is_err());
         // stop is a safe no-op in every state.
         manager.stop();
         manager.stop();
+    }
+
+    // ---- release-mode (bundled worker) -----------------------------------
+
+    #[test]
+    fn bundled_worker_missing_path_fails_cleanly() {
+        let config = WorkerManagerConfig {
+            worker_bin: Some(PathBuf::from("C:/definitely/not/a/worker.exe")),
+            max_restarts: 0,
+            health_poll_attempts: 1,
+            health_poll_interval: Duration::from_millis(10),
+            startup_ready_timeout: Duration::from_millis(100),
+            ..Default::default()
+        };
+        let manager = WorkerManager::new(config);
+        let err = manager.start().unwrap_err();
+        assert!(err.contains("bundled worker"), "got: {err}");
+        assert_eq!(manager.state_info().state, WorkerState::Failed);
+        manager.stop();
+    }
+
+    fn bundled_worker_exe() -> Option<PathBuf> {
+        // cargo test runs with cwd = src-tauri; the bundle lives at repo root.
+        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("worker-dist/worker/worker.exe");
+        candidate.is_file().then_some(candidate)
+    }
+
+    #[test]
+    fn real_bundled_worker_starts_ready_and_shuts_down() {
+        let Some(exe) = bundled_worker_exe() else {
+            eprintln!("SKIP real_bundled_worker: worker-dist bundle not built");
+            return;
+        };
+        let config = WorkerManagerConfig {
+            worker_bin: Some(exe.clone()),
+            resource_dir: Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .join("vendor"),
+            ),
+            max_restarts: 0,
+            health_poll_attempts: 20,
+            health_poll_interval: Duration::from_millis(250),
+            startup_ready_timeout: Duration::from_secs(60),
+            graceful_shutdown_timeout: Duration::from_secs(5),
+            kill_wait_timeout: Duration::from_secs(3),
+            ..Default::default()
+        };
+        let manager = WorkerManager::new(config);
+        manager.start().expect("bundled worker spawn");
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let client = loop {
+            if let Some(client) = manager.worker_client() {
+                break client;
+            }
+            let info = manager.state_info();
+            if info.state == WorkerState::Failed {
+                panic!("bundled worker failed: {:?}", info.last_error);
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "bundled worker did not become Ready: {:?}",
+                    manager.state_info()
+                );
+            }
+            std::thread::sleep(POLL_STEP);
+        };
+        let health = client
+            .check_health()
+            .expect("authenticated health check against bundled worker");
+        assert_eq!(health.status, "ok", "health not ok: {health:?}");
+
+        manager.stop();
+        assert_eq!(manager.state_info().state, WorkerState::Stopped);
     }
 
     // ---- real worker integration (skipped when python/worker not available) --
@@ -1074,6 +1193,7 @@ mod tests {
             startup_ready_timeout: Duration::from_secs(2),
             graceful_shutdown_timeout: Duration::from_secs(1),
             kill_wait_timeout: Duration::from_secs(1),
+            ..Default::default()
         };
         let manager = WorkerManager::new(config);
         manager.start().expect("spawn ok, worker will fail");

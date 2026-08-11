@@ -63,34 +63,51 @@ def warm_stt_model(model: str, device: str) -> None:
 # Worker lifecycle (mirrors src-tauri WorkerManager sidecar protocol)
 # ---------------------------------------------------------------------------
 
-def spawn_worker() -> tuple[subprocess.Popen, int, str, threading.Thread]:
+def spawn_worker(worker_exe: str | None) -> tuple[subprocess.Popen, int, str, threading.Thread]:
     """Spawn the real worker and complete the READY handshake.
 
     After the handshake, a background thread continuously drains the worker's
     stdout: the worker logs progress on every stage, and a full pipe buffer
     would deadlock it mid-transcribe (the same reason WorkerManager attaches
     forwarder threads).
+
+    ``worker_exe`` — when set, spawn the packaged PyInstaller binary (release
+    smoke test: proves the worker runs without a developer Python). Otherwise
+    spawn ``python -m src.main`` from the source tree (dev mode).
     """
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
     token = secrets.token_hex(32)
+    if worker_exe:
+        worker_exe = str(Path(worker_exe).resolve())
+        cmd = [worker_exe, "--port", str(port)]
+        cwd = None
+    else:
+        cmd = [sys.executable, "-m", "src.main", "--port", str(port)]
+        cwd = WORKER_DIR
+    env = {
+        **os.environ,
+        # The model is warmed up front (see warm_stt_model); never let the
+        # worker stall on a Hugging Face network round-trip mid-stage.
+        "HF_HUB_OFFLINE": "1",
+    }
+    if worker_exe:
+        # Simulate what WorkerManager does in release builds: point the worker
+        # at the bundled FFmpeg/FFprobe instead of relying on PATH.
+        env["FFMPEG_BIN"] = str(ROOT / "vendor" / "ffmpeg" / "ffmpeg.exe")
+        env["FFPROBE_BIN"] = str(ROOT / "vendor" / "ffmpeg" / "ffprobe.exe")
+        cwd = str(Path(worker_exe).parent)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "src.main", "--port", str(port)],
-        cwd=WORKER_DIR,
+        cmd,
+        cwd=cwd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        env={
-            **os.environ,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            # The model is warmed up front (see warm_stt_model); never let the
-            # worker stall on a Hugging Face network round-trip mid-stage.
-            "HF_HUB_OFFLINE": "1",
-        },
+        env=env,
     )
     assert proc.stdin is not None and proc.stdout is not None
     proc.stdin.write(f"WORKER_AUTH_TOKEN={token}\n")
@@ -198,6 +215,7 @@ def check(ok: bool, label: str, detail: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Golden E2E pipeline runner")
     parser.add_argument("--provider", default="mock", choices=["mock", "gemini", "local"])
+    parser.add_argument("--worker-exe", default=None, help="path to packaged worker.exe (release smoke test)")
     parser.add_argument("--model", default="tiny")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--language", default="en")
@@ -215,8 +233,9 @@ def main() -> int:
     _RESULTS.clear()
     started = time.time()
 
-    print(f"golden E2E start: video={video} provider={args.provider} model={args.model}")
-    proc, port, token, _drain = spawn_worker()
+    print(f"golden E2E start: video={video} provider={args.provider} model={args.model}"
+          + (f" worker_exe={args.worker_exe}" if args.worker_exe else " worker=source"))
+    proc, port, token, _drain = spawn_worker(args.worker_exe)
     try:
         # -- stage 1: audio extract -----------------------------------------
         print("stage 1/6: audio extract")

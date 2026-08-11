@@ -54,7 +54,6 @@ pub fn run() {
         .register_uri_scheme_protocol(media::MEDIA_SCHEME, |ctx, request| {
             media::media_response(ctx.app_handle(), &request)
         })
-        .manage(WorkerManager::new(WorkerManagerConfig::default()))
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
             commands::worker::get_worker_state,
@@ -88,6 +87,22 @@ pub fn run() {
             commands::settings::set,
         ])
         .setup(|app| {
+            // Release-mode packaging (MASTER_PLAN §32): when the bundled
+            // worker + FFmpeg resources are present next to the binary, the
+            // worker is spawned from the bundle — no Python on PATH, no
+            // source tree. Dev mode falls back to `python -m src.main`.
+            let mut worker_config = WorkerManagerConfig::default();
+            let resource_dir = app.path().resource_dir().ok();
+            if let Some(res) = &resource_dir {
+                let bundled = res.join("worker/worker.exe");
+                if bundled.is_file() {
+                    log::info!("release mode: bundled worker at {}", bundled.display());
+                    worker_config.worker_bin = Some(bundled);
+                    worker_config.resource_dir = Some(res.clone());
+                }
+            }
+            app.manage(WorkerManager::new(worker_config));
+
             // The app keeps running even if the worker cannot start (e.g. no
             // Python on PATH in a frontend-only dev environment); the failure
             // is surfaced through `get_worker_state`.

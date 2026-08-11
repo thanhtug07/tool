@@ -60,6 +60,10 @@
       "icons/128x128@2x.png",
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "resources": {
+      "../worker-dist/worker": "worker",
+      "../vendor/ffmpeg": "ffmpeg"
+    }
   }
 }
