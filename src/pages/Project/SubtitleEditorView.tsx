@@ -283,9 +283,16 @@ export function CueTable(props: {
   );
 }
 
-export default function SubtitleEditorView() {
+export interface SubtitleEditorViewProps {
+  /** Project whose cues are edited; falls back to the empty project when absent. */
+  projectId?: string;
+}
+
+export default function SubtitleEditorView({
+  projectId: initialProjectId,
+}: SubtitleEditorViewProps = {}) {
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
-  const [projectId, setProjectId] = useState(EMPTY_PROJECT);
+  const [projectId, setProjectId] = useState(initialProjectId ?? EMPTY_PROJECT);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -325,6 +332,13 @@ export default function SubtitleEditorView() {
       }
     }, SAVE_DEBOUNCE_MS);
   }
+
+  // Follow the project selected on the Projects page (RELEASE-P0-005).
+  useEffect(() => {
+    if (initialProjectId && initialProjectId !== projectId) {
+      setProjectId(initialProjectId);
+    }
+  }, [initialProjectId, projectId]);
 
   useEffect(() => {
     if (!state.pending) {

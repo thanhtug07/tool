@@ -6,6 +6,7 @@
 pub mod dictionary;
 pub mod export;
 pub mod job;
+pub mod pipeline;
 pub mod project;
 pub mod settings;
 pub mod subtitle;

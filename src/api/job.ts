@@ -30,6 +30,25 @@ export function getJob(id: string): Promise<Job> {
   return invoke("job.get", { id });
 }
 
+/** Submit a pipeline job for a project (RELEASE-P0-005 workflow). */
+export function submitJob(
+  projectId: string,
+  type: string,
+  params: Record<string, unknown>,
+): Promise<Job> {
+  return invoke("job.submit", { projectId, jobType: type, params });
+}
+
+/** All jobs for a project, most recently updated first. */
+export function listJobs(projectId: string): Promise<Job[]> {
+  return invoke("job.list", { projectId });
+}
+
+/** Cancel a queued or running job. */
+export function cancelJob(id: string): Promise<void> {
+  return invoke("job.cancel", { id });
+}
+
 export function retryJob(id: string): Promise<void> {
   return invoke("job.retry", { id });
 }

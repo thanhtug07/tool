@@ -16,6 +16,9 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 tauri = { version = "2.11.5", features = [] }
+# Native file-open dialog for the video import flow (RELEASE-P0-005). Only the
+# `dialog` permission is granted to the main window (capabilities/default.json).
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"

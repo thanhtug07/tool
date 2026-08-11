@@ -47,6 +47,8 @@ pub fn run() {
     logging::init();
 
     tauri::Builder::default()
+        // Native file-open dialog for the video import flow (RELEASE-P0-005).
+        .plugin(tauri_plugin_dialog::init())
         // Scoped `media://` protocol for the video preview (TASK-026): only a
         // registered project's source video is streamed, never arbitrary files.
         .register_uri_scheme_protocol(media::MEDIA_SCHEME, |ctx, request| {
@@ -58,6 +60,7 @@ pub fn run() {
             commands::worker::get_worker_state,
             commands::project::create,
             commands::project::open,
+            commands::project::list_projects,
             commands::project::save,
             commands::project::delete,
             commands::job::submit,
@@ -77,6 +80,7 @@ pub fn run() {
             commands::subtitle::update_cue,
             commands::export::export_video,
             commands::export::export_subtitles,
+            commands::pipeline::artifact_paths_command,
             commands::settings::set_api_key,
             commands::settings::get_api_key_masked,
             commands::settings::delete_api_key,

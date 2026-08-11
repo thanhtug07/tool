@@ -29,7 +29,7 @@
 //! `JobRunError::Transient`/`Permanent` by the envelope's `recoverable` flag.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -47,13 +47,44 @@ use crate::services::worker_client::{
 };
 use crate::services::worker_manager::WorkerManager;
 
-// Canonical artifact names under the project directory.
-const ARTIFACT_AUDIO: &str = "cache/audio.wav";
-const ARTIFACT_TRANSCRIPT: &str = "cache/transcript.json";
-const ARTIFACT_TRANSLATION: &str = "cache/translation.json";
-const ARTIFACT_SUBTITLE_ASS: &str = "cache/subtitle.ass";
+// Canonical artifact names under the project directory (shared with the
+// frontend via `pipeline.artifact_paths`).
+pub const ARTIFACT_AUDIO: &str = "cache/audio.wav";
+pub const ARTIFACT_TRANSCRIPT: &str = "cache/transcript.json";
+pub const ARTIFACT_TRANSLATION: &str = "cache/translation.json";
+pub const ARTIFACT_SUBTITLE_ASS: &str = "cache/subtitle.ass";
+pub const ARTIFACT_SUBTITLE_SRT: &str = "cache/subtitle.srt";
 
-const DEFAULT_RENDER_NAME: &str = "rendered";
+pub const DEFAULT_RENDER_NAME: &str = "rendered";
+
+/// Canonical per-project artifact locations, derived from the project dir.
+///
+/// The runner writes/reads these paths and the frontend uses them to preview,
+/// edit, and export — one source of truth for the artifact scheme.
+#[derive(Debug, Clone)]
+pub struct ArtifactPaths {
+    pub project_dir: PathBuf,
+    pub audio: PathBuf,
+    pub transcript: PathBuf,
+    pub translation: PathBuf,
+    pub subtitle_srt: PathBuf,
+    pub subtitle_ass: PathBuf,
+    pub rendered_video: PathBuf,
+}
+
+pub fn artifact_paths(project_dir: &Path) -> ArtifactPaths {
+    ArtifactPaths {
+        project_dir: project_dir.to_path_buf(),
+        audio: project_dir.join(ARTIFACT_AUDIO),
+        transcript: project_dir.join(ARTIFACT_TRANSCRIPT),
+        translation: project_dir.join(ARTIFACT_TRANSLATION),
+        subtitle_srt: project_dir.join(ARTIFACT_SUBTITLE_SRT),
+        subtitle_ass: project_dir.join(ARTIFACT_SUBTITLE_ASS),
+        rendered_video: project_dir
+            .join("output")
+            .join(format!("{DEFAULT_RENDER_NAME}.mp4")),
+    }
+}
 /// Providers that never need a credential (worker registry: mock/local).
 const KEYLESS_PROVIDERS: &[&str] = &["mock", "local"];
 
@@ -249,7 +280,7 @@ impl PipelineRunner {
         let total_duration = param_f64(p, "total_duration_seconds");
 
         let client = self.client()?;
-        let audio_path = project_dir.join(ARTIFACT_AUDIO);
+        let audio_path = artifact_paths(&project_dir).audio;
 
         (ctx.progress)(0.02, "extract-audio");
         let extract = client.extract_audio(ExtractAudioRequest {
@@ -392,11 +423,13 @@ impl PipelineRunner {
     }
 
     fn run_subtitle(&self, job: &Job, ctx: &JobRunContext<'_>) -> Result<(), JobRunError> {
+        let project_dir = self.project_dir(&job.project_id)?;
         let transcript: Transcript =
             self.read_json(&job.project_id, ARTIFACT_TRANSCRIPT, "transcribe")?;
         let translation: Translation =
             self.read_json(&job.project_id, ARTIFACT_TRANSLATION, "translate")?;
-        let output_dir = self.project_dir(&job.project_id)?.join("cache");
+        let output_dir = artifact_paths(&project_dir).subtitle_srt;
+        let output_dir = output_dir.parent().expect("cache dir");
         let language = param_str(&job.params, "language")
             .filter(|v| !v.trim().is_empty())
             .or(Some(transcript.language.clone()));
@@ -442,7 +475,8 @@ impl PipelineRunner {
         let p = &job.params;
         let project_dir = self.project_dir(&job.project_id)?;
         let video_path = self.source_video(job)?;
-        let subtitle_path = project_dir.join(ARTIFACT_SUBTITLE_ASS);
+        let paths = artifact_paths(&project_dir);
+        let subtitle_path = paths.subtitle_ass;
         if !subtitle_path.is_file() {
             return Err(permanent(
                 "E_ARTIFACT_MISSING",
@@ -452,7 +486,11 @@ impl PipelineRunner {
         let name = param_str(p, "output_name")
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_RENDER_NAME.to_string());
-        let output_path = project_dir.join("output").join(format!("{name}.mp4"));
+        let output_path = if name == DEFAULT_RENDER_NAME {
+            paths.rendered_video
+        } else {
+            project_dir.join("output").join(format!("{name}.mp4"))
+        };
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent).map_err(map_io)?;
         }

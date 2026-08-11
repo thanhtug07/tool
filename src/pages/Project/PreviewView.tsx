@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { getSubtitleCues } from "@/api/subtitle";
 import type { SubtitleCue } from "@/api/subtitle";
@@ -7,10 +7,19 @@ import VideoPreview from "@/components/VideoPreview";
 
 const EMPTY_PROJECT = "00000000-0000-4000-8000-000000000000";
 
+interface PreviewViewProps {
+  /** Project whose cues + source video are previewed (RELEASE-P0-005). */
+  projectId?: string;
+  videoPath?: string;
+}
+
 /** Preview page (TASK-026): stream a project video and overlay its cues. */
-export default function PreviewView() {
-  const [projectId, setProjectId] = useState(EMPTY_PROJECT);
-  const [videoPath, setVideoPath] = useState("");
+export default function PreviewView({
+  projectId: initialProjectId,
+  videoPath: initialVideoPath,
+}: PreviewViewProps = {}) {
+  const [projectId, setProjectId] = useState(initialProjectId ?? EMPTY_PROJECT);
+  const [videoPath, setVideoPath] = useState(initialVideoPath ?? "");
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [cues, setCues] = useState<SubtitleCue[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +34,16 @@ export default function PreviewView() {
       setError(String(e));
     }
   }
+
+  // Follow the project selected on the Projects page (RELEASE-P0-005).
+  useEffect(() => {
+    if (initialProjectId && initialProjectId !== projectId) {
+      setProjectId(initialProjectId);
+    }
+    if (initialVideoPath && initialVideoPath !== videoPath) {
+      setVideoPath(initialVideoPath);
+    }
+  }, [initialProjectId, initialVideoPath, projectId, videoPath]);
 
   return (
     <section aria-labelledby="preview-heading" className="space-y-3">

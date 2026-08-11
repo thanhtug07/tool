@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capability for the main window (core:default only — deny-by-default, no broad filesystem/shell/process/http grants).",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

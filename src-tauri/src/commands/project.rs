@@ -27,6 +27,12 @@ pub fn open(service: State<'_, Arc<ProjectService>>, id: String) -> Result<Proje
     service.load(&id).map_err(err_to_string)
 }
 
+/// `project.list() → Project[]` (most recently updated first)
+#[tauri::command(rename = "project.list")]
+pub fn list_projects(service: State<'_, Arc<ProjectService>>) -> Result<Vec<Project>, String> {
+    service.list().map_err(err_to_string)
+}
+
 /// `project.save(id) → void` (auto-save; records `updated_at`)
 #[tauri::command(rename = "project.save")]
 pub fn save(service: State<'_, Arc<ProjectService>>, id: String) -> Result<(), String> {

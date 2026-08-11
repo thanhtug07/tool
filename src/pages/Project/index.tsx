@@ -1,5 +1,5 @@
-import SubtitleEditorView from "./SubtitleEditorView";
+import SubtitleEditorView, { type SubtitleEditorViewProps } from "./SubtitleEditorView";
 
-export default function ProjectPage() {
-  return <SubtitleEditorView />;
+export default function ProjectPage({ projectId }: SubtitleEditorViewProps = {}) {
+  return <SubtitleEditorView projectId={projectId} />;
 }
