@@ -5,7 +5,7 @@
 **Base:** `MASTER_PLAN.md` (FROZEN V3) + `QUALITY_BENCHMARK.md`.
 **Mục đích:** Định nghĩa **video mẫu chuẩn** + danh sách **checkpoint** để chạy regression toàn pipeline (Import → Probe → Extract → STT → Translation → Subtitle → Render → Export) và xác nhận chất lượng đầu ra.
 
-> ⚠️ **TRẠNG THÁI:** Video mẫu chưa có → đánh dấu `TODO — CREATE GOLDEN VIDEO FIXTURE`. Tài liệu này định nghĩa **spec video cần có** + **checklist kiểm tra** để khi có fixture chỉ cần tạo file, không đổi quy trình.
+> ✅ **TRẠNG THÁI (2026-08-12):** Fixture đã có — `golden/video/golden.mp4` (synthetic, bản quyền an toàn, tạo bằng piper-tts + ffmpeg lavfi) + runner tự động `golden/scripts/run_golden.py` + kết quả thực tế trong `golden/results/latest.json` (PASS 16/16, 5.5s). Chi tiết ở mục 7.
 
 ---
 
@@ -82,3 +82,60 @@ output: golden_report.json + logs (STT/translation/render)
 ---
 
 *Hết GOLDEN_VIDEO_TEST.md — tích hợp qua MASTER_PLAN §38.1a, Phase 12, DoD tầng 2 & 3.*
+
+
+## 8. HIỆN TRẠNG THỰC TẾ (2026-08-12) — IMPLEMENTED
+
+> Trước đây mục này đánh dấu `TODO — CREATE GOLDEN VIDEO FIXTURE`. Đã hoàn thành.
+
+### 8.1 Fixture
+
+| Thuộc tính | Giá trị | Ghi chú |
+|---|---|---|
+| Video | `golden/video/golden.mp4` | MP4 H.264 + AAC, 640×360, 25fps, ~6.4s |
+| Audio gốc | `golden/audio/transcript.wav` | piper-tts (`en_US-lessac-medium`) |
+| Text nguồn | "The quick brown fox jumps over the lazy dog. My phone number is five five five, one two three four." | deterministic, không bản quyền |
+| Expected | `golden/expected/expected.json` | transcript_contains + translation + video metadata + min_cues |
+
+**Tạo lại fixture:** `py golden/scripts/generate_golden.py` (cần ffmpeg + `py -m piper.download_voices en_US-lessac-medium` một lần).
+
+### 8.2 Runner E2E
+
+`py golden/scripts/run_golden.py [--provider mock|gemini|local] [--model tiny] [--device cpu]`
+
+Chuỗi thực tế: spawn worker thật (giao thức sidecar) → `/v1/audio/extract` → `/v1/stt/transcribe` (faster-whisper thật) → `/v1/translate` (mock deterministic mặc định; `--provider gemini` cần key trong Credential Manager) → `/v1/subtitle` → `/v1/render` (FFmpeg/libass) → `/v1/export/video` (QC).
+
+### 8.3 Kết quả đo được (chạy trên máy dev, 2026-08-12)
+
+```text
+golden E2E PASS — 16/16 checks in 5.5s
+  [PASS] extract produced audio
+  [PASS] extract duration ~ video          6.41s vs 6.46s
+  [PASS] stt produced segments             1 segs in 2.2s
+  [PASS] stt contains `quick brown fox`    the quick brown fox jumps over the lazy dog, my phone number is 555-1234.
+  [PASS] stt contains `lazy dog`
+  [PASS] stt mentions phone number         (555 hoặc five five five)
+  [PASS] translate covered every segment
+  [PASS] mock translate deterministic prefix
+  [PASS] at least min_cues generated
+  [PASS] cue timing/text valid
+  [PASS] srt+ass written
+  [PASS] render produced output            libx264 in 1.0s
+  [PASS] render output has video stream    video:h264, audio:aac
+  [PASS] render duration ~ source          6.44s vs 6.46s
+  [PASS] export produced file
+  [PASS] export QC passed                  0 issues
+```
+
+Chi tiết JSON: `golden/results/latest.json`.
+
+### 8.4 Deterministic vs tolerance
+
+- **Deterministic:** fixture sinh bằng piper-tts + ffmpeg lavfi (cùng voice/text → cùng audio/video); mock translation; subtitle/ASS cấu trúc.
+- **Tolerance:** STT text (so theo phrase chứ không từng từ — model nhỏ có thể chuẩn hoá số "five five five" → "555-1234"); thời lượng ±1.5s; số cue ≥ min_cues (phụ thuộc segmentation của model).
+- **Real provider:** `--provider gemini` chạy translation thật (cần API key trong Windows Credential Manager) — kết quả không deterministic, chỉ kiểm tra non-empty.
+
+### 8.5 Lưu ý vận hành
+
+- Runner đặt `HF_HUB_OFFLINE=1` sau khi warm model để tránh stall trên Hugging Face API giữa pipeline (đã quan sát: revision-check treo ~3 phút).
+- Lần đầu chạy cần tải model whisper (~75MB `tiny`): `py -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"`.

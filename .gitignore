@@ -50,3 +50,6 @@ models/*
 # --- Temporary / local ---
 *.tmp
 tmp/
+golden/voices/
+golden/results/
+.freebuff/

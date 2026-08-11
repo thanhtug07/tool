@@ -1,0 +1,27 @@
+{
+  "case_id": "C006_repeated_terminology",
+  "category": "repeated_terminology",
+  "source_lang": "zh",
+  "target_lang": "vi",
+  "context": {
+    "prev_block": "",
+    "next_block": "",
+    "speaker_map": {}
+  },
+  "glossary": {
+    "接口": "giao diện lập trình (API)",
+    "延迟": "độ trễ"
+  },
+  "segments": [
+    {
+      "idx": 0,
+      "speaker": null,
+      "text": "这个接口的延迟很低。"
+    },
+    {
+      "idx": 1,
+      "speaker": null,
+      "text": "接口文档在服务器上。"
+    }
+  ]
+}

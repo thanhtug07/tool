@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -73,6 +74,24 @@ def _announce_ready(token: str | None) -> None:
         print(f"READY {token}", flush=True)
 
 
+def _warm_ai_stack() -> None:
+    """Pre-import the heavy AI stack in the background so the first transcribe
+    request never stalls on a cold ``numpy``/``faster_whisper`` import
+    (observed: the first request could hang for minutes inside ``import numpy``
+    inside the AnyIO worker thread). Runs concurrently with uvicorn startup;
+    the health endpoint stays cheap and the import failure is non-fatal — the
+    route still surfaces ``E_STT_MODEL_UNAVAILABLE`` when faster-whisper is
+    actually missing.
+    """
+    try:
+        t0 = time.monotonic()
+        import faster_whisper  # noqa: PLC0415 - heavy, lazy by design
+
+        logger.info("AI stack warmed in %.1fs", time.monotonic() - t0)
+    except Exception as exc:  # noqa: BLE001 - warmup is best-effort
+        logger.warning("AI stack warmup failed (non-fatal): %s", exc)
+
+
 def _start_stdin_watcher(server: uvicorn.Server) -> None:
     """Watch stdin for ``SHUTDOWN`` (graceful exit) or EOF (parent gone)."""
 
@@ -126,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging()
     logger.info("starting worker")
+    _warm_ai_stack()
     config = uvicorn.Config(app, host=HOST, port=args.port, log_config=None)
     server = uvicorn.Server(config)
     if _sidecar_mode:

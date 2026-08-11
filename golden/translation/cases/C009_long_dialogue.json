@@ -1,0 +1,41 @@
+{
+  "case_id": "C009_long_dialogue",
+  "category": "long_dialogue",
+  "source_lang": "zh",
+  "target_lang": "vi",
+  "context": {
+    "prev_block": "",
+    "next_block": "",
+    "speaker_map": {
+      "A": "Giáo viên"
+    }
+  },
+  "glossary": null,
+  "segments": [
+    {
+      "idx": 0,
+      "speaker": "A",
+      "text": "今天我们讲三个重点。"
+    },
+    {
+      "idx": 1,
+      "speaker": "A",
+      "text": "第一，要经常练习。"
+    },
+    {
+      "idx": 2,
+      "speaker": "A",
+      "text": "第二，不要害怕犯错误。"
+    },
+    {
+      "idx": 3,
+      "speaker": "A",
+      "text": "第三，多和母语者交流。"
+    },
+    {
+      "idx": 4,
+      "speaker": "A",
+      "text": "把这些都做到了，进步会很快。"
+    }
+  ]
+}

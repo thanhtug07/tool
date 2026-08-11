@@ -1,0 +1,19 @@
+{
+  "case_id": "C003_slang_casual",
+  "category": "slang_casual",
+  "source_lang": "zh",
+  "target_lang": "vi",
+  "context": {
+    "prev_block": "",
+    "next_block": "",
+    "speaker_map": {}
+  },
+  "glossary": null,
+  "segments": [
+    {
+      "idx": 0,
+      "speaker": null,
+      "text": "别磨蹭了，赶紧的！"
+    }
+  ]
+}

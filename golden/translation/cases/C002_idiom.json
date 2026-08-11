@@ -1,0 +1,19 @@
+{
+  "case_id": "C002_idiom",
+  "category": "idiom",
+  "source_lang": "zh",
+  "target_lang": "vi",
+  "context": {
+    "prev_block": "这件事真的很难。",
+    "next_block": "我们一定要坚持。",
+    "speaker_map": {}
+  },
+  "glossary": null,
+  "segments": [
+    {
+      "idx": 0,
+      "speaker": null,
+      "text": "只要功夫深，铁杵磨成针。"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "case_id": "C001_dialogue",
+  "segments": [
+    {
+      "idx": 0,
+      "expected_text": "Xin chào, chào mừng đến với chương trình của chúng tôi."
+    },
+    {
+      "idx": 1,
+      "expected_text": "Cảm ơn, rất vui được đến đây."
+    }
+  ]
+}

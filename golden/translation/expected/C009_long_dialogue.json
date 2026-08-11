@@ -1,0 +1,25 @@
+{
+  "case_id": "C009_long_dialogue",
+  "segments": [
+    {
+      "idx": 0,
+      "expected_text": "Hôm nay chúng ta học ba điểm chính."
+    },
+    {
+      "idx": 1,
+      "expected_text": "Thứ nhất, phải luyện tập thường xuyên."
+    },
+    {
+      "idx": 2,
+      "expected_text": "Thứ hai, đừng sợ mắc lỗi."
+    },
+    {
+      "idx": 3,
+      "expected_text": "Thứ ba, hãy giao tiếp nhiều với người bản ngữ."
+    },
+    {
+      "idx": 4,
+      "expected_text": "Làm được tất cả những điều đó, sẽ tiến bộ rất nhanh."
+    }
+  ]
+}

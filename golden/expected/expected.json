@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "golden/scripts/generate_golden.py",
+  "voice": "en_US-lessac-medium",
+  "golden_text": "The quick brown fox jumps over the lazy dog. My phone number is five five five, one two three four.",
+  "transcript_contains": [
+    "quick brown fox",
+    "lazy dog",
+    "five five five"
+  ],
+  "translation": "金色的狐狸跳过懒狗。我的电话号码是五五五，一二三四。",
+  "video": {
+    "width": 640,
+    "height": 360,
+    "fps": 25,
+    "duration_seconds": 6.455918
+  },
+  "min_cues": 1
+}

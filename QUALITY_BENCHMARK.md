@@ -5,7 +5,7 @@
 **Base:** `MASTER_PLAN.md` (FROZEN V3) + `ARCHITECTURE_DECISION.md`.
 **Mục đích:** Định nghĩa **Golden Translation Dataset** + cách chấm điểm (score) + ngưỡng chấp nhận để đảm bảo chất lượng dịch ổn định qua thời gian (regression) và so sánh provider/preset.
 
-> ⚠️ **TRẠNG THÁI DỮ LIỆU:** Chưa có dataset thật → đánh dấu `TODO — CREATE GOLDEN TRANSLATION DATASET`. Tài liệu này thiết kế **infrastructure** (cấu trúc, format, cách chấm, ngưỡng) để dataset tạo sau không làm thay đổi kiến trúc benchmark.
+> ✅ **TRẠNG THÁI DỮ LIỆU (2026-08-12):** Dataset thật đã có tại `golden/translation/` — 11 case / 11 category (zh→vi), kèm `manifest.json` và expected dịch chuẩn. Chi tiết vận hành ở mục 7.
 
 ---
 
@@ -138,3 +138,40 @@ score_total = weighted mean over all cases
 ---
 
 *Hết QUALITY_BENCHMARK.md — tích hợp qua MASTER_PLAN §38.1a, Phase 12, DoD tầng 3.*
+
+## 8. HIỆN TRẠNG THỰC TẾ (2026-08-12) — IMPLEMENTED
+
+> Trước đây đánh dấu `TODO — CREATE GOLDEN TRANSLATION DATASET`. Đã hoàn thành.
+
+### 8.1 Dataset
+
+| Thành phần | Đường dẫn | Ghi chú |
+|---|---|---|
+| Manifest | `golden/translation/manifest.json` | version 1.0.0, zh→vi, coverage full, 11 case |
+| Cases | `golden/translation/cases/C0XX_*.json` | đúng format mục 2.1 (source_lang/target_lang/context/segments) |
+| Expected | `golden/translation/expected/C0XX_*.json` | bản dịch tham chiếu hand-curated (idx → expected_text) |
+
+11 category đều có case: dialogue, idiom, slang_casual, proper_noun, character_name,
+repeated_terminology (kèm glossary), context_dependent, short_ambiguous, long_dialogue
+(5 cue), multi_speaker, cultural_expression.
+
+### 8.2 Chạy benchmark
+
+```text
+# Deterministic regression (không cần network / key) — mock provider
+py golden/scripts/run_translation_benchmark.py --provider mock
+
+# Real provider (cần API key trong Windows Credential Manager)
+py golden/scripts/run_translation_benchmark.py --provider gemini [--api-key-env GEMINI_API_KEY]
+```
+
+Script chưa tồn tại → tạo theo mục 4 của tài liệu này; ngưỡng mặc định trong manifest
+(`segment_accuracy ≥ 0.9`, `case_pass_ratio ≥ 0.9`). Với mock provider, mọi case phải PASS
+100% vì translation deterministic `[<target_lang>] <text>` — benchmark thực chất dùng để đo
+provider thật (gemini/local) trên bộ câu cố định này.
+
+### 8.3 Ghi chú
+
+- Dataset nhỏ (11 case) đủ để bắt đầu regression; mục 3.5 của tài liệu vẫn yêu cầu mở rộng
+  lên ≥ 50 case khi có người review → ghi nhận là P2 trong release audit.
+- Không nhúng model bản quyền; mọi text trong dataset là nội dung tự viết.

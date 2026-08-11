@@ -1,0 +1,9 @@
+{
+  "case_id": "C002_idiom",
+  "segments": [
+    {
+      "idx": 0,
+      "expected_text": "Có công mài sắt, có ngày nên kim."
+    }
+  ]
+}

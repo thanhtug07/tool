@@ -1,0 +1,9 @@
+{
+  "case_id": "C004_proper_noun",
+  "segments": [
+    {
+      "idx": 0,
+      "expected_text": "Tháng sau tôi đi công tác ở Thượng Hải."
+    }
+  ]
+}
