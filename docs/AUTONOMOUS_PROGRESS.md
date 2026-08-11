@@ -1,4 +1,4 @@
-﻿runner_version: "1.0"
+runner_version: "1.0"
 current_task: null
 current_status: PASS
 all_tasks_complete: true
@@ -86,3 +86,54 @@ last_updated: "2026-08-12"
 context_handoff_required: false
 last_updated: "2026-08-12"
 
+
+
+release_phase: ACTIVE (post-TASKS.md release completion, started 2026-08-12)
+release_current_task: RELEASE-P0-008 (installer/clean-machine validation)
+release_last_completed_task: RELEASE-P0-007 (worker+FFmpeg packaging)
+release_next_task: RELEASE-P0-008 -> RELEASE-P1 (performance/GPU/security/docs)
+release_last_commit: "65c89eb"
+
+release_completed_tasks:
+  - id: RELEASE-P0-001
+    goal: worker pipeline HTTP surface (audio extract, transcribe, translate, subtitle, render, cancel)
+    status: PASS
+    commit: 60bde2c
+    evidence: 582 worker tests pass; 16 pipeline route tests
+  - id: RELEASE-P0-002
+    goal: Rust WorkerClient pipeline stage methods + 10MB body cap
+    status: PASS
+    commit: 699adb3
+    evidence: 151 Rust tests pass
+  - id: RELEASE-P0-003/004
+    goal: PipelineRunner (JobRunner impl) wired into JobService, replacing NotWiredRunner
+    status: PASS
+    commit: 75c5296
+    evidence: 160 Rust tests pass; stage dispatch/artifacts/cancel/error mapping covered
+  - id: RELEASE-P0-005
+    goal: frontend project import + job submission workflow (Projects page, api bridges, progress display)
+    status: PASS
+    commit: f8a8578
+    evidence: typecheck/lint/format/test pass; dialog plugin; pipeline.artifact_paths
+  - id: RELEASE-P0-006
+    goal: golden video fixture + E2E runner + translation benchmark + real STT + numpy-import hang fix
+    status: PASS
+    commit: 355bfe5
+    evidence: golden E2E 16/16 PASS (dev, ~4-12s); benchmark 11/11; real faster-whisper inference
+  - id: RELEASE-P0-007
+    goal: release packaging - PyInstaller worker onedir, FFmpeg/FFprobe vendored+bundled, release-mode WorkerManager, packaged smoke test
+    status: PASS
+    commit: 65c89eb
+    evidence: packaged-worker golden E2E 16/16 in 3.9s; release binary spawns bundled worker (Ready, health 200, AI stack warm 0.3s); MSI 193MB + NSIS 139MB contain worker/ffmpeg; portable-run test PASS from %TEMP%
+  - id: RELEASE-P0-008
+    goal: installer smoke test on clean machine
+    status: BLOCKED (external infrastructure - clean Windows VM required)
+    evidence: MSI/NSIS built and contain runtime; portable self-contained run PASS; fresh-machine install/uninstall/launch/pipeline not executable locally
+
+release_known_blockers:
+  - clean-machine installer validation (needs Windows VM or dedicated test machine)
+  - code signing certificate (OV) - external credential
+  - updater infrastructure (post-MVP, Phase 14)
+  - clean-machine FFmpeg/WebView2 first-run model download unverified on fresh OS
+
+release_next_action: continue RELEASE-P1 - performance benchmarks (1/10/30/60 min), NVIDIA GPU validation, security verification (gitleaks), docs (DEVELOPMENT/API/SECURITY/TESTING/RELEASE/DATABASE/PIPELINE/LICENSING), then regenerate RELEASE_READINESS_AUDIT.md
