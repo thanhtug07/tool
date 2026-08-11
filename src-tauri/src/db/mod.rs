@@ -26,6 +26,7 @@ pub use repo::characters::{CharacterEntry, CharacterRepo};
 pub use repo::glossary::{GlossaryEntry, GlossaryRepo};
 pub use repo::job::{Job, JobStatus, JobType};
 pub use repo::project::{Project, ProjectStatus};
+pub use repo::subtitle::{SubtitleCue, SubtitleRepo};
 
 /// How long a connection waits for a write lock before failing (WAL readers do
 /// not block, so this only matters for concurrent writers).

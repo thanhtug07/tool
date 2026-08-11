@@ -8,3 +8,4 @@ pub mod characters;
 pub mod glossary;
 pub mod job;
 pub mod project;
+pub mod subtitle;

@@ -20,6 +20,7 @@ use services::cache_service::{CacheService, CacheServiceConfig};
 use services::dictionary_service::DictionaryService;
 use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig, NotWiredRunner};
 use services::project_service::ProjectService;
+use services::subtitle_service::SubtitleService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
 
 /// Forwards `JobEvent`s to the frontend as Tauri events (`job:status`,
@@ -61,6 +62,9 @@ pub fn run() {
             commands::dictionary::character_list,
             commands::dictionary::character_upsert,
             commands::dictionary::character_delete,
+            commands::subtitle::get_cues,
+            commands::subtitle::replace_cues,
+            commands::subtitle::update_cue,
         ])
         .setup(|app| {
             // The app keeps running even if the worker cannot start (e.g. no
@@ -99,6 +103,11 @@ pub fn run() {
             // (TASK-023). The glossary fingerprint feeds the worker's
             // translation-memory versioning.
             app.manage(DictionaryService::open(data_dir.clone()));
+
+            // Project-scoped subtitle cue persistence (TASK-025): the editor
+            // reads/edits cues; the worker's SubtitleEngine output replaces a
+            // project's cues atomically via `subtitle.replace_cues`.
+            app.manage(SubtitleService::open(data_dir.clone()));
             Ok(())
         })
         .on_window_event(|window, event| {

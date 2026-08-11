@@ -5,5 +5,6 @@
 pub mod dictionary;
 pub mod job;
 pub mod project;
+pub mod subtitle;
 pub mod system;
 pub mod worker;

@@ -14,6 +14,7 @@ pub mod dictionary_service;
 pub mod hardware_probe;
 pub mod job_service;
 pub mod project_service;
+pub mod subtitle_service;
 pub mod worker_client;
 pub mod worker_manager;
 
