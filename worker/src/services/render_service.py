@@ -1,17 +1,21 @@
-"""RenderService (TASK-027): libass burn-in + auto encoder + progress/cancel.
+"""RenderService (TASK-027/028): libass burn-in + watermark + auto encoder.
 
 Renders a video with subtitles burned in via the ``ass``/``subtitles`` libass
-filter, then **validates the output before it is ever handed to the caller** —
-a corrupt or wrong file is never shipped silently.
+filter and optional text/image watermarks via ``drawtext``/``overlay``
+(MASTER_PLAN §3.7), then **validates the output before it is ever handed to the
+caller** — a corrupt or wrong file is never shipped silently.
 
-Pipeline (MASTER_PLAN §9.2 / TASK-027):
+Pipeline (MASTER_PLAN §9.2 / TASK-027/028):
 
 1. Probe the input (resolution / FPS / audio / duration) with ffprobe.
 2. Pick a video encoder: hardware NVENC → QSV → AMF, else libx264; a requested
    encoder may be forced, with graceful fallback to libx264 on hardware failure.
 3. Encode straight to a temp file in the destination directory (same volume, so
    the final ``os.replace`` is atomic), keeping resolution / FPS / SAR / colour
-   metadata untouched (no scaling, no re-timeline).
+   metadata untouched (no scaling, no re-timeline). A watermark (text via
+   ``drawtext`` with correct filter-graph escaping, image via ``overlay`` on the
+   scaled/alpha-treated overlay stream) is wired into the same ``-vf`` or
+   ``-filter_complex`` pass.
 4. Stream ``-progress pipe:1`` and report fraction + ETA.
 5. Cancel kills the whole ffmpeg process tree and removes temp files.
 6. **Validation:** ffprobe the output and verify resolution == input, FPS,
@@ -26,13 +30,16 @@ Error taxonomy (MASTER_PLAN §28.1):
 
 Security model: ffmpeg/ffprobe always run from argument arrays (never a shell
 string); subtitle and output paths go through ``validate_input_path``; the
-subtitle file is copied into the temp workdir under a safe generated name and
-referenced through the process ``cwd`` so no filter-graph path escaping is
-needed; error messages never embed paths or command lines.
+subtitle/watermark files are copied into the temp workdir under a safe generated
+name and referenced through the process ``cwd`` so no filter-graph path escaping
+is needed; watermark text is escaped for the filter-graph grammar (a literal
+``'`` that cannot be escaped is routed through a ``textfile=`` payload); error
+messages never embed paths or command lines.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -54,7 +61,7 @@ from src.core.ffmpeg import (
     run_ffmpeg,
     validate_input_path,
 )
-from src.services import hardware
+from src.services import cache, hardware
 from src.services.media_service import MediaProbeError, probe
 
 logger = logging.getLogger(__name__)
@@ -84,6 +91,21 @@ _BURN_REGION = (0.0, 0.85, 1.0, 1.0)  # x0, y0, x1, y1 as fractions
 
 _KNOWN_OUTPUT_CODECS = frozenset({"h264", "hevc", "av1", "vp9", "mpeg4"})
 
+# Named watermark positions (MASTER_PLAN §3.7 / TASK-028): a 3x3 grid plus a
+# fully custom ``x``/``y`` position.
+WM_POSITIONS: tuple[str, ...] = (
+    "top-left", "top", "top-right",
+    "left", "center", "right",
+    "bottom-left", "bottom", "bottom-right",
+)
+
+# Characters that are special inside an ffmpeg filter-graph option value and are
+# escaped by ``escape_drawtext``; ``'`` is deliberately NOT in this set because
+# ffmpeg's filtergraph parser cannot express a literal single quote inside a
+# quoted value — text containing one must be routed through a ``textfile=``
+# payload (see ``build_drawtext_filter``), and ``escape_drawtext`` rejects it.
+_DRAWTEXT_ESC_CHARS = frozenset("\\:,[]%{};")
+
 
 class RenderError(Exception):
     """Render failure carrying the architecture error code (MASTER_PLAN §28.1)."""
@@ -95,12 +117,66 @@ class RenderError(Exception):
 
 
 @dataclass(frozen=True)
+class TextWatermark:
+    """Text watermark burned via the ffmpeg ``drawtext`` filter (TASK-028).
+
+    ``position`` is one of :data:`WM_POSITIONS`, or ``"custom"`` to pin the
+    watermark at ``(x, y)``. ``font`` is a font family name when the system font
+    service can resolve it; ``font_file`` is an explicit font path (copied into
+    the render workdir so no graph escaping of the path is ever needed).
+    """
+
+    text: str
+    position: str = "bottom-right"
+    margin: int = 24
+    x: int = 0
+    y: int = 0
+    font_size: int = 48
+    color: str = "#FFFFFFFF"
+    opacity: float = 1.0
+    rotation: float = 0.0
+    font: str | None = None
+    font_file: str | None = None
+
+
+@dataclass(frozen=True)
+class ImageWatermark:
+    """Image watermark burned via the ffmpeg ``overlay`` filter (TASK-028).
+
+    ``width`` scales the overlay to a target width in pixels (0 keeps the image's
+    original size); ``opacity`` in ``(0..1]`` is applied to the alpha channel.
+    """
+
+    image_path: str
+    position: str = "bottom-right"
+    margin: int = 24
+    x: int = 0
+    y: int = 0
+    width: int = 0
+    opacity: float = 1.0
+
+
+@dataclass(frozen=True)
+class WatermarkConfig:
+    """Immutable watermark set; at most one text and one image watermark."""
+
+    text: TextWatermark | None = None
+    image: ImageWatermark | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.text is not None or self.image is not None
+
+
+@dataclass(frozen=True)
 class RenderConfig:
     """Inputs for one burn-in render.
 
     ``video_encoder=None`` auto-detects (NVENC → QSV → AMF → libx264).
     ``check_window`` is the ``(start, end)`` seconds window where a subtitle is
     displayed; when provided, the output must show a text region there.
+    ``watermark`` carries optional text/image watermarks; when present, the
+    output is additionally validated to show them in their configured regions.
     """
 
     input_path: str
@@ -112,6 +188,7 @@ class RenderConfig:
     audio_codec: str = DEFAULT_AUDIO_CODEC
     check_window: tuple[float, float] | None = None
     allow_fallback: bool = True
+    watermark: WatermarkConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -159,11 +236,16 @@ def build_render_args(
     *,
     encoder: str,
     subtitle_arg: str | None = None,
+    filter_graph: _FilterGraph | None = None,
     preset: str = DEFAULT_RENDER_PRESET,
     crf: int = DEFAULT_RENDER_CRF,
     audio_codec: str = DEFAULT_AUDIO_CODEC,
 ) -> list[str]:
     """Argument array for a burn-in render.
+
+    ``filter_graph`` wins over ``subtitle_arg``: a pre-built filter graph (with
+    an optional extra input for an image watermark) is emitted verbatim, wiring
+    ``-map`` to the graph's ``[vout]`` label instead of ``0:v:0``.
 
     Software encoders get ``-preset``/``-crf``; hardware encoders use their own
     quality defaults (nvenc/qsv/amf do not share libx264's flags). Streams are
@@ -172,9 +254,20 @@ def build_render_args(
     validate_input_path(input_path)
     validate_input_path(output_path)
     args = ["-y", "-nostdin", "-i", input_path]
-    if subtitle_arg:
-        args += ["-vf", subtitle_arg]
-    args += ["-map", "0:v:0", "-map", "0:a?"]
+    if filter_graph is not None:
+        if filter_graph.extra_input:
+            validate_input_path(filter_graph.extra_input)
+            args += ["-i", filter_graph.extra_input]
+        args += [filter_graph.option, filter_graph.value]
+        if filter_graph.option == "-filter_complex":
+            args += ["-map", "[vout]"]
+        else:
+            args += ["-map", "0:v:0"]
+    elif subtitle_arg:
+        args += ["-vf", subtitle_arg, "-map", "0:v:0"]
+    else:
+        args += ["-map", "0:v:0"]
+    args += ["-map", "0:a?"]
     args += ["-c:v", encoder]
     if encoder in _SOFTWARE_VIDEO_ENCODERS:
         args += ["-preset", preset, "-crf", str(crf)]
@@ -189,6 +282,307 @@ def subtitle_filter_arg(subtitle_path: str) -> str:
     if name.endswith(".ass"):
         return f"ass={Path(subtitle_path).name}"
     return f"subtitles={Path(subtitle_path).name}"
+
+
+# ---------------------------------------------------------------------------
+# Watermark filter building (TASK-028)
+# ---------------------------------------------------------------------------
+
+
+def escape_drawtext(text: str) -> str:
+    """Escape an arbitrary string for drawtext's ``text=`` option.
+
+    Returns a single-quoted token where every filter-graph special character is
+    backslash-escaped, so it can be embedded verbatim in ``-vf``/`-filter_complex``.
+    ffmpeg decodes the escapes and the quoted section, so the rendered text is
+    byte-identical to the input. A literal ``'`` cannot be represented this way
+    (ffmpeg's filtergraph parser has no escape for it inside a quoted value) and
+    is rejected — callers must route such text through ``textfile=`` instead (see
+    ``build_drawtext_filter``).
+    """
+    if not isinstance(text, str):
+        raise RenderError(E_RENDER_INVALID, "Watermark text must be a string.")
+    if "'" in text:
+        raise RenderError(
+            E_RENDER_INVALID,
+            "Watermark text containing a single quote must be routed through a text file.",
+        )
+    escaped = "".join(f"\\{ch}" if ch in _DRAWTEXT_ESC_CHARS else ch for ch in text)
+    return f"'{escaped}'"
+
+
+def _anchor_exprs(position: str, margin: int, *, box_w: str, box_h: str, base_w: str, base_h: str) -> tuple[str, str]:
+    """Return ``(x, y)`` filter expressions for a named position/anchor.
+
+    ``box_w``/``box_h`` name the watermark's measured filter variables
+    (``text_w``/``text_h`` for drawtext, ``overlay_w``/``overlay_h`` for
+    overlay); ``base_w``/``base_h`` name the main frame's dimension (``w``/``h``
+    for drawtext — those are the input frame there — but ``main_w``/``main_h``
+    for overlay, where ``w``/``h`` alias the *overlay* size, not the frame).
+    Raises ``RenderError`` for any position outside the 3x3 grid.
+    """
+    if position == "custom":
+        raise RenderError(E_RENDER_INVALID, "custom position needs explicit x/y")
+    edge_w = f"{base_w}-{box_w}"
+    edge_h = f"{base_h}-{box_h}"
+    half_x = f"({edge_w})/2"
+    half_y = f"({edge_h})/2"
+    m = int(margin)
+    positions = {
+        "top-left": (str(m), str(m)),
+        "top": (half_x, str(m)),
+        "top-right": (f"{edge_w}-{m}", str(m)),
+        "left": (str(m), half_y),
+        "center": (half_x, half_y),
+        "right": (f"{edge_w}-{m}", half_y),
+        "bottom-left": (str(m), f"{edge_h}-{m}"),
+        "bottom": (half_x, f"{edge_h}-{m}"),
+        "bottom-right": (f"{edge_w}-{m}", f"{edge_h}-{m}"),
+    }
+    if position not in positions:
+        raise RenderError(E_RENDER_INVALID, f"unknown watermark position {position!r}")
+    return positions[position]
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+@dataclass(frozen=True)
+class _FilterGraph:
+    """A completed ``-vf`` or ``-filter_complex`` value plus an optional 2nd input."""
+
+    option: str  # "-vf" | "-filter_complex"
+    value: str
+    extra_input: str | None = None
+
+
+def build_drawtext_filter(wm: TextWatermark, *, textfile: str | None = None, fontfile: str | None = None) -> str:
+    """Full ``drawtext=...`` filter string for a text watermark.
+
+    Two input routes for the payload:
+    - ``textfile`` — when the watermark text contains a literal ``'`` (the one
+      character ffmpeg cannot express inside a quoted drawtext value), the caller
+      writes the text to a UTF-8 file in the workdir and passes its bare name.
+    - otherwise the text is inlined and escaped by ``escape_drawtext``.
+
+    ``fontfile`` overrides the font source with a bare workdir name (the renderer
+    copies ``wm.font_file`` there), so no path escaping is ever needed.
+    """
+    if wm.position == "custom":
+        x, y = str(int(wm.x)), str(int(wm.y))
+    else:
+        x, y = _anchor_exprs(wm.position, wm.margin, box_w="text_w", box_h="text_h", base_w="w", base_h="h")
+    parts: list[str] = ["drawtext="]
+    if textfile is not None:
+        parts.append(f"textfile={textfile}")
+    else:
+        parts.append(f"text={escape_drawtext(wm.text)}")
+    parts.append("expansion=none")
+    if fontfile is not None:
+        parts.append(f"fontfile={fontfile}")
+    elif wm.font_file:
+        parts.append(f"fontfile={Path(wm.font_file).name}")
+    elif wm.font:
+        parts.append(f"font={escape_drawtext(wm.font)}")
+    parts.append(f"fontsize={int(wm.font_size)}")
+    parts.append(f"fontcolor={wm.color}")
+    if wm.opacity < 1.0:
+        parts.append(f"alpha={_clamp01(wm.opacity):.3f}")
+    parts.append(f"x={x}")
+    parts.append(f"y={y}")
+    if wm.rotation:
+        parts.append(f"rotation={wm.rotation:.4f}")
+    return ":".join(parts)
+
+
+def build_overlay_filter(wm: ImageWatermark) -> tuple[str, str]:
+    """Return ``(prep, overlay)`` fragments for an image watermark.
+
+    ``prep`` transforms the ``[1:v]`` image stream (scale + alpha); ``overlay``
+    is the ``overlay=x:y`` filter that the graph joins as
+    ``[vbase][wmimg]<overlay>[vout]``.
+    """
+    if wm.position == "custom":
+        x, y = str(int(wm.x)), str(int(wm.y))
+    else:
+        x, y = _anchor_exprs(wm.position, wm.margin, box_w="overlay_w", box_h="overlay_h", base_w="main_w", base_h="main_h")
+    prep_parts: list[str] = []
+    if wm.width and wm.width > 0:
+        prep_parts.append(f"scale={int(wm.width)}:-2:flags=lanczos")
+    opacity = _clamp01(wm.opacity)
+    if opacity < 1.0:
+        prep_parts.append(f"format=rgba,colorchannelmixer=aa={opacity:.3f}")
+    prep = ",".join(prep_parts)
+    return prep, f"overlay={x}:{y}"
+
+
+def build_filter_graph(
+    *,
+    subtitle_arg: str | None = None,
+    text_watermark: TextWatermark | None = None,
+    image_watermark: ImageWatermark | None = None,
+    textfile: str | None = None,
+    fontfile: str | None = None,
+    image_input: str | None = None,
+) -> _FilterGraph | None:
+    """Compose subtitle burn-in + text/image watermark into one filter graph.
+
+    Returns ``None`` when there is nothing to filter. A pure text/subtitle chain
+    stays a single ``-vf``; an image watermark adds a second input and is emitted
+    as ``-filter_complex`` with explicit labels.
+    """
+    chain = [
+        f
+        for f in (
+            subtitle_arg,
+            build_drawtext_filter(text_watermark, textfile=textfile, fontfile=fontfile)
+            if text_watermark is not None
+            else None,
+        )
+        if f
+    ]
+    if image_watermark is None:
+        value = ",".join(chain)
+        if not value:
+            return None
+        return _FilterGraph("-vf", value)
+    prep, overlay_text = build_overlay_filter(image_watermark)
+    pieces = [
+        f"[0:v]{','.join(chain) if chain else 'null'}[vbase]",
+        f"[1:v]{prep if prep else 'null'}[wmimg]",
+        f"[vbase][wmimg]{overlay_text}[vout]",
+    ]
+    return _FilterGraph("-filter_complex", ";".join(pieces), extra_input=image_input)
+
+
+def watermark_fingerprint(watermark: WatermarkConfig | None) -> str:
+    """Canonical serialization fed into the render cache key (TASK-028).
+
+    Content-addressed for image files (SHA-256) so replacing the watermark image
+    — or editing any text/position/opacity param — changes the key and misses the
+    render cache, per ARCHITECTURE_DECISION.md §3.7. ``None`` maps to ``"none"``.
+    """
+    if watermark is None or not watermark.enabled:
+        return "none"
+    if watermark.text is not None:
+        t = watermark.text
+        return json.dumps(
+            {
+                "kind": "text",
+                "text": t.text,
+                "position": t.position,
+                "margin": t.margin,
+                "x": t.x,
+                "y": t.y,
+                "font": t.font,
+                "font_file": t.font_file,
+                "font_size": t.font_size,
+                "color": t.color,
+                "opacity": round(t.opacity, 4),
+                "rotation": round(t.rotation, 4),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    img = watermark.image
+    digest = cache.sha256_file(img.image_path) if img.image_path and os.path.isfile(img.image_path) else ""
+    return json.dumps(
+        {
+            "kind": "image",
+            "image_sha256": digest,
+            "image_path": img.image_path,
+            "position": img.position,
+            "margin": img.margin,
+            "x": img.x,
+            "y": img.y,
+            "width": img.width,
+            "opacity": round(img.opacity, 4),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+_IMAGE_WATERMARK_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+def validate_watermark(watermark: WatermarkConfig | None) -> None:
+    """Reject malformed watermark inputs before any workdir is created."""
+    if watermark is None or not watermark.enabled:
+        return
+    for wm, kind in ((watermark.text, "text"), (watermark.image, "image")):
+        if wm is None:
+            continue
+        if wm.position != "custom" and wm.position not in WM_POSITIONS:
+            raise RenderError(
+                E_RENDER_INVALID, f"unknown {kind} watermark position {wm.position!r}"
+            )
+        if not (0.0 <= wm.opacity <= 1.0):
+            raise RenderError(
+                E_RENDER_INVALID, f"{kind} watermark opacity must be within 0..1"
+            )
+    if watermark.text is not None:
+        if not watermark.text.text:
+            raise RenderError(E_RENDER_INVALID, "watermark text must not be empty")
+        if watermark.text.position == "custom" and (watermark.text.x < 0 or watermark.text.y < 0):
+            raise RenderError(E_RENDER_INVALID, "custom text watermark position must be non-negative")
+        if watermark.text.font_size <= 0:
+            raise RenderError(E_RENDER_INVALID, "watermark font size must be positive")
+        if watermark.text.font_file and not os.path.isfile(watermark.text.font_file):
+            raise RenderError(E_RENDER_INVALID, "watermark font file does not exist")
+    if watermark.image is not None:
+        img = watermark.image
+        img_path = os.path.abspath(img.image_path)
+        if not os.path.isfile(img_path):
+            raise RenderError(E_RENDER_INVALID, "watermark image does not exist")
+        if Path(img_path).suffix.lower() not in _IMAGE_WATERMARK_EXTS:
+            raise RenderError(E_RENDER_INVALID, "watermark image must be PNG, JPG or WebP")
+        if img.position == "custom" and (img.x < 0 or img.y < 0):
+            raise RenderError(E_RENDER_INVALID, "custom image watermark position must be non-negative")
+        if img.width < 0:
+            raise RenderError(E_RENDER_INVALID, "watermark image width must be non-negative")
+
+
+def prepare_watermark(workdir: Path, watermark: WatermarkConfig | None) -> tuple[str | None, str | None, str | None]:
+    """Copy watermark assets under the render workdir.
+
+    Returns ``(textfile_name, fontfile_name, image_input_path)``:
+    - ``textfile_name`` — bare workdir filename of a UTF-8 payload file when the
+      watermark text contains a literal ``'`` (the one character ffmpeg cannot
+      embed in a quoted drawtext value); ``None`` when the text is inlined.
+    - ``fontfile_name`` — bare workdir filename of the copied font file, when a
+      custom font was requested; ``None`` to use drawtext's default font.
+    - ``image_input_path`` — absolute path of the copied watermark image (added
+      as a second ffmpeg input); ``None`` when there is no image watermark.
+
+    All files are copied under generated names so no filter-graph value ever
+    contains a path (security model, mirroring subtitle handling).
+    """
+    validate_watermark(watermark)
+    if watermark is None or not watermark.enabled:
+        return None, None, None
+    textfile = None
+    fontfile = None
+    image_input = None
+
+    if watermark.text is not None:
+        wm = watermark.text
+        if "'" in wm.text:
+            payload = workdir / "wm_text.txt"
+            payload.write_text(wm.text, encoding="utf-8")
+            textfile = payload.name
+        if wm.font_file:
+            copied = workdir / "wm_font.bin"
+            shutil.copy2(wm.font_file, copied)
+            fontfile = copied.name
+    if watermark.image is not None:
+        img = watermark.image
+        ext = Path(img.image_path).suffix.lower() or ".png"
+        copied = workdir / f"wm_image{ext}"
+        shutil.copy2(img.image_path, copied)
+        image_input = os.path.abspath(os.path.join(workdir, copied.name))
+    return textfile, fontfile, image_input
 
 
 def render_validation_issues(
@@ -433,11 +827,21 @@ def render(
             shutil.copy(subtitle_path, workdir / Path(subtitle_path).name)
             subtitle_arg = subtitle_filter_arg(subtitle_path)
 
+        textfile, fontfile, image_input = prepare_watermark(workdir, config.watermark)
+        filter_graph = build_filter_graph(
+            subtitle_arg=subtitle_arg,
+            text_watermark=config.watermark.text if config.watermark else None,
+            image_watermark=config.watermark.image if config.watermark else None,
+            textfile=textfile,
+            fontfile=fontfile,
+            image_input=image_input,
+        )
+
         args = build_render_args(
             input_path,
             str(temp_out),
             encoder=encoder,
-            subtitle_arg=subtitle_arg,
+            filter_graph=filter_graph,
             preset=config.video_preset,
             crf=config.video_crf,
             audio_codec=config.audio_codec,
@@ -452,7 +856,7 @@ def render(
                     input_path,
                     str(temp_out),
                     encoder="libx264",
-                    subtitle_arg=subtitle_arg,
+                    filter_graph=filter_graph,
                     preset=config.video_preset,
                     crf=config.video_crf,
                     audio_codec=config.audio_codec,

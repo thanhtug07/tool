@@ -6,6 +6,8 @@ issue detection, frame sampling math and failure classification are all pure.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from src.api.schemas import AudioStream, MediaMetadata, Rational
@@ -14,14 +16,24 @@ from src.services.render_service import (
     E_RENDER_INVALID,
     DEFAULT_RENDER_CRF,
     DEFAULT_RENDER_PRESET,
+    ImageWatermark,
     RenderError,
+    TextWatermark,
+    WatermarkConfig,
+    WM_POSITIONS,
     _EtaEstimator,
+    build_drawtext_filter,
+    build_filter_graph,
     build_render_args,
     classify_render_failure,
+    escape_drawtext,
     frame_region_mean,
     pick_video_encoder,
+    prepare_watermark,
     render_validation_issues,
     subtitle_filter_arg,
+    validate_watermark,
+    watermark_fingerprint,
 )
 
 
@@ -221,3 +233,258 @@ class TestEtaEstimator:
         estimator = _EtaEstimator()
         estimator.estimate(1.0, 0, 10.0)
         assert estimator.estimate(2.0, 0, 10.0) == (None, None)
+
+
+class TestEscapeDrawtext:
+    def test_special_chars_are_backslash_escaped(self) -> None:
+        text = "A: B, C [x] 50% {y}; $ \\z"
+        escaped = escape_drawtext(text)
+        assert escaped == "'A\\: B\\, C \\[x\\] 50\\% \\{y\\}\\; $ \\\\z'"
+
+    def test_plain_text_is_just_quoted(self) -> None:
+        assert escape_drawtext("hello world") == "'hello world'"
+
+    def test_empty_string_is_quoted_empty(self) -> None:
+        assert escape_drawtext("") == "''"
+
+    def test_single_quote_is_rejected(self) -> None:
+        with pytest.raises(RenderError) as exc_info:
+            escape_drawtext("don't panic")
+        assert exc_info.value.code == E_RENDER_INVALID
+
+    def test_non_string_is_rejected(self) -> None:
+        with pytest.raises(RenderError) as exc_info:
+            escape_drawtext(123)  # type: ignore[arg-type]
+        assert exc_info.value.code == E_RENDER_INVALID
+
+
+class TestBuildDrawtextFilter:
+    def test_inlines_escaped_text_without_font(self) -> None:
+        wm = TextWatermark(text="A: B, C [x] 50% {y};", position="top-left", margin=10)
+        out = build_drawtext_filter(wm)
+        assert out.startswith("drawtext=")
+        assert "text='A\\: B\\, C \\[x\\] 50\\% \\{y\\}\\;'" in out
+        assert "expansion=none" in out
+        assert "fontsize=48" in out
+        assert "fontcolor=#FFFFFFFF" in out
+        assert "x=10" in out
+        assert "y=10" in out
+
+    def test_anchored_positions_use_filter_variables(self) -> None:
+        wm = TextWatermark(text="wm", position="center")
+        out = build_drawtext_filter(wm)
+        assert "x=(w-text_w)/2" in out
+        assert "y=(h-text_h)/2" in out
+
+    def test_custom_position_uses_explicit_xy(self) -> None:
+        wm = TextWatermark(text="wm", position="custom", x=42, y=17)
+        out = build_drawtext_filter(wm)
+        assert "x=42" in out
+        assert "y=17" in out
+
+    def test_textfile_route_when_single_quote_present(self) -> None:
+        wm = TextWatermark(text="it's mine", position="bottom-right")
+        out = build_drawtext_filter(wm, textfile="wm_text.txt")
+        assert "textfile=wm_text.txt" in out
+        assert "text=" + "'" not in out
+
+    def test_fontfile_overrides_font_for_no_path_escaping(self) -> None:
+        wm = TextWatermark(text="wm", font_file="C:/Some Dir/a:rial.ttf")
+        assert "fontfile=arial.ttf" not in build_drawtext_filter(wm)  # path never in graph
+        out = build_drawtext_filter(wm, fontfile="wm_font.bin")
+        assert "fontfile=wm_font.bin" in out
+
+    def test_opacity_below_one_adds_alpha(self) -> None:
+        wm = TextWatermark(text="wm", opacity=0.5)
+        assert "alpha=0.500" in build_drawtext_filter(wm)
+
+    def test_rotation_is_emitted(self) -> None:
+        wm = TextWatermark(text="wm", rotation=1.5)
+        assert "rotation=1.5000" in build_drawtext_filter(wm)
+
+
+class TestValidateWatermark:
+    def test_none_is_fine(self) -> None:
+        validate_watermark(None)
+        validate_watermark(WatermarkConfig())
+
+    def test_unknown_position_is_rejected(self) -> None:
+        with pytest.raises(RenderError) as exc_info:
+            validate_watermark(WatermarkConfig(text=TextWatermark(text="x", position="middle")))
+        assert exc_info.value.code == E_RENDER_INVALID
+
+    def test_opacity_out_of_range_is_rejected(self) -> None:
+        with pytest.raises(RenderError):
+            validate_watermark(WatermarkConfig(text=TextWatermark(text="x", opacity=1.5)))
+        with pytest.raises(RenderError):
+            validate_watermark(WatermarkConfig(text=TextWatermark(text="x", opacity=-0.1)))
+
+    def test_empty_text_is_rejected(self) -> None:
+        with pytest.raises(RenderError):
+            validate_watermark(WatermarkConfig(text=TextWatermark(text="")))
+
+    def test_negative_custom_position_is_rejected(self) -> None:
+        with pytest.raises(RenderError):
+            validate_watermark(
+                WatermarkConfig(text=TextWatermark(text="x", position="custom", x=-1, y=0))
+            )
+
+    def test_missing_image_is_rejected(self) -> None:
+        with pytest.raises(RenderError):
+            validate_watermark(
+                WatermarkConfig(image=ImageWatermark(image_path="C:/no/such.png"))
+            )
+
+    def test_non_image_extension_is_rejected(self, tmp_path) -> None:
+        bogus = tmp_path / "wm.txt"
+        bogus.write_text("not an image", encoding="utf-8")
+        with pytest.raises(RenderError):
+            validate_watermark(
+                WatermarkConfig(image=ImageWatermark(image_path=str(bogus)))
+            )
+
+
+class TestBuildFilterGraph:
+    def test_nothing_to_filter_returns_none(self) -> None:
+        assert build_filter_graph() is None
+
+    def test_text_only_stays_single_vf(self) -> None:
+        wm = TextWatermark(text="wm", position="top")
+        graph = build_filter_graph(text_watermark=wm)
+        assert graph is not None
+        assert graph.option == "-vf"
+        assert graph.extra_input is None
+        assert graph.value.startswith("drawtext=")
+
+    def test_subtitle_then_text_chained_in_vf(self) -> None:
+        wm = TextWatermark(text="wm")
+        graph = build_filter_graph(subtitle_arg="ass=sub.ass", text_watermark=wm)
+        assert graph is not None
+        assert graph.value == "ass=sub.ass,drawtext=" + build_drawtext_filter(wm).split("=", 1)[1]
+
+    def test_image_watermark_uses_filter_complex_with_second_input(self) -> None:
+        wm = ImageWatermark(image_path="C:/wm.png", position="bottom-left", margin=8)
+        graph = build_filter_graph(image_watermark=wm, image_input="C:/wm.png")
+        assert graph is not None
+        assert graph.option == "-filter_complex"
+        assert graph.extra_input == "C:/wm.png"
+        assert "[0:v]" in graph.value
+        assert "[1:v]" in graph.value
+        assert "[vbase][wmimg]overlay=" in graph.value
+        assert "[vout]" in graph.value
+
+    def test_image_scale_and_opacity_prep(self) -> None:
+        wm = ImageWatermark(image_path="C:/wm.png", width=120, opacity=0.4)
+        graph = build_filter_graph(image_watermark=wm, image_input="C:/wm.png")
+        assert graph is not None
+        assert "scale=120:-2:flags=lanczos" in graph.value
+        assert "format=rgba,colorchannelmixer=aa=0.400" in graph.value
+
+    def test_text_and_image_combined_chain(self) -> None:
+        text = TextWatermark(text="wm", position="top-left")
+        img = ImageWatermark(image_path="C:/wm.png")
+        graph = build_filter_graph(text_watermark=text, image_watermark=img, image_input="C:/wm.png")
+        assert graph is not None
+        assert graph.value.startswith("[0:v]drawtext=")
+        assert "[vbase][wmimg]overlay=" in graph.value
+
+
+class TestBuildRenderArgsWithFilterGraph:
+    def test_filter_graph_vf_maps_primary_video(self) -> None:
+        graph = build_filter_graph(text_watermark=TextWatermark(text="wm"))
+        args = build_render_args("in.mp4", "out.mp4", encoder="libx264", filter_graph=graph)
+        assert args[args.index("-vf") + 1] == graph.value
+        assert args[args.index("-map") + 1] == "0:v:0"
+
+    def test_filter_complex_maps_to_vout_label(self) -> None:
+        graph = build_filter_graph(
+            image_watermark=ImageWatermark(image_path="C:/wm.png"), image_input="C:/wm.png"
+        )
+        args = build_render_args("in.mp4", "out.mp4", encoder="libx264", filter_graph=graph)
+        assert args[args.index("-filter_complex") + 1] == graph.value
+        assert "-i" in args
+        assert args[args.index("-map") + 1] == "[vout]"
+
+
+class TestPrepareWatermark:
+    def test_none_returns_nones(self, tmp_path) -> None:
+        assert prepare_watermark(tmp_path, None) == (None, None, None)
+
+    def test_copies_image_under_generated_name(self, tmp_path) -> None:
+        src = tmp_path / "logo.png"
+        src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+        textfile, fontfile, image_input = prepare_watermark(
+            tmp_path, WatermarkConfig(image=ImageWatermark(image_path=str(src)))
+        )
+        assert textfile is None
+        assert fontfile is None
+        assert image_input is not None
+        assert Path(image_input).name == "wm_image.png"
+        assert Path(image_input).is_file()
+
+    def test_text_with_quote_writes_payload_file(self, tmp_path) -> None:
+        wm = WatermarkConfig(text=TextWatermark(text="don't panic"))
+        textfile, _, _ = prepare_watermark(tmp_path, wm)
+        assert textfile == "wm_text.txt"
+        assert (tmp_path / "wm_text.txt").read_text(encoding="utf-8") == "don't panic"
+
+    def test_copies_font_file(self, tmp_path) -> None:
+        font = tmp_path / "Fancy.ttf"
+        font.write_bytes(b"0" * 128)
+        wm = WatermarkConfig(text=TextWatermark(text="wm", font_file=str(font)))
+        _, fontfile, _ = prepare_watermark(tmp_path, wm)
+        assert fontfile == "wm_font.bin"
+
+
+class TestWatermarkFingerprint:
+    def test_none_maps_to_none_string(self) -> None:
+        assert watermark_fingerprint(None) == "none"
+        assert watermark_fingerprint(WatermarkConfig()) == "none"
+
+    def test_text_changes_fingerprint(self) -> None:
+        a = watermark_fingerprint(WatermarkConfig(text=TextWatermark(text="hello", position="top")))
+        b = watermark_fingerprint(WatermarkConfig(text=TextWatermark(text="hello", position="bottom")))
+        assert a != b
+
+    def test_image_content_hashes_fingerprint(self, tmp_path) -> None:
+        src = tmp_path / "logo.png"
+        src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"A" * 64)
+        a = watermark_fingerprint(WatermarkConfig(image=ImageWatermark(image_path=str(src))))
+        src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"B" * 64)
+        b = watermark_fingerprint(WatermarkConfig(image=ImageWatermark(image_path=str(src))))
+        assert a != b
+
+    def test_all_named_positions_are_valid(self, tmp_path) -> None:
+        src = tmp_path / "logo.png"
+        src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"A" * 64)
+        assert len(WM_POSITIONS) == 9
+        for position in WM_POSITIONS:
+            validate_watermark(
+                WatermarkConfig(image=ImageWatermark(image_path=str(src), position=position))
+            )
+
+    def test_changing_watermark_changes_render_cache_key(self, tmp_path) -> None:
+        from src.services.cache import render_key
+
+        base = "video_sha256"
+        key_none = render_key(base, "styleA", watermark_fingerprint(None), "libx264", "fast")
+        key_text = render_key(
+            base,
+            "styleA",
+            watermark_fingerprint(
+                WatermarkConfig(text=TextWatermark(text="hello", position="top-left"))
+            ),
+            "libx264",
+            "fast",
+        )
+        key_text_bottom = render_key(
+            base,
+            "styleA",
+            watermark_fingerprint(
+                WatermarkConfig(text=TextWatermark(text="hello", position="bottom"))
+            ),
+            "libx264",
+            "fast",
+        )
+        assert key_none != key_text
+        assert key_text != key_text_bottom

@@ -20,8 +20,12 @@ from src.core.job import CancelledError
 from src.services.render_service import (
     E_RENDER_INVALID,
     E_RENDER_VALIDATION,
+    ImageWatermark,
     RenderConfig,
     RenderError,
+    TextWatermark,
+    WatermarkConfig,
+    frame_region_mean,
     render,
 )
 
@@ -30,6 +34,43 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "media"
 FFMPEG = shutil.which("ffmpeg")
 
 pytestmark = pytest.mark.skipif(FFMPEG is None, reason="ffmpeg not available on PATH")
+
+
+def _solid_video(path: Path, *, color: str = "black", duration: float = 1.0) -> None:
+    subprocess.run(
+        [
+            FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"color=color={color}:s=320x240:r=25:d={duration}",
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _solid_png(path: Path, *, color: str = "white") -> None:
+    subprocess.run(
+        [
+            FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"color=color={color}:s=64x64",
+            "-frames:v", "1",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _region_lum(path: Path, time_s: float, region: tuple[float, float, float, float], width: int = 320, height: int = 240) -> float:
+    completed = subprocess.run(
+        [
+            FFMPEG, "-nostdin",
+            "-i", str(path), "-ss", f"{time_s:.3f}",
+            "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    return frame_region_mean(completed.stdout, width, height, region)
 
 
 @pytest.fixture()
@@ -218,3 +259,150 @@ def test_validation_failure_never_ships_output(tmp_path: Path, monkeypatch) -> N
     assert not output.exists()
     leftovers = [p for p in tmp_path.iterdir() if p.name.startswith("render_")]
     assert leftovers == []
+
+
+def test_render_with_text_watermark_draws_visible_text(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    output = tmp_path / "wm_text.mp4"
+    plain = tmp_path / "plain.mp4"
+
+    wm = WatermarkConfig(text=TextWatermark(text="WM XY", position="top-left", margin=4, font_size=88))
+    result = render(
+        RenderConfig(
+            input_path=str(source),
+            output_path=str(output),
+            watermark=wm,
+            video_encoder="libx264",
+        )
+    )
+    render(
+        RenderConfig(
+            input_path=str(source),
+            output_path=str(plain),
+            video_encoder="libx264",
+        )
+    )
+
+    region = (0.0, 0.0, 0.4, 0.4)
+    assert result.encoder_used == "libx264"
+    lum = _region_lum(output, 0.5, region)
+    plain_lum = _region_lum(plain, 0.5, region)
+    assert lum > plain_lum + 40.0
+
+
+def test_render_with_image_watermark_overlays_png(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    logo = tmp_path / "logo.png"
+    _solid_png(logo)
+
+    output = tmp_path / "wm_image.mp4"
+    result = render(
+        RenderConfig(
+            input_path=str(source),
+            output_path=str(output),
+            watermark=WatermarkConfig(
+                image=ImageWatermark(image_path=str(logo), position="bottom-left", margin=8, width=64)
+            ),
+            video_encoder="libx264",
+        )
+    )
+    assert result.width == 320
+    assert result.height == 240
+
+    corner_region = (0.0, 0.7, 0.3, 1.0)
+    elsewhere = (0.7, 0.0, 1.0, 0.3)
+    assert _region_lum(output, 0.5, corner_region) > 120.0
+    assert _region_lum(output, 0.5, elsewhere) < 40.0
+
+
+def test_render_with_image_watermark_opacity_scales(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    logo = tmp_path / "logo.png"
+    _solid_png(logo)
+
+    output = tmp_path / "wm_faded.mp4"
+    render(
+        RenderConfig(
+            input_path=str(source),
+            output_path=str(output),
+            watermark=WatermarkConfig(
+                image=ImageWatermark(image_path=str(logo), position="bottom-left", margin=8, width=64, opacity=0.5)
+            ),
+            video_encoder="libx264",
+        )
+    )
+    faded_lum = _region_lum(output, 0.5, (0.0, 0.7, 0.3, 1.0))
+    assert 50.0 < faded_lum < 120.0
+
+
+def test_render_with_quote_text_watermark_uses_textfile(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    output = tmp_path / "wm_quote.mp4"
+
+    wm = WatermarkConfig(text=TextWatermark(text="don't panic", position="top-left", margin=4, font_size=64))
+    result = render(
+        RenderConfig(
+            input_path=str(source),
+            output_path=str(output),
+            watermark=wm,
+            video_encoder="libx264",
+        )
+    )
+    assert result.output_path == str(output)
+    assert _region_lum(output, 0.5, (0.0, 0.0, 0.6, 0.4)) > 30.0
+
+
+def test_render_with_text_and_image_watermark_combined(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    logo = tmp_path / "logo.png"
+    _solid_png(logo)
+
+    output = tmp_path / "wm_both.mp4"
+    render(
+        RenderConfig(
+            input_path=str(source),
+            output_path=str(output),
+            watermark=WatermarkConfig(
+                text=TextWatermark(text="PRO", position="top-left", margin=4, font_size=64),
+                image=ImageWatermark(image_path=str(logo), position="bottom-right", margin=8, width=64),
+            ),
+            video_encoder="libx264",
+        )
+    )
+    assert _region_lum(output, 0.5, (0.0, 0.0, 0.4, 0.4)) > 30.0
+    assert _region_lum(output, 0.5, (0.7, 0.7, 1.0, 1.0)) > 120.0
+
+
+def test_invalid_watermark_is_rejected_before_encode(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    with pytest.raises(RenderError) as exc_info:
+        render(
+            RenderConfig(
+                input_path=str(source),
+                output_path=str(tmp_path / "bad.mp4"),
+                watermark=WatermarkConfig(
+                    text=TextWatermark(text="x", position="middle")
+                ),
+            )
+        )
+    assert exc_info.value.code == E_RENDER_INVALID
+
+    with pytest.raises(RenderError) as exc_info:
+        render(
+            RenderConfig(
+                input_path=str(source),
+                output_path=str(tmp_path / "bad2.mp4"),
+                watermark=WatermarkConfig(
+                    image=ImageWatermark(image_path=str(tmp_path / "missing.png"))
+                ),
+            )
+        )
+    assert exc_info.value.code == E_RENDER_INVALID
+    assert not (tmp_path / "bad.mp4").exists()
+    assert not (tmp_path / "bad2.mp4").exists()
