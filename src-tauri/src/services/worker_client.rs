@@ -22,8 +22,13 @@ const READ_TIMEOUT: Duration = Duration::from_secs(3);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Upper bound for response headers (plenty for a FastAPI health response).
 const MAX_HEADER_BYTES: usize = 16 * 1024;
-/// Upper bound for a control-plane response body.
-const MAX_BODY_BYTES: usize = 1024 * 1024;
+/// Upper bound for a control-plane response body (16 MiB — transcripts of
+/// long videos plus their translations can exceed 1 MiB).
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+/// I/O timeout for pipeline stage calls (extract/transcribe/translate/
+/// subtitle/render). These run for minutes on real media; the short
+/// ``READ_TIMEOUT`` is only for the health probe.
+const PIPELINE_IO_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Response of the worker's `GET /health` endpoint (see worker schemas).
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -139,6 +144,238 @@ pub struct ExportSubtitleResponse {
     pub path: String,
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline stage contracts (RELEASE-P0). Mirror worker/src/api/pipeline.py +
+// worker/src/api/schemas.py exactly; unknown fields are rejected by the worker
+// (`extra="forbid"`), so these structs are the canonical artifacts.
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /v1/audio/extract`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtractAudioRequest {
+    pub video_path: String,
+    pub output_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/audio/extract`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtractAudioResponse {
+    pub output_path: String,
+    pub duration_seconds: Option<f64>,
+    pub file_size_bytes: u64,
+}
+
+/// Request body for `POST /v1/stt/transcribe`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranscribeRequest {
+    pub audio_path: String,
+    pub project_id: String,
+    pub model: String,
+    pub device: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Canonical transcript segment (worker `TranscriptSegment`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranscriptSegment {
+    pub id: String,
+    pub idx: u32,
+    #[serde(default)]
+    pub speaker: Option<String>,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+    pub language: String,
+    pub confidence: f64,
+    #[serde(default)]
+    pub words: Option<Vec<serde_json::Value>>,
+}
+
+/// Canonical transcript artifact (worker `Transcript`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Transcript {
+    pub schema_version: u32,
+    pub project_id: String,
+    pub language: String,
+    pub model: String,
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// One translated segment inside a block (worker `TranslationItem`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranslationItem {
+    pub idx: u32,
+    pub segment_id: String,
+    pub source_text: String,
+    pub translated_text: String,
+    pub confidence: f64,
+}
+
+/// A translation block (worker `TranslationBlock`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranslationBlock {
+    pub block_idx: u32,
+    pub translations: Vec<TranslationItem>,
+}
+
+/// Canonical translation artifact (worker `Translation`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Translation {
+    pub schema_version: u32,
+    pub target_language: String,
+    pub model: String,
+    pub blocks: Vec<TranslationBlock>,
+}
+
+/// Request body for `POST /v1/translate`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranslateRequest {
+    pub transcript: Transcript,
+    pub project_id: String,
+    pub provider: String,
+    pub target_language: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glossary_ver: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glossary: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characters: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<String>>,
+    /// Never logged; only sent over loopback in the request body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_config: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// One subtitle cue (worker `Cue`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Cue {
+    pub cue_number: u32,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+/// Request body for `POST /v1/subtitle`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubtitleRequest {
+    pub transcript: Transcript,
+    pub translation: Translation,
+    pub project_id: String,
+    pub output_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/subtitle`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubtitleResponse {
+    pub cues: Vec<Cue>,
+    pub ass_path: String,
+    pub srt_path: String,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// Text watermark for `POST /v1/render` (worker `WatermarkTextRequest`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WatermarkText {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_file: Option<String>,
+}
+
+/// Image watermark for `POST /v1/render` (worker `WatermarkImageRequest`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WatermarkImage {
+    pub image_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+}
+
+/// Request body for `POST /v1/render`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenderRequest {
+    pub video_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle_path: Option<String>,
+    pub output_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crf: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_window: Option<(f64, f64)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/render`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenderResponse {
+    pub output_path: String,
+    pub encoder_used: String,
+    pub duration_seconds: f64,
+    pub width: u32,
+    pub height: u32,
+    /// `[numerator, denominator]` of the output frame rate.
+    #[serde(default)]
+    pub fps: Vec<u32>,
+    pub audio_streams: u32,
+}
+
+/// Response of `POST /v1/jobs/{job_id}/cancel`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CancelResponse {
+    pub cancelled: bool,
+}
+
 impl WorkerClient {
     pub fn new(port: u16, token: String) -> Self {
         Self { port, token }
@@ -179,6 +416,7 @@ impl WorkerClient {
             "/v1/export/video",
             &[("Authorization", format!("Bearer {}", self.token))],
             &body,
+            READ_TIMEOUT,
         )?;
         parse_json_response(status, body)
     }
@@ -196,8 +434,72 @@ impl WorkerClient {
             "/v1/export/subtitles",
             &[("Authorization", format!("Bearer {}", self.token))],
             &body,
+            READ_TIMEOUT,
         )?;
         parse_json_response(status, body)
+    }
+
+    // -- Pipeline stages (RELEASE-P0) -------------------------------------
+
+    /// Extract 16 kHz mono WAV audio from a video (RELEASE-P0-001 route).
+    pub fn extract_audio(
+        &self,
+        request: ExtractAudioRequest,
+    ) -> Result<ExtractAudioResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/audio/extract", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Transcribe an audio file into a canonical Transcript.
+    pub fn transcribe(&self, request: TranscribeRequest) -> Result<Transcript, HttpError> {
+        let (status, body) = self.post_json("/v1/stt/transcribe", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Translate a Transcript through the selected provider.
+    pub fn translate(&self, request: TranslateRequest) -> Result<Translation, HttpError> {
+        let (status, body) = self.post_json("/v1/translate", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Generate subtitle cues + ASS/SRT files from a Transcript + Translation.
+    pub fn generate_subtitles(
+        &self,
+        request: SubtitleRequest,
+    ) -> Result<SubtitleResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/subtitle", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Burn subtitles into a video with FFmpeg/libass.
+    pub fn render(&self, request: RenderRequest) -> Result<RenderResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/render", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Request cancellation of an in-flight stage for ``job_id`` (idempotent).
+    pub fn cancel_job(&self, job_id: &str) -> Result<CancelResponse, HttpError> {
+        let path = format!("/v1/jobs/{job_id}/cancel");
+        let (status, body) = self.post_json(&path, &serde_json::json!({}))?;
+        parse_json_response(status, body)
+    }
+
+    /// Serialize a request and POST it to ``path`` with the pipeline timeout.
+    fn post_json<T: Serialize>(
+        &self,
+        path: &str,
+        request: &T,
+    ) -> Result<(u16, Vec<u8>), HttpError> {
+        let body = serde_json::to_vec(request).map_err(|e| {
+            HttpError::MalformedResponse(format!("request serialization failed: {e}"))
+        })?;
+        http_post(
+            self.addr(),
+            path,
+            &[("Authorization", format!("Bearer {}", self.token))],
+            &body,
+            PIPELINE_IO_TIMEOUT,
+        )
     }
 }
 
@@ -252,11 +554,12 @@ fn http_post(
     path: &str,
     headers: &[(&str, String)],
     body: &[u8],
+    io_timeout: Duration,
 ) -> Result<(u16, Vec<u8>), HttpError> {
     let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
         .map_err(|e| HttpError::ConnectFailed(e.to_string()))?;
     stream
-        .set_read_timeout(Some(READ_TIMEOUT))
+        .set_read_timeout(Some(io_timeout))
         .map_err(|e| HttpError::ReadFailed(e.to_string()))?;
     stream
         .set_write_timeout(Some(WRITE_TIMEOUT))
@@ -598,5 +901,197 @@ mod tests {
         });
         let err = client_on(port).check_health().expect_err("must fail");
         assert!(matches!(err, HttpError::MalformedResponse(_)));
+    }
+
+    fn sample_transcript() -> Transcript {
+        Transcript {
+            schema_version: 1,
+            project_id: "proj-1".into(),
+            language: "vi".into(),
+            model: "large-v3".into(),
+            segments: vec![TranscriptSegment {
+                id: "seg_0".into(),
+                idx: 0,
+                speaker: None,
+                start: 0.0,
+                end: 1.2,
+                text: "Xin chào".into(),
+                language: "vi".into(),
+                confidence: 0.98,
+                words: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn extract_audio_parses_worker_response() {
+        let port = serve(|stream| {
+            let body = r#"{"output_path":"C:\\out\\audio.wav","duration_seconds":12.5,"file_size_bytes":400000}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .extract_audio(ExtractAudioRequest {
+                video_path: "C:\\in.mp4".into(),
+                output_path: "C:\\out\\audio.wav".into(),
+                job_id: Some("job-1".into()),
+            })
+            .expect("extract succeeds");
+        assert!(result.output_path.ends_with("audio.wav"));
+        assert_eq!(result.duration_seconds, Some(12.5));
+        assert_eq!(result.file_size_bytes, 400000);
+    }
+
+    #[test]
+    fn transcribe_round_trips_canonical_transcript() {
+        let port = serve(|stream| {
+            let body = r#"{"schema_version":1,"project_id":"proj-1","language":"vi","model":"large-v3","segments":[{"id":"seg_0","idx":0,"speaker":null,"start":0.0,"end":1.2,"text":"Xin chào","language":"vi","confidence":0.98,"words":null}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let transcript = client_on(port)
+            .transcribe(TranscribeRequest {
+                audio_path: "C:\\audio.wav".into(),
+                project_id: "proj-1".into(),
+                model: "large-v3".into(),
+                device: "auto".into(),
+                language: Some("vi".into()),
+                total_duration_seconds: None,
+                job_id: Some("job-1".into()),
+            })
+            .expect("transcribe succeeds");
+        assert_eq!(transcript, sample_transcript());
+    }
+
+    #[test]
+    fn translate_sends_provider_and_parses_translation() {
+        let port = serve(|stream| {
+            let body = r#"{"schema_version":1,"target_language":"zh","model":"gemini-2.5-flash-lite","blocks":[{"block_idx":0,"translations":[{"idx":0,"segment_id":"seg_0","source_text":"Xin chào","translated_text":"你好","confidence":0.99}]}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .translate(TranslateRequest {
+                transcript: sample_transcript(),
+                project_id: "proj-1".into(),
+                provider: "gemini".into(),
+                target_language: "zh".into(),
+                model: "gemini-2.5-flash-lite".into(),
+                glossary_ver: None,
+                glossary: None,
+                characters: None,
+                rules: None,
+                api_key: Some("secret".into()),
+                provider_config: None,
+                job_id: Some("job-1".into()),
+            })
+            .expect("translate succeeds");
+        assert_eq!(result.blocks.len(), 1);
+        assert_eq!(result.blocks[0].translations[0].translated_text, "你好");
+    }
+
+    #[test]
+    fn generate_subtitles_parses_cues_and_paths() {
+        let port = serve(|stream| {
+            let body = r#"{"cues":[{"cue_number":1,"start":0.0,"end":1.2,"text":"你好"}],"ass_path":"C:\\sub\\subtitle.ass","srt_path":"C:\\sub\\subtitle.srt","warnings":[]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .generate_subtitles(SubtitleRequest {
+                transcript: sample_transcript(),
+                translation: Translation {
+                    schema_version: 1,
+                    target_language: "zh".into(),
+                    model: "gemini-2.5-flash-lite".into(),
+                    blocks: vec![],
+                },
+                project_id: "proj-1".into(),
+                output_dir: "C:\\sub".into(),
+                language: None,
+                job_id: None,
+            })
+            .expect("subtitle succeeds");
+        assert_eq!(result.cues.len(), 1);
+        assert!(result.srt_path.ends_with("subtitle.srt"));
+        assert_eq!(result.cues[0].text, "你好");
+    }
+
+    #[test]
+    fn render_parses_worker_response() {
+        let port = serve(|stream| {
+            let body = r#"{"output_path":"C:\\out\\final.mp4","encoder_used":"libx264","duration_seconds":12.5,"width":1920,"height":1080,"fps":[25,1],"audio_streams":1}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .render(RenderRequest {
+                video_path: "C:\\in.mp4".into(),
+                subtitle_path: Some("C:\\sub\\subtitle.ass".into()),
+                output_path: "C:\\out\\final.mp4".into(),
+                encoder: None,
+                preset: None,
+                crf: None,
+                watermark: None,
+                check_window: None,
+                job_id: Some("job-1".into()),
+            })
+            .expect("render succeeds");
+        assert_eq!(result.encoder_used, "libx264");
+        assert_eq!(result.fps, vec![25, 1]);
+        assert_eq!(result.audio_streams, 1);
+    }
+
+    #[test]
+    fn cancel_job_parses_idempotent_response() {
+        let port = serve(|stream| {
+            let body = r#"{"cancelled":true}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .cancel_job("job-1")
+            .expect("cancel succeeds");
+        assert!(result.cancelled);
+    }
+
+    #[test]
+    fn pipeline_error_envelope_is_surfaced() {
+        let port = serve(|stream| {
+            let body = r#"{"error":{"code":"E_CANCELLED","message":"Render was cancelled.","recoverable":false}}"#;
+            let response = format!(
+                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let err = client_on(port)
+            .cancel_job("job-1")
+            .expect_err("409 is an error");
+        match err {
+            HttpError::Worker(envelope) => {
+                assert_eq!(envelope.code, "E_CANCELLED");
+                assert!(!envelope.recoverable);
+            }
+            other => panic!("expected Worker error, got {other:?}"),
+        }
     }
 }
