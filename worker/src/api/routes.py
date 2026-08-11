@@ -1,7 +1,10 @@
-"""Worker HTTP routes (TASK-005, TASK-006 sidecar auth, TASK-013 STT).
+"""Worker HTTP routes (TASK-005, TASK-006 sidecar auth, TASK-013 STT,
+TASK-029 export).
 
 - ``GET /health`` — cheap liveness probe (no heavy imports).
 - ``POST /v1/stt/transcribe`` — STT stage (faster-whisper, lazy-loaded).
+- ``POST /v1/export/video`` — copy a rendered video to a user directory + QC.
+- ``POST /v1/export/subtitles`` — export a subtitle file (optionally converted).
 """
 
 import os
@@ -9,6 +12,7 @@ import secrets
 import threading
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src import __version__
@@ -85,8 +89,6 @@ def stt_transcribe(request: TranscribeRequest) -> dict:
     STT is AI-dependent: without a downloaded model this returns a clean
     ``E_STT_*`` error, never a shell/stack-trace leak.
     """
-    from fastapi.responses import JSONResponse
-
     from src.services.stt_service import STTError, transcribe  # noqa: PLC0415 - lazy
 
     try:
@@ -106,3 +108,96 @@ def stt_transcribe(request: TranscribeRequest) -> dict:
             },
         )
     return result.transcript
+
+
+class ExportVideoRequest(BaseModel):
+    """Request body for ``POST /v1/export/video`` (TASK-029)."""
+
+    source_video: str = Field(min_length=1)
+    target_dir: str = Field(min_length=1)
+    name: str | None = None
+    run_qc: bool = True
+
+
+class ExportSubtitleRequest(BaseModel):
+    """Request body for ``POST /v1/export/subtitles`` (TASK-029).
+
+    ``format`` is ``srt`` / ``vtt`` / ``ass``; ``None`` keeps the source
+    extension. ASS cannot be converted to another format (MVP).
+    """
+
+    source_subtitle: str = Field(min_length=1)
+    target_dir: str = Field(min_length=1)
+    name: str | None = None
+    format: str | None = None
+
+
+# Errors the user can act on (pick another directory / free disk space) are
+# ``recoverable``; the rest are not. Mirrors MASTER_PLAN §25.3 error envelope.
+_RECOVERABLE_EXPORT_CODES = frozenset({"E_PERMISSION_DENIED", "E_DISK_FULL"})
+
+
+def _export_error_response(exc) -> JSONResponse:
+    """Map a worker ``RenderError`` to the canonical error envelope."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "recoverable": exc.code in _RECOVERABLE_EXPORT_CODES,
+            }
+        },
+    )
+
+
+@router.post(
+    "/v1/export/video",
+    dependencies=[Depends(require_bearer)],
+)
+def export_video_route(request: ExportVideoRequest) -> JSONResponse:
+    """Copy a rendered video into ``target_dir`` and QC it (TASK-029)."""
+    from src.services.render_service import RenderError, export_video  # noqa: PLC0415 - lazy
+
+    try:
+        result = export_video(
+            request.source_video,
+            request.target_dir,
+            name=request.name,
+            run_qc=request.run_qc,
+        )
+    except RenderError as exc:
+        return _export_error_response(exc)
+    return JSONResponse(
+        {
+            "path": result.path,
+            "qc": {
+                "passed": result.qc.passed,
+                "issues": list(result.qc.issues),
+                "warnings": list(result.qc.warnings),
+            },
+        }
+    )
+
+
+@router.post(
+    "/v1/export/subtitles",
+    dependencies=[Depends(require_bearer)],
+)
+def export_subtitles_route(request: ExportSubtitleRequest) -> JSONResponse:
+    """Export a subtitle file, optionally converting SRT↔VTT (TASK-029)."""
+    from src.services.render_service import (  # noqa: PLC0415 - lazy
+        RenderError,
+        SubtitleExportOptions,
+        export_subtitles,
+    )
+
+    try:
+        path = export_subtitles(
+            request.source_subtitle,
+            request.target_dir,
+            options=SubtitleExportOptions(format=request.format, name=request.name),
+        )
+    except RenderError as exc:
+        return _export_error_response(exc)
+    return JSONResponse({"path": path})

@@ -39,6 +39,8 @@ messages never embed paths or command lines.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import logging
 import os
@@ -46,6 +48,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +72,12 @@ logger = logging.getLogger(__name__)
 E_RENDER_INVALID = "E_RENDER_INVALID"
 E_RENDER_FAILED = "E_RENDER_FAILED"
 E_RENDER_VALIDATION = "E_RENDER_VALIDATION"
+
+# Export / QC errors (TASK-029; MASTER_PLAN §28.1 table).
+E_EXPORT_INVALID = "E_EXPORT_INVALID"
+E_EXPORT_QC = "E_EXPORT_QC"
+E_PERMISSION_DENIED = "E_PERMISSION_DENIED"
+E_DISK_FULL = "E_DISK_FULL"
 
 # Hardware encoder preference order (MASTER_PLAN §9.2: NVENC → QSV → AMF).
 _HW_VIDEO_ENCODERS = ("h264_nvenc", "hevc_nvenc", "av1_nvenc", "h264_qsv", "h264_amf")
@@ -211,6 +220,27 @@ class RenderResult:
     height: int
     fps: tuple[int, int]
     audio_streams: int
+
+
+@dataclass(frozen=True)
+class ExportQCReport:
+    """QC verdict for an exported file (TASK-029).
+
+    ``passed`` is ``False`` when at least one mandatory check failed; any
+    ``warnings`` are informational only (e.g. muxed subtitle streams).
+    """
+
+    passed: bool
+    issues: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExportResult:
+    """Outcome of :func:`export_video`: final path + QC report."""
+
+    path: str
+    qc: ExportQCReport
 
 
 # ---------------------------------------------------------------------------
@@ -935,4 +965,293 @@ def _probe_output(temp_out: Path):
         return probe(str(temp_out))
     except MediaProbeError as exc:
         raise RenderError(E_RENDER_VALIDATION, f"Output video failed probing: {exc.code}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Export + QC (TASK-029)
+# ---------------------------------------------------------------------------
+
+EXPORT_SUBTITLE_FORMATS: tuple[str, ...] = ("srt", "vtt", "ass")
+
+
+@dataclass(frozen=True)
+class SubtitleExportOptions:
+    """Export options for a subtitle file (TASK-029).
+
+    ``format`` is one of ``srt`` / ``vtt`` / ``ass``; ``None`` copies the source
+    file extension as-is. ``name`` overrides the output file stem.
+    """
+
+    format: str | None = None
+    name: str | None = None
+
+
+def export_video(
+    source_video: str,
+    target_dir: str,
+    *,
+    name: str | None = None,
+    run_qc: bool = True,
+) -> ExportResult:
+    """Copy a rendered video into ``target_dir`` and QC it before reporting.
+
+    The destination file is written atomically (copy to a temp name in the same
+    directory, then ``os.replace``) so a partially-written export is never left
+    behind. On collision an automatic `` (1)``, `` (2)``, … suffix is appended.
+    When ``run_qc`` is true the copied file is probed and validated against the
+    criteria in :func:`render_validation_issues`; on hard failure the temp file
+    is removed and :class:`RenderError` with ``E_EXPORT_QC`` is raised.
+
+    Raises :class:`RenderError`:
+    - ``E_PERMISSION_DENIED`` — target directory cannot be created/written.
+    - ``E_DISK_FULL``         — not enough free space on the destination drive.
+    - ``E_EXPORT_INVALID``    — source video missing.
+    - ``E_EXPORT_QC``         — exported file failed a mandatory QC check.
+    """
+    source = os.path.abspath(source_video)
+    if not os.path.isfile(source):
+        raise RenderError(E_EXPORT_INVALID, "Source video does not exist.")
+    directory = _prepare_export_dir(target_dir)
+    stem = (name or os.path.splitext(os.path.basename(source))[0]).strip()
+    if not stem:
+        raise RenderError(E_EXPORT_INVALID, "Export file name is empty.")
+    ext = os.path.splitext(source)[1] or ".mp4"
+    final_path = _unique_path(directory, stem, ext)
+
+    qc: ExportQCReport | None = None
+    try:
+        if run_qc:
+            source_meta = _probe_source(source)
+        else:
+            source_meta = None
+        tmp = _copy_with_guards(source, final_path)
+        if run_qc:
+            try:
+                output_meta = probe(str(tmp))
+            except MediaProbeError as exc:
+                raise RenderError(E_EXPORT_QC, f"Exported video failed probing: {exc.code}") from exc
+            qc = build_qc_report(source_meta, output_meta)
+            if not qc.passed:
+                raise RenderError(E_EXPORT_QC, "export QC failed: " + "; ".join(qc.issues))
+        os.replace(tmp, final_path)
+    except RenderError:
+        _cleanup_export_tmp(final_path)
+        raise
+    return ExportResult(path=final_path, qc=qc or ExportQCReport(passed=True))
+
+
+def build_qc_report(source_meta: MediaMetadata, output_meta: MediaMetadata) -> ExportQCReport:
+    """QC verdict comparing an exported file against the source criteria.
+
+    Reuses the mandatory checks from :func:`render_validation_issues`
+    (resolution, FPS, duration ±1 s, codec, audio preservation) and adds the
+    container-validity criteria from MASTER_PLAN §26.2 (video stream present,
+    subtitle streams preserved when the source had them).
+    """
+    issues = render_validation_issues(source_meta, output_meta)
+    warnings: list[str] = []
+    if not output_meta.video_streams:
+        issues.append("exported file has no video stream")
+    if not source_meta.video_streams and not output_meta.video_streams:
+        issues.append("exported file is not a video")
+    elif source_meta.subtitle_streams and not output_meta.subtitle_streams:
+        warnings.append("muxed subtitle streams were dropped")
+    return ExportQCReport(passed=not issues, issues=tuple(issues), warnings=tuple(warnings))
+
+
+def export_subtitles(
+    source_subtitle: str,
+    target_dir: str,
+    *,
+    options: SubtitleExportOptions | None = None,
+) -> str:
+    """Export a subtitle file into ``target_dir``, optionally converting format.
+
+    ``options.format`` may be ``srt``, ``vtt`` or ``ass``. ``srt`` and ``vtt``
+    are converted losslessly; ``ass`` is copied as-is (and cannot be converted
+    to another format here — that requires an ASS parser, out of MVP scope).
+    On collision the file is written with an automatic `` (1)`` suffix.
+
+    Raises :class:`RenderError`:
+    - ``E_PERMISSION_DENIED`` — target directory cannot be created/written.
+    - ``E_DISK_FULL``         — not enough free space.
+    - ``E_EXPORT_INVALID``    — source missing or an unsupported conversion.
+    """
+    opts = options or SubtitleExportOptions()
+    source = os.path.abspath(source_subtitle)
+    if not os.path.isfile(source):
+        raise RenderError(E_EXPORT_INVALID, "Source subtitle file does not exist.")
+    directory = _prepare_export_dir(target_dir)
+    stem = (opts.name or os.path.splitext(os.path.basename(source))[0]).strip()
+    if not stem:
+        raise RenderError(E_EXPORT_INVALID, "Export file name is empty.")
+    src_ext = os.path.splitext(source)[1].lstrip(".").lower()
+    if src_ext not in EXPORT_SUBTITLE_FORMATS:
+        raise RenderError(E_EXPORT_INVALID, f"unsupported source subtitle format: {src_ext!r}")
+    target_fmt = opts.format or src_ext
+    if target_fmt not in EXPORT_SUBTITLE_FORMATS:
+        raise RenderError(E_EXPORT_INVALID, f"unsupported subtitle export format: {target_fmt!r}")
+    if src_ext == "ass" and target_fmt != "ass":
+        raise RenderError(E_EXPORT_INVALID, "converting ASS subtitles is not supported")
+    final_path = _unique_path(directory, stem, "." + target_fmt)
+
+    try:
+        tmp = final_path + ".tmp"
+        if target_fmt == src_ext:
+            _copy_without_qc(source, tmp)
+        else:
+            text = _read_subtitle_text(source)
+            converted = srt_to_vtt(text) if (src_ext, target_fmt) == ("srt", "vtt") else vtt_to_srt(text)
+            _write_subtitle_text(tmp, converted)
+        os.replace(tmp, final_path)
+    except RenderError:
+        _cleanup_export_tmp(final_path)
+        raise
+    return final_path
+
+
+# -- export internals -------------------------------------------------------
+
+
+def _prepare_export_dir(target_dir: str) -> str:
+    """Create/write-check the destination directory; map failures to architecture codes."""
+    directory = os.path.abspath(target_dir)
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        raise _as_render_error(exc, "Không có quyền ghi vào thư mục.") from exc
+    if not os.path.isdir(directory):
+        raise RenderError(E_EXPORT_INVALID, "Export target is not a directory.")
+    probe = os.path.join(directory, ".tc__write_probe")
+    try:
+        with open(probe, "wb"):
+            pass
+    except OSError as exc:
+        raise _as_render_error(exc, "Không có quyền ghi vào thư mục.") from exc
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(probe)
+    return directory
+
+
+def _as_render_error(exc: OSError, perm_message: str) -> RenderError:
+    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+        return RenderError(E_PERMISSION_DENIED, "Không có quyền ghi vào thư mục.")
+    if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+        return RenderError(E_DISK_FULL, "Đĩa không đủ dung lượng.")
+    return RenderError(E_EXPORT_INVALID, perm_message)
+
+
+def _copy_with_guards(source: str, final_path: str) -> str:
+    """Copy to a sibling temp file, mapping OSError to architecture codes."""
+    tmp = final_path + ".tmp"
+    try:
+        shutil.copy2(source, tmp)
+    except OSError as exc:
+        raise _as_render_error(exc, "Không thể ghi file export.") from exc
+    return tmp
+
+
+def _copy_without_qc(source: str, tmp: str) -> None:
+    try:
+        shutil.copy2(source, tmp)
+    except OSError as exc:
+        raise _as_render_error(exc, "Không thể ghi file export.") from exc
+
+
+def _read_subtitle_text(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RenderError(E_EXPORT_INVALID, "Không đọc được file subtitle.") from exc
+
+
+def _write_subtitle_text(path: str, text: str) -> None:
+    try:
+        Path(path).write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise _as_render_error(exc, "Không thể ghi file export.") from exc
+
+
+def _unique_path(directory: str, stem: str, ext: str) -> str:
+    """First free ``stem.ext``, ``stem (1).ext``, ``stem (2).ext``, …"""
+    candidate = os.path.join(directory, f"{stem}{ext}")
+    index = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(directory, f"{stem} ({index}){ext}")
+        index += 1
+    return candidate
+
+
+def _cleanup_export_tmp(final_path: str) -> None:
+    tmp = final_path + ".tmp"
+    with contextlib.suppress(OSError):
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def srt_to_vtt(srt_text: str) -> str:
+    """Convert SRT content to WebVTT (comma separators become dots).
+
+    Pure text transform: indexes are dropped (VTT needs none) and a ``WEBVTT``
+    header is prepended. Cue timings and text are preserved verbatim.
+    """
+    cues: list[tuple[str, str]] = []
+
+    def parse_block(lines: list[str]) -> None:
+        timing_idx = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if timing_idx is None:
+            return
+        timing = lines[timing_idx].replace(",", ".")
+        text = "\n".join(lines[timing_idx + 1:]).strip()
+        cues.append((timing, text))
+
+    _parse_blocks(srt_text, parse_block)
+    out: list[str] = ["WEBVTT", ""]
+    for timing, text in cues:
+        if text:
+            out.append(f"{timing}\n{text}")
+        else:
+            out.append(timing)
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def vtt_to_srt(vtt_text: str) -> str:
+    """Convert WebVTT content to SRT (dots become commas, cue indices added)."""
+    cues: list[tuple[str, str]] = []
+
+    def parse_block(lines: list[str]) -> None:
+        timing_idx = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if timing_idx is None:
+            return
+        timing = lines[timing_idx].replace(".", ",")
+        text = "\n".join(lines[timing_idx + 1:]).strip()
+        cues.append((timing, text))
+
+    _parse_blocks(vtt_text, parse_block)
+
+    out: list[str] = []
+    for index, (timing, text) in enumerate(cues, start=1):
+        out.append(str(index))
+        out.append(timing)
+        if text:
+            out.append(text)
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _parse_blocks(text: str, process: Callable[[list[str]], None]) -> None:
+    """Split ``text`` on blank lines and run ``process`` over each block's lines."""
+    block: list[str] = []
+    for raw in text.splitlines():
+        if raw.strip():
+            if raw.strip().isdigit():
+                continue
+            block.append(raw)
+        elif block:
+            process(block)
+            block = []
+    if block:
+        process(block)
 

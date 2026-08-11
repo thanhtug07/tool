@@ -71,6 +71,8 @@ pub fn run() {
             commands::subtitle::get_cues,
             commands::subtitle::replace_cues,
             commands::subtitle::update_cue,
+            commands::export::export_video,
+            commands::export::export_subtitles,
         ])
         .setup(|app| {
             // The app keeps running even if the worker cannot start (e.g. no

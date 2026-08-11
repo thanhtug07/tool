@@ -7,6 +7,7 @@ on PATH.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -17,14 +18,18 @@ import pytest
 
 from src.core.ffmpeg import CancellationToken
 from src.core.job import CancelledError
+from src.services.media_service import probe
 from src.services.render_service import (
     E_RENDER_INVALID,
     E_RENDER_VALIDATION,
     ImageWatermark,
     RenderConfig,
     RenderError,
+    SubtitleExportOptions,
     TextWatermark,
     WatermarkConfig,
+    export_subtitles,
+    export_video,
     frame_region_mean,
     render,
 )
@@ -406,3 +411,60 @@ def test_invalid_watermark_is_rejected_before_encode(tmp_path: Path) -> None:
     assert exc_info.value.code == E_RENDER_INVALID
     assert not (tmp_path / "bad.mp4").exists()
     assert not (tmp_path / "bad2.mp4").exists()
+
+
+def test_export_video_produces_valid_copy_with_passing_qc(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    out_dir = tmp_path / "exports"
+
+    result = export_video(str(source), str(out_dir), name="final")
+
+    assert os.path.isfile(result.path)
+    assert result.path == os.path.join(str(out_dir), "final.mp4")
+    assert result.qc.passed is True
+    assert result.qc.issues == ()
+    exported_meta = probe(result.path)
+    assert exported_meta.width == 320
+    assert exported_meta.height == 240
+    assert exported_meta.audio_streams == []
+
+
+def test_export_video_detects_duplicate_and_appends_suffix(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source)
+    out_dir = tmp_path / "exports"
+
+    first = export_video(str(source), str(out_dir), name="clip")
+    second = export_video(str(source), str(out_dir), name="clip")
+
+    assert first.path.endswith("clip.mp4")
+    assert second.path.endswith("clip (1).mp4")
+    assert os.path.isfile(second.path)
+
+
+def test_export_qc_fails_when_source_is_corrupt(tmp_path: Path) -> None:
+    source = tmp_path / "black.mp4"
+    _solid_video(source, duration=2.0)
+    out_dir = tmp_path / "exports"
+    corrupt = tmp_path / "corrupt.mp4"
+    corrupt.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\xde\xad\xbe\xef" * 512)
+
+    with pytest.raises(RenderError) as exc_info:
+        export_video(str(corrupt), str(out_dir), name="final")
+    assert exc_info.value.code == E_RENDER_INVALID
+    assert not os.path.exists(os.path.join(str(out_dir), "final.mp4"))
+
+
+def test_export_subtitles_passthrough_and_conversion(tmp_path: Path) -> None:
+    srt = tmp_path / "subtitle.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nhello\n", encoding="utf-8")
+    out_dir = tmp_path / "exports"
+
+    srt_path = export_subtitles(str(srt), str(out_dir), options=SubtitleExportOptions(format="srt"))
+    vtt_path = export_subtitles(str(srt), str(out_dir), options=SubtitleExportOptions(format="vtt"))
+
+    assert Path(srt_path).read_text(encoding="utf-8") == srt.read_text(encoding="utf-8")
+    vtt = Path(vtt_path).read_text(encoding="utf-8")
+    assert "WEBVTT" in vtt
+    assert "00:00:01.000 --> 00:00:02.000" in vtt

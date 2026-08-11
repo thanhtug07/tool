@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Loopback address the worker must bind (`127.0.0.1`, never the LAN).
 pub const HOST_LOOPBACK: [u8; 4] = [127, 0, 0, 1];
@@ -63,6 +63,8 @@ pub enum HttpError {
     MalformedResponse(String),
     /// A non-2xx status code was received.
     Status(u16),
+    /// The worker answered with a canonical error envelope (MASTER_PLAN §25.3).
+    Worker(ErrorEnvelope),
 }
 
 impl std::fmt::Display for HttpError {
@@ -74,6 +76,7 @@ impl std::fmt::Display for HttpError {
             HttpError::ConnectionClosed => write!(f, "connection closed before response completed"),
             HttpError::MalformedResponse(e) => write!(f, "malformed response: {e}"),
             HttpError::Status(code) => write!(f, "HTTP status {code}"),
+            HttpError::Worker(e) => write!(f, "{}: {}", e.code, e.message),
         }
     }
 }
@@ -88,6 +91,52 @@ impl std::error::Error for HttpError {}
 pub struct WorkerClient {
     port: u16,
     token: String,
+}
+
+/// Request body for `POST /v1/export/video` (TASK-029).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportVideoRequest {
+    pub source_video: String,
+    pub target_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_qc: Option<bool>,
+}
+
+/// QC verdict returned with an exported video (TASK-029).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportQcReport {
+    pub passed: bool,
+    #[serde(default)]
+    pub issues: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// Response of `POST /v1/export/video`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportVideoResponse {
+    pub path: String,
+    pub qc: ExportQcReport,
+}
+
+/// Request body for `POST /v1/export/subtitles` (TASK-029).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportSubtitleRequest {
+    pub source_subtitle: String,
+    pub target_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `srt` / `vtt` / `ass`; `None` keeps the source extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+/// Response of `POST /v1/export/subtitles`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportSubtitleResponse {
+    pub path: String,
 }
 
 impl WorkerClient {
@@ -116,6 +165,55 @@ impl WorkerClient {
         serde_json::from_slice(&body)
             .map_err(|e| HttpError::MalformedResponse(format!("invalid health body: {e}")))
     }
+
+    /// Copy a rendered video to a user directory and QC it (TASK-029).
+    pub fn export_video(
+        &self,
+        request: ExportVideoRequest,
+    ) -> Result<ExportVideoResponse, HttpError> {
+        let body = serde_json::to_vec(&request).map_err(|e| {
+            HttpError::MalformedResponse(format!("request serialization failed: {e}"))
+        })?;
+        let (status, body) = http_post(
+            self.addr(),
+            "/v1/export/video",
+            &[("Authorization", format!("Bearer {}", self.token))],
+            &body,
+        )?;
+        parse_json_response(status, body)
+    }
+
+    /// Export a subtitle file, optionally converting SRT↔VTT (TASK-029).
+    pub fn export_subtitles(
+        &self,
+        request: ExportSubtitleRequest,
+    ) -> Result<ExportSubtitleResponse, HttpError> {
+        let body = serde_json::to_vec(&request).map_err(|e| {
+            HttpError::MalformedResponse(format!("request serialization failed: {e}"))
+        })?;
+        let (status, body) = http_post(
+            self.addr(),
+            "/v1/export/subtitles",
+            &[("Authorization", format!("Bearer {}", self.token))],
+            &body,
+        )?;
+        parse_json_response(status, body)
+    }
+}
+
+/// Parse a JSON response, surfacing the worker's error envelope when present.
+fn parse_json_response<T: serde::de::DeserializeOwned>(
+    status: u16,
+    body: Vec<u8>,
+) -> Result<T, HttpError> {
+    if status == 200 {
+        return serde_json::from_slice(&body)
+            .map_err(|e| HttpError::MalformedResponse(format!("invalid response body: {e}")));
+    }
+    if let Ok(response) = serde_json::from_slice::<ErrorResponse>(&body) {
+        return Err(HttpError::Worker(response.error));
+    }
+    Err(HttpError::Status(status))
 }
 
 /// A tiny HTTP/1.1 GET used only for localhost control-plane calls.
@@ -143,6 +241,41 @@ fn http_get(
     request.push_str("\r\n");
     stream
         .write_all(request.as_bytes())
+        .map_err(|e| HttpError::WriteFailed(e.to_string()))?;
+
+    read_response(&mut stream)
+}
+
+/// A tiny HTTP/1.1 POST used only for localhost control-plane calls.
+fn http_post(
+    addr: SocketAddr,
+    path: &str,
+    headers: &[(&str, String)],
+    body: &[u8],
+) -> Result<(u16, Vec<u8>), HttpError> {
+    let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        .map_err(|e| HttpError::ConnectFailed(e.to_string()))?;
+    stream
+        .set_read_timeout(Some(READ_TIMEOUT))
+        .map_err(|e| HttpError::ReadFailed(e.to_string()))?;
+    stream
+        .set_write_timeout(Some(WRITE_TIMEOUT))
+        .map_err(|e| HttpError::WriteFailed(e.to_string()))?;
+
+    let mut request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        addr.port(),
+        body.len()
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| HttpError::WriteFailed(e.to_string()))?;
+    stream
+        .write_all(body)
         .map_err(|e| HttpError::WriteFailed(e.to_string()))?;
 
     read_response(&mut stream)
@@ -261,9 +394,10 @@ mod tests {
 
     /// Spawn a one-shot TCP server that lets `handler` answer the request.
     ///
-    /// Drains the full request headers first so the socket receive buffer is
-    /// empty when the handler closes the connection — otherwise Windows
-    /// loopback can surface RST/read errors instead of a clean EOF.
+    /// Drains the full request (headers + any ``Content-Length`` body — the
+    /// export calls are POSTs) first so the socket receive buffer is empty when
+    /// the handler closes the connection — otherwise Windows loopback can
+    /// surface RST/read errors instead of a clean EOF.
     fn serve(handler: impl FnOnce(&mut TcpStream) + Send + 'static) -> u16 {
         let listener =
             TcpListener::bind((Ipv4Addr::from(HOST_LOOPBACK), 0)).expect("bind test listener");
@@ -282,6 +416,30 @@ mod tests {
                     break;
                 }
                 drained.extend_from_slice(&chunk[..n]);
+            }
+            let header_end = drained
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|p| p + 4)
+                .unwrap_or(drained.len());
+            let header_block = String::from_utf8_lossy(&drained);
+            let content_length = header_block.lines().find_map(|line| {
+                let mut parts = line.splitn(2, ':');
+                let name = parts.next()?.trim();
+                if name.eq_ignore_ascii_case("content-length") {
+                    parts.next()?.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            });
+            // Body bytes may already have been read together with the headers
+            // (``drained`` holds them); only read the remainder from the socket.
+            if let Some(len) = content_length {
+                let missing = header_end + len - drained.len().min(header_end + len);
+                let mut rest = vec![0u8; missing];
+                if missing > 0 && reader.read_exact(&mut rest).is_err() {
+                    eprintln!("test server: failed to drain request body");
+                }
             }
             handler(&mut stream);
         });
@@ -350,6 +508,78 @@ mod tests {
         drop(listener);
         let err = client_on(port).check_health().expect_err("must fail");
         assert!(matches!(err, HttpError::ConnectFailed(_)));
+    }
+
+    #[test]
+    fn export_video_parses_worker_response() {
+        let port = serve(|stream| {
+            let body =
+                r#"{"path":"C:\\out\\final.mp4","qc":{"passed":true,"issues":[],"warnings":[]}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .export_video(ExportVideoRequest {
+                source_video: "C:\\in.mp4".into(),
+                target_dir: "C:\\out".into(),
+                name: None,
+                run_qc: None,
+            })
+            .expect("export succeeds");
+        assert!(result.path.ends_with("final.mp4"));
+        assert!(result.qc.passed);
+        assert!(result.qc.issues.is_empty());
+    }
+
+    #[test]
+    fn export_video_surfaces_worker_error_envelope() {
+        let port = serve(|stream| {
+            let body = r#"{"error":{"code":"E_PERMISSION_DENIED","message":"Không có quyền ghi vào thư mục.","recoverable":true}}"#;
+            let response = format!(
+                "HTTP/1.1 422 Unprocessable Entity\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let err = client_on(port)
+            .export_video(ExportVideoRequest {
+                source_video: "C:\\in.mp4".into(),
+                target_dir: "C:\\out".into(),
+                name: None,
+                run_qc: None,
+            })
+            .expect_err("422 is an error");
+        match err {
+            HttpError::Worker(envelope) => {
+                assert_eq!(envelope.code, "E_PERMISSION_DENIED");
+                assert!(envelope.recoverable);
+            }
+            other => panic!("expected Worker error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_subtitles_parses_worker_response() {
+        let port = serve(|stream| {
+            let body = r#"{"path":"C:\\out\\subtitle.vtt"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .export_subtitles(ExportSubtitleRequest {
+                source_subtitle: "C:\\in.srt".into(),
+                target_dir: "C:\\out".into(),
+                name: None,
+                format: Some("vtt".into()),
+            })
+            .expect("export succeeds");
+        assert!(result.path.ends_with("subtitle.vtt"));
     }
 
     #[test]

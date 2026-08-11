@@ -6,33 +6,42 @@ issue detection, frame sampling math and failure classification are all pure.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-from src.api.schemas import AudioStream, MediaMetadata, Rational
+from src.api.schemas import AudioStream, MediaMetadata, Rational, VideoStream
 from src.core.ffmpeg import E_FFMPEG_FAILED, FFmpegError
 from src.services.render_service import (
     E_RENDER_INVALID,
     DEFAULT_RENDER_CRF,
     DEFAULT_RENDER_PRESET,
+    E_EXPORT_INVALID,
+    E_PERMISSION_DENIED,
     ImageWatermark,
     RenderError,
+    SubtitleExportOptions,
     TextWatermark,
     WatermarkConfig,
     WM_POSITIONS,
     _EtaEstimator,
     build_drawtext_filter,
     build_filter_graph,
+    build_qc_report,
     build_render_args,
     classify_render_failure,
     escape_drawtext,
+    export_subtitles,
+    export_video,
     frame_region_mean,
     pick_video_encoder,
     prepare_watermark,
     render_validation_issues,
+    srt_to_vtt,
     subtitle_filter_arg,
     validate_watermark,
+    vtt_to_srt,
     watermark_fingerprint,
 )
 
@@ -57,7 +66,20 @@ def _metadata(
         rotation=0,
         format="mp4",
         aspect_ratio="4:3",
-        video_streams=[],
+        video_streams=[
+            VideoStream(
+                index=0,
+                codec=codec,
+                profile="Main",
+                width=width,
+                height=height,
+                fps=Rational(numerator=fps[0], denominator=fps[1]),
+                pixel_format="yuv420p",
+                aspect_ratio="4:3",
+                bitrate=500000,
+                duration=duration,
+            )
+        ],
         audio_streams=(
             [
                 AudioStream(
@@ -488,3 +510,177 @@ class TestWatermarkFingerprint:
         )
         assert key_none != key_text
         assert key_text != key_text_bottom
+
+
+class TestSrtVttConversion:
+    def test_srt_to_vtt_prepends_header_and_dots(self) -> None:
+        srt = "1\n00:00:01,000 --> 00:00:02,500\nhello world\n\n2\n00:00:05,000 --> 00:00:06,000\nsecond\n"
+        vtt = srt_to_vtt(srt)
+        assert vtt.startswith("WEBVTT\n\n")
+        assert "00:00:01.000 --> 00:00:02.500" in vtt
+        assert "00:00:05.000 --> 00:00:06.000" in vtt
+        assert "hello world" in vtt
+        assert "second" in vtt
+
+    def test_vtt_to_srt_adds_indices_and_commas(self) -> None:
+        vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.500\nhello\n\n00:00:05.000 --> 00:00:06.000\nsecond\n"
+        srt = vtt_to_srt(vtt)
+        assert srt == "1\n00:00:01,000 --> 00:00:02,500\nhello\n\n2\n00:00:05,000 --> 00:00:06,000\nsecond\n"
+
+    def test_roundtrip_preserves_timing_and_text(self) -> None:
+        srt = "1\n00:00:01,000 --> 00:00:02,500\nhello\n\n2\n00:00:05,000 --> 00:00:06,000\nsecond\n"
+        assert vtt_to_srt(srt_to_vtt(srt)) == srt
+
+
+class TestBuildQcReport:
+    def test_identical_media_passes(self) -> None:
+        meta = _metadata()
+        report = build_qc_report(meta, meta)
+        assert report.passed is True
+        assert report.issues == ()
+
+    def test_duration_drift_fails(self) -> None:
+        source = _metadata(duration=10.0)
+        output = _metadata(duration=12.5)
+        report = build_qc_report(source, output)
+        assert report.passed is False
+        assert any("duration" in issue for issue in report.issues)
+
+    def test_resolution_change_fails(self) -> None:
+        source = _metadata(width=320, height=240)
+        output = _metadata(width=640, height=480)
+        report = build_qc_report(source, output)
+        assert report.passed is False
+        assert any("resolution" in issue for issue in report.issues)
+
+    def test_audio_dropped_fails(self) -> None:
+        source = _metadata(audio=(2, 44100))
+        output = _metadata(audio=None)
+        report = build_qc_report(source, output)
+        assert report.passed is False
+        assert any("audio" in issue for issue in report.issues)
+
+    def test_no_video_stream_fails(self) -> None:
+        source = _metadata()
+        output = _metadata(width=0, height=0, fps=(0, 1))
+        output = MediaMetadata(
+            schema_version=1,
+            duration=output.duration,
+            width=None,
+            height=None,
+            fps=output.fps,
+            codec=None,
+            bitrate=None,
+            rotation=0,
+            format="mp4",
+            aspect_ratio=None,
+            video_streams=[],
+            audio_streams=[],
+            subtitle_streams=[],
+        )
+        report = build_qc_report(source, output)
+        assert report.passed is False
+        assert any("video" in issue for issue in report.issues)
+
+
+class TestExportVideo:
+    def test_copy_and_qc_pass(self, tmp_path) -> None:
+        source = tmp_path / "rendered.mp4"
+        source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"B" * 4096)
+        out_dir = tmp_path / "out"
+        from src.services import render_service
+
+        real_probe = render_service.probe
+        try:
+            render_service.probe = lambda path: _metadata(duration=2.0, width=320, height=240)
+            result = export_video(str(source), str(out_dir), name="final")
+        finally:
+            render_service.probe = real_probe
+        assert os.path.isfile(result.path)
+        assert result.path == os.path.join(str(out_dir), "final.mp4")
+        assert result.qc.passed is True
+
+    def test_missing_source_is_invalid(self, tmp_path) -> None:
+        with pytest.raises(RenderError) as exc_info:
+            export_video(str(tmp_path / "nope.mp4"), str(tmp_path))
+        assert exc_info.value.code == E_EXPORT_INVALID
+
+    def test_automatic_suffix_on_collision(self, tmp_path) -> None:
+        source = tmp_path / "rendered.mp4"
+        source.write_bytes(b"abc" * 1024)
+        out_dir = tmp_path / "out"
+        from src.services import render_service
+
+        real_probe = render_service.probe
+        try:
+            render_service.probe = lambda path: _metadata(duration=2.0)
+            first = export_video(str(source), str(out_dir), name="clip")
+            second = export_video(str(source), str(out_dir), name="clip")
+        finally:
+            render_service.probe = real_probe
+        assert first.path.endswith("clip.mp4")
+        assert second.path.endswith("clip (1).mp4")
+        assert os.path.isfile(second.path)
+
+    def test_export_to_unwritable_dir_raises_permission(self, tmp_path) -> None:
+        source = tmp_path / "rendered.mp4"
+        source.write_bytes(b"abc" * 1024)
+        out_dir = tmp_path / "locked"
+        out_dir.mkdir()
+        if os.name != "nt":
+            os.chmod(out_dir, 0o500)
+            try:
+                with pytest.raises(RenderError) as exc_info:
+                    export_video(str(source), str(out_dir), run_qc=False)
+                assert exc_info.value.code == E_PERMISSION_DENIED
+            finally:
+                os.chmod(out_dir, 0o700)
+
+
+class TestExportSubtitles:
+    def test_copies_srt_passthrough(self, tmp_path) -> None:
+        src = tmp_path / "subtitle.srt"
+        src.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        path = export_subtitles(str(src), str(out_dir), options=SubtitleExportOptions(format="srt"))
+        assert os.path.isfile(path)
+        assert Path(path).name == "subtitle.srt"
+        assert Path(path).read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
+
+    def test_converts_srt_to_vtt_on_export(self, tmp_path) -> None:
+        src = tmp_path / "subtitle.srt"
+        src.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        path = export_subtitles(str(src), str(out_dir), options=SubtitleExportOptions(format="vtt"))
+        assert Path(path).name == "subtitle.vtt"
+        assert "WEBVTT" in Path(path).read_text(encoding="utf-8")
+        assert "00:00:01.000 --> 00:00:02.000" in Path(path).read_text(encoding="utf-8")
+
+    def test_converts_vtt_to_srt_on_export(self, tmp_path) -> None:
+        src = tmp_path / "subtitle.vtt"
+        src.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        path = export_subtitles(str(src), str(out_dir), options=SubtitleExportOptions(format="srt"))
+        assert Path(path).name == "subtitle.srt"
+        assert Path(path).read_text(encoding="utf-8").startswith("1\n00:00:01,000")
+
+    def test_ass_cannot_convert(self, tmp_path) -> None:
+        src = tmp_path / "subtitle.ass"
+        src.write_text("[Script Info]\n", encoding="utf-8")
+        with pytest.raises(RenderError) as exc_info:
+            export_subtitles(str(src), str(tmp_path), options=SubtitleExportOptions(format="srt"))
+        assert exc_info.value.code == E_EXPORT_INVALID
+
+    def test_missing_source_is_invalid(self, tmp_path) -> None:
+        with pytest.raises(RenderError) as exc_info:
+            export_subtitles(str(tmp_path / "nope.srt"), str(tmp_path))
+        assert exc_info.value.code == E_EXPORT_INVALID
+
+    def test_automatic_suffix_on_collision(self, tmp_path) -> None:
+        src = tmp_path / "subtitle.srt"
+        src.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        first = export_subtitles(str(src), str(out_dir))
+        second = export_subtitles(str(src), str(out_dir))
+        assert first.endswith("subtitle.srt")
+        assert second.endswith("subtitle (1).srt")
