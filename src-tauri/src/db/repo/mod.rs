@@ -4,5 +4,7 @@
 //! stateless and take a `&Connection`, so they compose with both direct calls
 //! and the `Database::transaction` helper.
 
+pub mod characters;
+pub mod glossary;
 pub mod job;
 pub mod project;

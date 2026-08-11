@@ -90,6 +90,29 @@ pub const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_cache_entries_stage ON cache_entries(stage);
         "#,
     },
+    Migration {
+        version: 5,
+        name: "create glossary + character entries tables",
+        sql: r#"
+            CREATE TABLE glossary_entries (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                term TEXT NOT NULL,              -- canonical term (lowercased by service)
+                translation TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, term)
+            );
+            CREATE INDEX idx_glossary_entries_project ON glossary_entries(project_id);
+
+            CREATE TABLE character_entries (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, name)
+            );
+            CREATE INDEX idx_character_entries_project ON character_entries(project_id);
+        "#,
+    },
 ];
 
 /// Apply every pending migration (versions greater than `user_version`) in order.

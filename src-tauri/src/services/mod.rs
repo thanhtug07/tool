@@ -10,6 +10,7 @@
 //! MASTER_PLAN §14.2).
 
 pub mod cache_service;
+pub mod dictionary_service;
 pub mod hardware_probe;
 pub mod job_service;
 pub mod project_service;

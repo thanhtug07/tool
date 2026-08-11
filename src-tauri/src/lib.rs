@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager, WindowEvent};
 
 use services::cache_service::{CacheService, CacheServiceConfig};
+use services::dictionary_service::DictionaryService;
 use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig, NotWiredRunner};
 use services::project_service::ProjectService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
@@ -53,6 +54,13 @@ pub fn run() {
             commands::job::list,
             commands::job::cancel,
             commands::job::retry,
+            commands::dictionary::glossary_list,
+            commands::dictionary::glossary_upsert,
+            commands::dictionary::glossary_delete,
+            commands::dictionary::glossary_fingerprint,
+            commands::dictionary::character_list,
+            commands::dictionary::character_upsert,
+            commands::dictionary::character_delete,
         ])
         .setup(|app| {
             // The app keeps running even if the worker cannot start (e.g. no
@@ -82,7 +90,15 @@ pub fn run() {
 
             // Content-addressed cache over the same DB (TASK-011). Quota LRU
             // with the frozen 10 GB default (ARCHITECTURE_DECISION.md §3.7).
-            app.manage(CacheService::open(data_dir, CacheServiceConfig::default()));
+            app.manage(CacheService::open(
+                data_dir.clone(),
+                CacheServiceConfig::default(),
+            ));
+
+            // Project-scoped glossary + character dictionary over the same DB
+            // (TASK-023). The glossary fingerprint feeds the worker's
+            // translation-memory versioning.
+            app.manage(DictionaryService::open(data_dir.clone()));
             Ok(())
         })
         .on_window_event(|window, event| {

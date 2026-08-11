@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import Sidebar, { type NavKey } from "@/components/layout/Sidebar";
 import ProjectsPage from "@/pages/Projects";
+import DictionaryPage from "@/pages/Dictionary";
 import SettingsPage from "@/pages/Settings";
 import AboutPage from "@/pages/About";
 
@@ -13,6 +14,7 @@ export default function App() {
       <Sidebar active={active} onNavigate={setActive} />
       <main className="flex-1 overflow-y-auto p-6">
         {active === "projects" && <ProjectsPage />}
+        {active === "dictionary" && <DictionaryPage />}
         {active === "settings" && <SettingsPage />}
         {active === "about" && <AboutPage />}
       </main>
