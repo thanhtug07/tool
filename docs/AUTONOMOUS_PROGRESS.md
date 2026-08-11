@@ -42,9 +42,46 @@ completed_tasks:
 failed_tasks: []
 retry_count: 0
 
-last_commit: "7e6fe5f"
+last_commit: "b10a0dc"
 last_test_status: PASS
 current_blocker: null
+
+release_gates:
+  - gate: all TASKS.md tasks (001-030)
+    status: PASS
+  - gate: frontend gates (typecheck/lint/format/test 121/build)
+    status: PASS
+  - gate: rust gates (fmt/check/clippy -D warnings/test 144)
+    status: PASS
+  - gate: worker gates (pytest 566, no ai marker)
+    status: PASS
+  - gate: security scan (gitleaks)
+    status: SKIP (gitleaks not installed - no findings claimed)
+  - gate: packaging (tauri build)
+    status: PASS (release exe + MSI + NSIS setup.exe at target/release/bundle/)
+  - gate: installer smoke test (install/uninstall on clean Win10/11)
+    status: NOT_RUN (requires manual execution on a clean machine)
+  - gate: code signing (OV cert + signtool + timestamp)
+    status: BLOCKED (external credential)
+  - gate: updater (plugin + HTTPS endpoint + pubkey + createUpdaterArtifacts)
+    status: BLOCKED (external infrastructure; Phase 14 / T038 is post-MVP)
+  - gate: beta / release
+    status: BLOCKED (external publishing)
+
+BLOCKER: code signing certificate (OV) not available
+WHY: release gate requires a signed installer (SmartScreen pass, MASTER_PLAN Phase 13)
+WHAT WAS ATTEMPTED: tauri build produced unsigned exe/MSI/NSIS artifacts; no signing config exists in the repo
+WHAT HUMAN DECISION IS REQUIRED: provide an OV code-signing certificate + password, or decide to ship unsigned
+SAFE RESUME POINT: run `npx tauri build` (artifacts in target/release/bundle/), then sign with signtool
+
+BLOCKER: auto-update infrastructure absent
+WHY: updater needs tauri-plugin-updater + HTTPS manifest server + pubkey (Phase 14 / T038, post-MVP)
+WHAT WAS ATTEMPTED: none - no plugin/config exists in the repo
+WHAT HUMAN DECISION IS REQUIRED: decide whether to implement the updater (T038) and provide hosting
+SAFE RESUME POINT: implement T038, then re-run the release pipeline
+
+context_handoff_required: false
+last_updated: "2026-08-12"
 
 context_handoff_required: false
 last_updated: "2026-08-12"
