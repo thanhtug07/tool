@@ -89,10 +89,12 @@ last_updated: "2026-08-12"
 
 
 release_phase: ACTIVE (post-TASKS.md release completion, started 2026-08-12)
-release_current_task: RELEASE-P1 (performance / GPU / security / docs)
-release_last_completed_task: RELEASE-P1-001 (performance benchmarks 1/10/30/60 min + TM segment-id fix)
-release_next_task: RELEASE-P1-002 (NVIDIA GPU validation - BLOCKED locally; gitleaks scan; docs set)
-release_last_commit: "350c611"
+release_current_task: null (RELEASE-P1-002 complete; remaining items are external/blocked)
+release_status: PASS (docs deliverables done)
+release_last_completed_task: RELEASE-P1-002 (documentation set; deliverable closed)
+release_next_task: GPU validation / gitleaks / license audits (all BLOCKED or NOT RUN locally - see blocks below)
+release_last_commit: "8ffac29"
+release_docs_status: complete - RELEASE-P1-002 doc set (10 docs at repo root) committed 8ffac29; RELEASE_READINESS_AUDIT.md regenerated to reflect RELEASE-P0/P1 (audit commit 8ffac29) - status remains NOT BETA READY (clean-machine smoke test, signing, LICENSE decision, GPU, security/license audits)
 
 release_completed_tasks:
   - id: RELEASE-P0-001
@@ -134,6 +136,9 @@ release_completed_tasks:
     status: PASS (CPU) / NOT VERIFIED (GPU)
     commit: 350c611
     evidence: benchmark_performance.py drives real worker HTTP pipeline on deterministic synthetic media, merges runs into one report. worker/perf_report.json: 1min RTF 0.268 total 21.1s, 10min 0.233 total 182.0s, 30min 0.262 total 580.0s, 60min 0.309 total 1490.6s; peak worker RAM 140-151 MB (stable, no OOM at 60min). GPU NOT VERIFIED: ctranslate2 reports 1 CUDA device but faster-whisper CUDA encode fails "Library cublas64_12.dll is not found or cannot be loaded" - CUDA toolkit libs absent locally. Also fixed a translation-service bug found by the benchmark: TM cache-hit re-used a stale segment_id for repeated source text, so duplicate segments were reported "missing" by the subtitle stage; _assemble now re-pins idx/segment_id/source_text to the current segment (regression test added). Worker suite 583 pass.
+  - id: RELEASE-P1-002
+    goal: documentation set per MASTER_PLAN §22 (DEVELOPMENT, API, DATABASE, SECURITY, LICENSING, TESTING, RELEASE, AI_PIPELINE, VIDEO_PIPELINE, AUDIO_PIPELINE) at repo root, README links updated
+    status: PASS (commit 8ffac29). LICENSE file deliberately NOT added - project license is UNDECIDED (README "License" TODO + Cargo.toml license TBD); per MASTER_PLAN §21 do not assert an unverified license - recorded as blocking owner decision in LICENSING.md checklist. SECURITY.md documents token/stdin handshake, keyring vault with FIX #8 no-fallback, capability allow-list, strict CSP. All facts cross-checked against repo code (main.py token extraction, secret_store.rs, worker Cargo.toml, capabilities/default.json).
 
 release_known_blockers:
   - clean-machine installer validation (needs Windows VM or dedicated test machine)
@@ -141,5 +146,8 @@ release_known_blockers:
   - updater infrastructure (post-MVP, Phase 14)
   - clean-machine FFmpeg/WebView2 first-run model download unverified on fresh OS
   - NVIDIA GPU validation blocked locally: cublas64_12.dll missing (CUDA toolkit libs not installed; ctranslate2 sees 1 device but encode fails)
+  - gitleaks detect not runnable locally (gitleaks not installed) - CI job exists
+  - cargo-deny / pip-licenses license audits not runnable locally (tools unavailable) - LICENSING.md checklist open
+  - LICENSE file cannot be added (project license UNDECIDED - owner decision required; do not fabricate)
 
-release_next_action: RELEASE-P1-002 - NVIDIA GPU validation (needs machine with CUDA toolkit libs; else keep NOT VERIFIED with reason), security verification (gitleaks detect), documentation set (DEVELOPMENT/API/SECURITY/TESTING/RELEASE/DATABASE/PIPELINE/LICENSING), then regenerate RELEASE_READINESS_AUDIT.md
+release_next_action: (resume block) only owner/external actions remain for the release gate: provide OV signing cert or decide unsigned; run installer on clean VM once available; run gitleaks + cargo-deny + pip-licenses on a machine with those tools; decide project license. No more local code deliverables in RELEASE-P1.
