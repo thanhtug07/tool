@@ -40,7 +40,8 @@ render preserving the original audio, QC 0 issues. ffprobe: duration
 - Rust: **182 passed** (`cargo test`; fmt + clippy clean)
 - Frontend: **159 passed** + typecheck clean + eslint clean
 - Golden E2E: **16/16** (source worker, tiny/cpu)
-- Golden dub E2E (TTS + voice mix): **13/13**
+- Golden dub E2E (TTS + voice mix): **14/14** (incl. live progress-message
+  probe — real `segment i/n` lines on the wire)
 - Real 48-min video: **15/15** in 14.0 min
 - Production build: PASS (`npx tauri build` — exe + MSI + NSIS)
 

@@ -250,3 +250,36 @@ Implemented `feat: add dynamic provider management`:
 - Tests: worker **627 passed** (1 deselected), Rust **182 passed**, frontend
   **159 passed** + typecheck + lint clean, golden E2E **16/16**, golden dub
   E2E (TTS + mix + export) **13/13**.
+
+## Gate 10 — AUTOMATION LIVE LOG CONSOLE — PASS 2026-08-13
+
+- **Live log under the video workspace**: Automation now shows a live-log
+  console fed entirely by real backend events — `job:status` (progress,
+  stage) and `job:log` (console lines) emitted by Rust JobService via the
+  Tauri event bridge, plus worker detail lines forwarded by the runner.
+- **Real data, nothing fabricated**: worker `CancellationToken` gained a
+  `message` field; stage `on_progress` callbacks emit real detail lines
+  (STT `123s/2918s`, translate `64% translated`, TTS `segment 81/127`,
+  render `63% encoded`). The Rust runner forwards each changed message to
+  the live log once. ETA is computed from real progress velocity and hidden
+  when there is not enough data.
+- **UI**: current-task panel (stage, last message, real progress bar,
+  elapsed, ETA), vertical stage timeline with real job timings, console
+  with level colors (info/success/warn/error), auto-scroll with a sticky
+  "↓ New logs" pill when the user scrolls up, collapse + drag-resize +
+  clear + max-lines cap (200/500/1000, persisted to localStorage),
+  Cancel / Retry buttons, completed summary (total time + output path +
+  Open Output / Open Folder via new `system.reveal`), and a failed summary
+  (stage + error code + expandable details).
+- **Job history on reload**: stage-level history is backfilled from the
+  persisted `jobs` table (raw per-segment lines are ephemeral by design);
+  the output preview refreshes automatically when the render stage
+  succeeds (no app reload needed).
+- **Stale UI fixed**: removed the leftover "Voice & dubbing — Later — not
+  in this build" placeholder and the Dashboard "TTS: not in this build"
+  label (TTS shipped in Gate 9).
+- Tests: worker **628 passed** (1 deselected), Rust **182 passed**
+  (ProgressResponse message + runner log forwarding), frontend **178
+  passed** (+12 log-helper +7 LiveLogView), golden E2E **16/16**, golden
+  dub E2E **14/14** (new live progress-message probe: `segment 1/4` seen
+  on the wire). Frontend build PASS.

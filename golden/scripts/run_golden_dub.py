@@ -22,6 +22,7 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -138,17 +139,60 @@ def main() -> int:
         # -- stage 4: TTS synthesize ----------------------------------------
         print(f"stage 4/7: TTS synthesize (engine={args.engine})")
         # Translation items carry no timing; the Rust runner zips them with
-        # transcript segments by index — mirror that here.
+        # transcript segments by index — mirror that here. The golden video
+        # yields a single segment, so it is split into four sub-cues to give
+        # the live-progress probe a wide enough window (the registry only
+        # carries the last reported line and is cleared when the stage ends).
+        base = transcript["segments"][0]
+        span = max(0.1, (base["end"] - base["start"]) / 4.0)
         cues = [
-            {"start": seg["start"], "end": seg["end"], "text": t["translated_text"]}
-            for seg, t in zip(transcript["segments"], items)
+            {
+                "start": base["start"] + i * span,
+                "end": base["start"] + (i + 1) * span,
+                "text": items[0]["translated_text"],
+            }
+            for i in range(4)
         ]
+        # Live-log detail probe: poll the worker's progress registry while the
+        # stage runs and assert real detail lines ("segment i/n") are emitted
+        # — the exact payload the Rust runner forwards as ``job:log``.
+        progress_messages: list[str] = []
+        stop_poll = threading.Event()
+
+        def _poll_progress() -> None:
+            import urllib.request  # noqa: PLC0415
+
+            while not stop_poll.is_set():
+                try:
+                    req = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/v1/progress/dub-tts",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        body = json.loads(resp.read())
+                    if body.get("message"):
+                        progress_messages.append(body["message"])
+                except Exception:  # noqa: BLE001 - poll is best-effort
+                    pass
+                time.sleep(0.05)
+
+        poller = threading.Thread(target=_poll_progress, daemon=True)
+        poller.start()
         tts_start = time.time()
-        tts = expect_ok(*http_post(port, token, "/v1/tts/synthesize", {
-            "cues": cues, "voice": args.voice, "engine": args.engine,
-            "language": args.target_language, "duration_seconds": expected_dur,
-            "output_dir": str(work), "job_id": "dub-tts",
-        }), "tts")
+        try:
+            tts = expect_ok(*http_post(port, token, "/v1/tts/synthesize", {
+                "cues": cues, "voice": args.voice, "engine": args.engine,
+                "language": args.target_language, "duration_seconds": expected_dur,
+                "output_dir": str(work), "job_id": "dub-tts",
+            }), "tts")
+        finally:
+            stop_poll.set()
+            poller.join(timeout=2)
+        check(
+            any("segment" in m for m in progress_messages),
+            "live progress registry emits real detail messages",
+            f"seen: {progress_messages[:3]}",
+        )
         tts_s = time.time() - tts_start
         track = Path(tts["voice_track_path"])
         check(track.is_file() and track.stat().st_size > 0, "tts produced voice track",
