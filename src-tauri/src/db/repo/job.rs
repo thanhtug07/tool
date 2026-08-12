@@ -23,6 +23,7 @@ pub enum JobType {
     Transcribe,
     Translate,
     Subtitle,
+    Tts,
     Render,
 }
 
@@ -32,6 +33,7 @@ impl JobType {
             JobType::Transcribe => "transcribe",
             JobType::Translate => "translate",
             JobType::Subtitle => "subtitle",
+            JobType::Tts => "tts",
             JobType::Render => "render",
         }
     }
@@ -41,6 +43,7 @@ impl JobType {
             "transcribe" => Some(JobType::Transcribe),
             "translate" => Some(JobType::Translate),
             "subtitle" => Some(JobType::Subtitle),
+            "tts" => Some(JobType::Tts),
             "render" => Some(JobType::Render),
             _ => None,
         }

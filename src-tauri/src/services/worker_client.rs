@@ -358,6 +358,40 @@ pub struct WatermarkImage {
     pub opacity: Option<f64>,
 }
 
+/// One cue to speak (worker `TTSCueRequest`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsCue {
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+/// Request body for `POST /v1/tts/synthesize` (dubbing voice track).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsRequest {
+    pub cues: Vec<TtsCue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    pub duration_seconds: f64,
+    pub output_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/tts/synthesize`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TtsResponse {
+    pub voice_track_path: String,
+    pub meta_path: String,
+    pub cue_count: u32,
+    pub engine_used: String,
+    pub voice_used: String,
+}
+
 /// Request body for `POST /v1/render`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RenderRequest {
@@ -373,6 +407,8 @@ pub struct RenderRequest {
     pub crf: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watermark: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_track_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check_window: Option<(f64, f64)>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -506,6 +542,12 @@ impl WorkerClient {
         request: SubtitleRequest,
     ) -> Result<SubtitleResponse, HttpError> {
         let (status, body) = self.post_json("/v1/subtitle", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Synthesize a dubbing voice track from translated cues (`POST /v1/tts/synthesize`).
+    pub fn tts_synthesize(&self, request: TtsRequest) -> Result<TtsResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/tts/synthesize", &request)?;
         parse_json_response(status, body)
     }
 
@@ -1134,6 +1176,7 @@ mod tests {
                 preset: None,
                 crf: None,
                 watermark: None,
+                voice_track_path: None,
                 check_window: None,
                 job_id: Some("job-1".into()),
             })

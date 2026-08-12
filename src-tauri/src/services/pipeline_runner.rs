@@ -46,7 +46,7 @@ use crate::services::settings_service::SettingsService;
 use crate::services::subtitle_service::{CueInput, SubtitleService};
 use crate::services::worker_client::{
     ExtractAudioRequest, HttpError, RenderRequest, SubtitleRequest, TranscribeRequest, Transcript,
-    TranslateRequest, Translation, WorkerClient,
+    TranslateRequest, Translation, TtsCue, TtsRequest, WorkerClient,
 };
 use crate::services::worker_manager::WorkerManager;
 
@@ -57,6 +57,7 @@ pub const ARTIFACT_TRANSCRIPT: &str = "cache/transcript.json";
 pub const ARTIFACT_TRANSLATION: &str = "cache/translation.json";
 pub const ARTIFACT_SUBTITLE_ASS: &str = "cache/subtitle.ass";
 pub const ARTIFACT_SUBTITLE_SRT: &str = "cache/subtitle.srt";
+pub const ARTIFACT_VOICE_TRACK: &str = "cache/voice_track.wav";
 
 pub const DEFAULT_RENDER_NAME: &str = "rendered";
 
@@ -80,6 +81,7 @@ pub struct ArtifactPaths {
     pub translation: PathBuf,
     pub subtitle_srt: PathBuf,
     pub subtitle_ass: PathBuf,
+    pub voice_track: PathBuf,
     pub rendered_video: PathBuf,
 }
 
@@ -91,6 +93,7 @@ pub fn artifact_paths(project_dir: &Path) -> ArtifactPaths {
         translation: project_dir.join(ARTIFACT_TRANSLATION),
         subtitle_srt: project_dir.join(ARTIFACT_SUBTITLE_SRT),
         subtitle_ass: project_dir.join(ARTIFACT_SUBTITLE_ASS),
+        voice_track: project_dir.join(ARTIFACT_VOICE_TRACK),
         rendered_video: project_dir
             .join("output")
             .join(format!("{DEFAULT_RENDER_NAME}.mp4")),
@@ -585,6 +588,62 @@ impl PipelineRunner {
         Ok(())
     }
 
+    fn run_tts(&self, job: &Job, ctx: &JobRunContext<'_>) -> Result<(), JobRunError> {
+        let p = &job.params;
+        let project_dir = self.project_dir(&job.project_id)?;
+        // Cues come from the persisted subtitle cue table (subtitle stage ran
+        // before tts). Only well-formed, non-empty cues are spoken.
+        let stored = self.subtitles.list(&job.project_id).map_err(map_db)?;
+        let cues: Vec<TtsCue> = stored
+            .iter()
+            .filter(|c| c.end > c.start && !c.text.trim().is_empty())
+            .map(|c| TtsCue {
+                start: c.start,
+                end: c.end,
+                text: c.text.clone(),
+            })
+            .collect();
+        if cues.is_empty() {
+            return Err(permanent(
+                "E_ARTIFACT_MISSING",
+                "no subtitle cues — run the subtitle stage before voice generation",
+            ));
+        }
+        // The voice track must span the speech: use the last cue's end.
+        let duration_seconds = cues.iter().map(|c| c.end).fold(0.0_f64, f64::max).max(1.0);
+        let target_language = param_str(p, "target_language").unwrap_or_else(|| "vi".to_string());
+        let voice = param_str(p, "voice").filter(|v| !v.trim().is_empty());
+        let engine = param_str(p, "engine")
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "edge".to_string());
+        let output_dir = artifact_paths(&project_dir)
+            .audio
+            .parent()
+            .expect("cache dir")
+            .display()
+            .to_string();
+
+        let client = self.client()?;
+        let job_id = job.id.clone();
+        (ctx.progress)(0.1, "tts");
+        self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
+            c.tts_synthesize(TtsRequest {
+                cues,
+                voice: voice.clone(),
+                engine: Some(engine.clone()),
+                language: Some(target_language.clone()),
+                duration_seconds,
+                output_dir: output_dir.clone(),
+                job_id: Some(job_id.clone()),
+            })
+        })?;
+        if (ctx.is_cancelled)() {
+            return Err(JobRunError::Cancelled);
+        }
+        (ctx.progress)(1.0, "done");
+        Ok(())
+    }
+
     fn run_render(&self, job: &Job, ctx: &JobRunContext<'_>) -> Result<(), JobRunError> {
         let p = &job.params;
         let project_dir = self.project_dir(&job.project_id)?;
@@ -604,6 +663,23 @@ impl PipelineRunner {
                 ));
             }
             Some(paths.subtitle_ass.display().to_string())
+        } else {
+            None
+        };
+        // Dubbed render: when the caller enabled voice, the TTS voice track
+        // (cache/voice_track.wav) is mixed over the original audio by the
+        // worker's render stage.
+        let voice_track_path = if param_str(p, "voice_track")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
+            if !paths.voice_track.is_file() {
+                return Err(permanent(
+                    "E_ARTIFACT_MISSING",
+                    "missing `cache/voice_track.wav` — run the tts stage before rendering with voice",
+                ));
+            }
+            Some(paths.voice_track.display().to_string())
         } else {
             None
         };
@@ -649,6 +725,7 @@ impl PipelineRunner {
                 preset: preset.clone(),
                 crf,
                 watermark: watermark.clone(),
+                voice_track_path: voice_track_path.clone(),
                 check_window,
                 job_id: Some(job_id.clone()),
             })
@@ -670,6 +747,7 @@ impl JobRunner for PipelineRunner {
             JobType::Transcribe => self.run_transcribe(job, ctx),
             JobType::Translate => self.run_translate(job, ctx),
             JobType::Subtitle => self.run_subtitle(job, ctx),
+            JobType::Tts => self.run_tts(job, ctx),
             JobType::Render => self.run_render(job, ctx),
         }
     }
@@ -1159,6 +1237,108 @@ mod tests {
         // The subtitle artifact is untouched by the stage.
         let body = fs::read_to_string(project.join(ARTIFACT_SUBTITLE_ASS)).expect("ass kept");
         assert_eq!(body, "[Script Info]\n");
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn tts_without_cues_fails_cleanly() {
+        let h = harness();
+        let pid = seed_project(&h, "tts-no-cues");
+        let runner = runner(&h, 1);
+        let j = job(&pid, JobType::Tts, serde_json::json!({}));
+        let err = run(&j, &runner).expect_err("tts without cues must fail");
+        match err {
+            JobRunError::Permanent { code, .. } => assert_eq!(code, "E_ARTIFACT_MISSING"),
+            other => panic!("expected E_ARTIFACT_MISSING, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn tts_calls_worker_with_cues() {
+        let h = harness();
+        let pid = seed_project(&h, "tts");
+        h.subtitles
+            .replace_project(
+                &pid,
+                vec![CueInput {
+                    cue_number: 1,
+                    start: 0.0,
+                    end: 2.0,
+                    text: "xin chào".into(),
+                    speaker: None,
+                    source_text: None,
+                }],
+            )
+            .expect("seed cue");
+
+        let server = CannedServer {
+            routes: &[(
+                "/v1/tts/synthesize",
+                200,
+                r#"{"voice_track_path":"C:\\x\\voice_track.wav","meta_path":"C:\\x\\tts_meta.json","cue_count":1,"engine_used":"edge","voice_used":"vi-VN-HoaiMyNeural"}"#,
+            )],
+            delay_ms: 0,
+            seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let port = server.spawn();
+        let runner = runner(&h, port);
+        let j = job(
+            &pid,
+            JobType::Tts,
+            serde_json::json!({"target_language": "vi", "engine": "edge"}),
+        );
+        run(&j, &runner).expect("tts stage succeeds");
+        let seen = server.seen.lock().unwrap().clone();
+        assert!(seen[0].contains("/v1/tts/synthesize"));
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn render_with_voice_requires_voice_track_artifact() {
+        let h = harness();
+        let pid = seed_project(&h, "render-voice-missing");
+        let project = h.dir.join("projects").join(&pid);
+        fs::create_dir_all(project.join("cache")).expect("cache dir");
+        fs::write(project.join(ARTIFACT_SUBTITLE_ASS), "[Script Info]\n").expect("seed ass");
+        let runner = runner(&h, 1);
+        let j = job(
+            &pid,
+            JobType::Render,
+            serde_json::json!({"voice_track": "true"}),
+        );
+        let err = run(&j, &runner).expect_err("missing voice track must fail");
+        match err {
+            JobRunError::Permanent { code, .. } => assert_eq!(code, "E_ARTIFACT_MISSING"),
+            other => panic!("expected E_ARTIFACT_MISSING, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn render_with_voice_track_calls_render_with_voice() {
+        let h = harness();
+        let pid = seed_project(&h, "render-voice");
+        let project = h.dir.join("projects").join(&pid);
+        fs::create_dir_all(project.join("cache")).expect("cache dir");
+        fs::write(project.join(ARTIFACT_SUBTITLE_ASS), "[Script Info]\n").expect("seed ass");
+        fs::write(project.join(ARTIFACT_VOICE_TRACK), b"not-a-real-wav").expect("seed voice track");
+
+        let server = CannedServer {
+            routes: &[("/v1/render", 200, RENDER_BODY)],
+            delay_ms: 0,
+            seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let port = server.spawn();
+        let runner = runner(&h, port);
+        let j = job(
+            &pid,
+            JobType::Render,
+            serde_json::json!({"voice_track": "true", "output_name": "final"}),
+        );
+        run(&j, &runner).expect("dubbed render succeeds");
+        let seen = server.seen.lock().unwrap().clone();
+        assert!(seen[0].contains("/v1/render"));
         let _ = std::fs::remove_dir_all(&h.dir);
     }
 
