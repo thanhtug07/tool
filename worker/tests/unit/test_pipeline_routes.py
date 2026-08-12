@@ -365,18 +365,35 @@ def test_progress_endpoint_reports_registered_stage() -> None:
     from src.api.pipeline import _cancel_scope
 
     with _cancel_scope("job_progress_live") as token:
-        token.set_progress(0.42, "transcribe")
+        token.set_progress(0.42, "transcribe", "81/127 segments")
         response = client.get("/v1/progress/job_progress_live", headers=AUTH)
         assert response.status_code == 200
         body = response.json()
         assert body["job_id"] == "job_progress_live"
         assert body["progress"] == pytest.approx(0.42)
         assert body["stage"] == "transcribe"
+        assert body["message"] == "81/127 segments"
 
     # The scope is gone after completion: progress is null.
     response = client.get("/v1/progress/job_progress_live", headers=AUTH)
     assert response.status_code == 200
     assert response.json()["progress"] is None
+
+
+def test_progress_message_updates_and_is_cleared() -> None:
+    from src.api.pipeline import _cancel_scope
+
+    with _cancel_scope("job_progress_msg") as token:
+        token.set_progress(0.1, "tts")
+        token.set_progress(0.5, "tts", "segment 81/127")
+        response = client.get("/v1/progress/job_progress_msg", headers=AUTH)
+        assert response.json()["message"] == "segment 81/127"
+        token.set_progress(0.9, "tts", "segment 120/127")
+        response = client.get("/v1/progress/job_progress_msg", headers=AUTH)
+        assert response.json()["message"] == "segment 120/127"
+
+    response = client.get("/v1/progress/job_progress_msg", headers=AUTH)
+    assert response.json()["message"] is None
 
 
 def test_progress_endpoint_unknown_job_returns_null() -> None:
@@ -386,3 +403,4 @@ def test_progress_endpoint_unknown_job_returns_null() -> None:
     assert body["job_id"] == "job_never_registered"
     assert body["progress"] is None
     assert body["stage"] is None
+    assert body["message"] is None

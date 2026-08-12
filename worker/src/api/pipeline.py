@@ -306,7 +306,9 @@ def translate(request: TranslateRequest) -> JSONResponse:
                 characters=request.characters,
                 rules=request.rules,
                 cancel=cancel,
-                on_progress=lambda fraction: cancel.set_progress(fraction, "translate"),
+                on_progress=lambda fraction: cancel.set_progress(
+                    fraction, "translate", f"{(fraction * 100):.0f}% translated"
+                ),
             )
     except (ProviderError, QProviderError) as exc:
         return _error(exc.code, exc.message)
@@ -491,7 +493,9 @@ def tts_synthesize(request: TTSRequest) -> JSONResponse:
                 duration_seconds=request.duration_seconds,
                 output_dir=request.output_dir,
                 cancel=cancel,
-                on_progress=lambda fraction: cancel.set_progress(fraction, "tts"),
+                on_progress=lambda fraction: cancel.set_progress(
+                    fraction, "tts", f"segment {round(fraction * len(cues))}/{len(cues)}"
+                ),
             )
     except CancelledError:
         return _error("E_CANCELLED", "TTS was cancelled.", http=status.HTTP_409_CONFLICT)
@@ -569,7 +573,9 @@ def render(request: RenderRequest) -> JSONResponse:
             result: RenderResult = render_video(
                 config,
                 cancel=cancel,
-                on_progress=lambda p: cancel.set_progress(p.fraction, "render"),
+                on_progress=lambda p: cancel.set_progress(
+                    p.fraction, "render", f"{(p.fraction * 100):.0f}% encoded"
+                ),
             )
     except CancelledError:
         return _error("E_CANCELLED", "Render was cancelled.", http=status.HTTP_409_CONFLICT)
@@ -608,6 +614,6 @@ def job_progress(job_id: str) -> JSONResponse:
     with _cancel_lock:
         token = _cancel_tokens.get(job_id)
     if token is None:
-        return JSONResponse({"job_id": job_id, "progress": None, "stage": None})
-    progress, stage = token.get_progress()
-    return JSONResponse({"job_id": job_id, "progress": progress, "stage": stage})
+        return JSONResponse({"job_id": job_id, "progress": None, "stage": None, "message": None})
+    progress, stage, message = token.get_progress()
+    return JSONResponse({"job_id": job_id, "progress": progress, "stage": stage, "message": message})

@@ -66,6 +66,7 @@ class CancellationToken:
         self._lock = threading.Lock()
         self._progress = 0.0
         self._stage = ""
+        self._message: str | None = None
 
     def cancel(self) -> None:
         """Request cancellation. Idempotent."""
@@ -74,17 +75,25 @@ class CancellationToken:
     def is_cancelled(self) -> bool:
         return self._event.is_set()
 
-    def set_progress(self, progress: float, stage: str = "") -> None:
-        """Record stage progress (clamped to 0..1) plus an optional stage label."""
+    def set_progress(self, progress: float, stage: str = "", message: str | None = None) -> None:
+        """Record stage progress (clamped to 0..1) plus optional labels.
+
+        ``message`` carries a short human-readable detail line (e.g. ``segment
+        81/127``, ``63% encoded``) that the Rust orchestrator forwards to the
+        frontend live log. It is always derived from real stage state — never
+        fabricated numbers.
+        """
         with self._lock:
             self._progress = max(0.0, min(1.0, float(progress)))
             if stage:
                 self._stage = stage
+            if message is not None:
+                self._message = message
 
-    def get_progress(self) -> tuple[float, str]:
-        """Return ``(progress, stage)`` as last reported."""
+    def get_progress(self) -> tuple[float, str, str | None]:
+        """Return ``(progress, stage, message)`` as last reported."""
         with self._lock:
-            return self._progress, self._stage
+            return self._progress, self._stage, self._message
 
 
 def run_process(

@@ -108,7 +108,13 @@ def stt_transcribe(request: TranscribeRequest) -> dict:
                 language=request.language,
                 total_duration_seconds=request.total_duration_seconds,
                 cancel=cancel,
-                on_progress=lambda fraction: cancel.set_progress(fraction, "transcribe"),
+                on_progress=lambda fraction: cancel.set_progress(
+                    fraction,
+                    "transcribe",
+                    None if not request.total_duration_seconds else (
+                        f"{fraction * request.total_duration_seconds:.0f}s / {request.total_duration_seconds:.0f}s"
+                    ),
+                ),
             )
     except CancelledError:
         return JSONResponse(
