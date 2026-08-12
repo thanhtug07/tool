@@ -43,6 +43,8 @@ vendor/models/
 models/*
 # The model manifest is config (registry source of truth, TASK-016A), not a binary.
 !models/manifest.json
+# --- Benchmark fixtures (generated media, not committed) ---
+worker/bench_output/
 # --- Temporary / local ---
 *.tmp
 tmp/

@@ -135,18 +135,31 @@ class TranslationService:
         self.tm = tm or TranslationMemory()
 
     @staticmethod
-    def _assemble(block_idx: int, cached: list[TMCacheEntry]) -> TranslationBlock:
+    def _assemble(
+        segments: Sequence[SourceSegment],
+        cached: Sequence[TMCacheEntry],
+        block_idx: int,
+    ) -> TranslationBlock:
+        """Rebuild a block from cache hits, pinned to the *current* segment ids.
+
+        The TM is keyed by source text, so a repeated line shares one cache entry.
+        Reusing the entry verbatim would stamp every occurrence with the id of the
+        **last** cached occurrence, making later duplicates look "missing" to the
+        subtitle stage (which matches by ``segment_id``). The translated text is
+        reused, but ``idx``/``segment_id``/``source_text`` always come from the
+        segment being translated now.
+        """
         return TranslationBlock(
             block_idx=block_idx,
             translations=[
                 TranslationItem(
-                    idx=e.idx,
-                    segment_id=e.segment_id,
-                    source_text=e.source_text,
-                    translated_text=e.translated_text,
-                    confidence=e.confidence,
+                    idx=seg.idx,
+                    segment_id=seg.segment_id,
+                    source_text=seg.text,
+                    translated_text=entry.translated_text,
+                    confidence=entry.confidence,
                 )
-                for e in cached
+                for seg, entry in zip(segments, cached)
             ],
         )
 
@@ -206,7 +219,7 @@ class TranslationService:
                 for seg in p.segments
             ]
             if all(entry is not None for entry in cached):
-                blocks.append(self._assemble(p.block_idx, cached))  # type: ignore[arg-type]
+                blocks.append(self._assemble(p.segments, cached, p.block_idx))  # type: ignore[arg-type]
                 continue
 
             report = self.gate.run(provider, block)

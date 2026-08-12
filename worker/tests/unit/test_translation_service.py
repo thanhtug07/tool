@@ -132,6 +132,25 @@ class TestTranslationService:
         assert len(blocks) == 2
         assert all(len(b.translations) > 0 for b in blocks)
 
+    def test_repeated_text_keeps_each_segment_id_on_tm_hit(self) -> None:
+        provider = _RecordingProvider()
+        svc = self._service(provider)
+        # 12 identical cues span 2 chunks; the TM-hit block must still report the
+        # *current* segment ids, not the cached occurrence's id (regression: the
+        # subtitle stage previously flagged the duplicate ids as "missing").
+        segments = _segments(12, "Hello world")
+        blocks = svc.translate_segments(
+            segments,
+            target_language="vi",
+            provider=provider,
+            model="mock",
+            glossary_ver="g1",
+        )
+        ids = [item.segment_id for block in blocks for item in block.translations]
+        assert ids == [f"seg_{i}" for i in range(12)]
+        indices = [item.idx for block in blocks for item in block.translations]
+        assert indices == list(range(12))
+
     def test_glossary_ver_change_forces_retranslate(self) -> None:
         provider = _RecordingProvider()
         svc = self._service(provider)

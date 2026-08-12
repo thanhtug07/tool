@@ -1,0 +1,205 @@
+{
+  "generated": "2026-08-12T13:10:16",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "cuda_devices": 1
+  },
+  "runs": {
+    "60min": {
+      "minutes": 60,
+      "model": "tiny",
+      "device": "cpu",
+      "provider": "mock",
+      "stages": {
+        "generate": {
+          "seconds": 45.94,
+          "note": "synthetic fixture, excluded from total"
+        },
+        "media_inspect": {
+          "seconds": 0.13,
+          "duration_s": 3600.0,
+          "size_bytes": 529618185
+        },
+        "audio_extract": {
+          "seconds": 1.9
+        },
+        "stt": {
+          "seconds": 1112.67,
+          "segments": 565,
+          "audio_minutes": 60,
+          "realtime_factor": 0.309
+        },
+        "translate": {
+          "seconds": 0.1,
+          "items": 565
+        },
+        "subtitle": {
+          "seconds": 0.22,
+          "cues": 513
+        },
+        "render": {
+          "seconds": 329.54
+        },
+        "export_qc": {
+          "seconds": 0.12,
+          "duration_s": 3600.0,
+          "size_bytes": 573847072,
+          "streams": [
+            "video:h264",
+            "audio:aac"
+          ]
+        }
+      },
+      "total_pipeline_seconds": 1490.61,
+      "peak_worker_ram_mb": 143.8984375,
+      "status": "PASS"
+    },
+    "1min": {
+      "minutes": 1,
+      "model": "tiny",
+      "device": "cpu",
+      "provider": "mock",
+      "stages": {
+        "generate": {
+          "seconds": 0.0,
+          "note": "synthetic fixture, excluded from total"
+        },
+        "media_inspect": {
+          "seconds": 0.09,
+          "duration_s": 60.0,
+          "size_bytes": 8792541
+        },
+        "audio_extract": {
+          "seconds": 0.3
+        },
+        "stt": {
+          "seconds": 16.1,
+          "segments": 8,
+          "audio_minutes": 1,
+          "realtime_factor": 0.268
+        },
+        "translate": {
+          "seconds": 0.02,
+          "items": 8
+        },
+        "subtitle": {
+          "seconds": 0.02,
+          "cues": 8
+        },
+        "render": {
+          "seconds": 4.48
+        },
+        "export_qc": {
+          "seconds": 0.1,
+          "duration_s": 60.0,
+          "size_bytes": 9549534,
+          "streams": [
+            "video:h264",
+            "audio:aac"
+          ]
+        }
+      },
+      "total_pipeline_seconds": 21.11,
+      "peak_worker_ram_mb": 140.98828125,
+      "status": "PASS"
+    },
+    "10min": {
+      "minutes": 10,
+      "model": "tiny",
+      "device": "cpu",
+      "provider": "mock",
+      "stages": {
+        "generate": {
+          "seconds": 0.0,
+          "note": "synthetic fixture, excluded from total"
+        },
+        "media_inspect": {
+          "seconds": 0.09,
+          "duration_s": 600.0,
+          "size_bytes": 88269186
+        },
+        "audio_extract": {
+          "seconds": 0.35
+        },
+        "stt": {
+          "seconds": 139.6,
+          "segments": 117,
+          "audio_minutes": 10,
+          "realtime_factor": 0.233
+        },
+        "translate": {
+          "seconds": 0.04,
+          "items": 117
+        },
+        "subtitle": {
+          "seconds": 0.05,
+          "cues": 104
+        },
+        "render": {
+          "seconds": 41.74
+        },
+        "export_qc": {
+          "seconds": 0.09,
+          "duration_s": 600.0,
+          "size_bytes": 95994804,
+          "streams": [
+            "video:h264",
+            "audio:aac"
+          ]
+        }
+      },
+      "total_pipeline_seconds": 181.97,
+      "peak_worker_ram_mb": 151.484375,
+      "status": "PASS"
+    },
+    "30min": {
+      "minutes": 30,
+      "model": "tiny",
+      "device": "cpu",
+      "provider": "mock",
+      "stages": {
+        "generate": {
+          "seconds": 0.0,
+          "note": "synthetic fixture, excluded from total"
+        },
+        "media_inspect": {
+          "seconds": 0.09,
+          "duration_s": 1800.0,
+          "size_bytes": 264841882
+        },
+        "audio_extract": {
+          "seconds": 0.76
+        },
+        "stt": {
+          "seconds": 471.61,
+          "segments": 315,
+          "audio_minutes": 30,
+          "realtime_factor": 0.262
+        },
+        "translate": {
+          "seconds": 0.05,
+          "items": 315
+        },
+        "subtitle": {
+          "seconds": 0.11,
+          "cues": 302
+        },
+        "render": {
+          "seconds": 107.28
+        },
+        "export_qc": {
+          "seconds": 0.08,
+          "duration_s": 1800.0,
+          "size_bytes": 288117154,
+          "streams": [
+            "video:h264",
+            "audio:aac"
+          ]
+        }
+      },
+      "total_pipeline_seconds": 579.98,
+      "peak_worker_ram_mb": 141.0546875,
+      "status": "PASS"
+    }
+  }
+}
