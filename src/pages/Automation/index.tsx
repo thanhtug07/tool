@@ -83,6 +83,9 @@ export default function AutomationPage({
   // follows the configured default translation provider.
   const [provider, setProvider] = useState("free");
   const [burnSubtitles, setBurnSubtitles] = useState(true);
+  const [dubAudio, setDubAudio] = useState(false);
+  const [voice, setVoice] = useState("vi-VN-HoaiMyNeural");
+  const [ttsEngine, setTtsEngine] = useState("edge");
   const [watermark, setWatermark] = useState<WatermarkConfigType>(DEFAULT_WATERMARK);
   const [plan, setPlan] = useState<PipelinePlan>(initialPipelinePlan);
   const [runError, setRunError] = useState<string | null>(null);
@@ -91,8 +94,26 @@ export default function AutomationPage({
   const [busy, setBusy] = useState(false);
 
   // Keep the latest options available to the (stable) submit callback.
-  const optionsRef = useRef({ sourceLanguage, targetLanguage, provider, burnSubtitles, watermark });
-  optionsRef.current = { sourceLanguage, targetLanguage, provider, burnSubtitles, watermark };
+  const optionsRef = useRef({
+    sourceLanguage,
+    targetLanguage,
+    provider,
+    burnSubtitles,
+    dubAudio,
+    voice,
+    ttsEngine,
+    watermark,
+  });
+  optionsRef.current = {
+    sourceLanguage,
+    targetLanguage,
+    provider,
+    burnSubtitles,
+    dubAudio,
+    voice,
+    ttsEngine,
+    watermark,
+  };
 
   const stages: DerivedStageRun[] = useMemo(() => deriveStages(plan, jobs), [plan, jobs]);
   const phase = derivePhase(stages, plan.startedAt);
@@ -239,7 +260,7 @@ export default function AutomationPage({
       setProviderBanner(true);
       return;
     }
-    setPlan(startPipeline({ sourceLanguage, targetLanguage, provider }));
+    setPlan(startPipeline({ sourceLanguage, targetLanguage, provider, dubAudio }));
     void submitStage("transcribe");
     toast.push("Automation started — the pipeline runs stage by stage.", "info");
   }
@@ -268,7 +289,7 @@ export default function AutomationPage({
 
   async function handleReprocess() {
     if (!project) return;
-    setPlan(startPipeline({ sourceLanguage, targetLanguage, provider }));
+    setPlan(startPipeline({ sourceLanguage, targetLanguage, provider, dubAudio }));
     void submitStage("transcribe");
   }
 
@@ -437,6 +458,12 @@ export default function AutomationPage({
           providerOptions={providerOptions}
           burnSubtitles={burnSubtitles}
           onBurnSubtitlesChange={setBurnSubtitles}
+          dubAudio={dubAudio}
+          onDubAudioChange={setDubAudio}
+          voice={voice}
+          onVoiceChange={setVoice}
+          ttsEngine={ttsEngine}
+          onTtsEngineChange={setTtsEngine}
           watermark={watermark}
           onWatermarkChange={setWatermark}
           onOpenSettings={() => onNavigate("settings")}
@@ -840,6 +867,12 @@ function SettingsPanel({
   providerOptions,
   burnSubtitles,
   onBurnSubtitlesChange,
+  dubAudio,
+  onDubAudioChange,
+  voice,
+  onVoiceChange,
+  ttsEngine,
+  onTtsEngineChange,
   watermark,
   onWatermarkChange,
   onOpenSettings,
@@ -854,6 +887,12 @@ function SettingsPanel({
   providerOptions: ProviderView[];
   burnSubtitles: boolean;
   onBurnSubtitlesChange: (v: boolean) => void;
+  dubAudio: boolean;
+  onDubAudioChange: (v: boolean) => void;
+  voice: string;
+  onVoiceChange: (v: string) => void;
+  ttsEngine: string;
+  onTtsEngineChange: (v: string) => void;
   watermark: WatermarkConfigType;
   onWatermarkChange: (v: WatermarkConfigType) => void;
   onOpenSettings: () => void;
@@ -971,8 +1010,48 @@ function SettingsPanel({
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Options
           </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={dubAudio}
+              onChange={(e) => onDubAudioChange(e.target.checked)}
+            />
+            Dub audio (voice over the original audio)
+            <span className="text-xs text-muted-foreground">({ttsEngine === "edge" ? "edge-tts, online" : "piper, offline"})</span>
+          </label>
+          {dubAudio && (
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Voice
+                <select
+                  className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+                  value={voice}
+                  onChange={(e) => onVoiceChange(e.target.value)}
+                >
+                  <option value="vi-VN-HoaiMyNeural">Vietnamese — female</option>
+                  <option value="vi-VN-NamMinhNeural">Vietnamese — male</option>
+                  <option value="zh-CN-XiaoxiaoNeural">Chinese — female</option>
+                  <option value="zh-CN-YunxiNeural">Chinese — male</option>
+                  <option value="en-US-AriaNeural">English — female</option>
+                  <option value="en-US-GuyNeural">English — male</option>
+                  <option value="ja-JP-NanamiNeural">Japanese — female</option>
+                  <option value="ko-KR-SunHiNeural">Korean — female</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Engine
+                <select
+                  className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+                  value={ttsEngine}
+                  onChange={(e) => onTtsEngineChange(e.target.value)}
+                >
+                  <option value="edge">edge-tts (online, natural)</option>
+                  <option value="piper">piper (offline)</option>
+                </select>
+              </label>
+            </div>
+          )}
           {[
-            ["Dub audio", "requires the TTS stage"],
             ["Preserve background music", "requires audio separation"],
             ["Remove logo / watermark", "requires OCR + inpainting"],
           ].map(([label, why]) => (
@@ -983,7 +1062,7 @@ function SettingsPanel({
             </label>
           ))}
           <p className="text-xs text-muted-foreground">
-            These stages are not implemented in this build — the checkboxes stay disabled.
+            Voice dubbing is live (edge-tts online or piper offline); logo removal needs OCR + inpainting (not in this build).
           </p>
         </div>
 

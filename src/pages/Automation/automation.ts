@@ -25,13 +25,20 @@ export function languageLabel(code: string): string {
 }
 
 /** Ordered pipeline stages (job types the backend actually runs). */
-export const PIPELINE_STAGE_ORDER = ["transcribe", "translate", "subtitle", "render"] as const;
+export const PIPELINE_STAGE_ORDER = [
+  "transcribe",
+  "translate",
+  "subtitle",
+  "tts",
+  "render",
+] as const;
 export type StageKey = (typeof PIPELINE_STAGE_ORDER)[number];
 
 export const STAGE_CHECKLIST = [
   { key: "transcribe", label: "Extract audio & transcribe" },
   { key: "translate", label: "Translate" },
   { key: "subtitle", label: "Generate subtitles" },
+  { key: "tts", label: "Generate voice" },
   { key: "render", label: "Render video" },
 ] as const;
 
@@ -50,23 +57,13 @@ export const PIPELINE_CHECKLIST: {
   { key: "transcribe", label: "Speech-to-text", subStage: "transcribe" },
   { key: "translate", label: "Translate" },
   { key: "subtitle", label: "Generate subtitles" },
+  { key: "tts", label: "Generate voice" },
   { key: "render", label: "Render video" },
 ];
 
 /** Stages the current build cannot run — shown honestly as "later". */
-export const FUTURE_STAGES = [
-  { key: "voice", label: "Voice generation" },
-  { key: "mix", label: "Audio mixing" },
-  { key: "logo", label: "Logo removal" },
-] as const;
+export const FUTURE_STAGES = [{ key: "logo", label: "Logo removal" }] as const;
 
-// Stage slices over the 0..1 pipeline progress (real job.progress per stage).
-const STAGE_SLICES: Array<[number, number]> = [
-  [0, 0.25],
-  [0.25, 0.5],
-  [0.5, 0.75],
-  [0.75, 1],
-];
 
 /** Options captured when AUTOMATE is clicked. */
 export type AutomationOptions = {
@@ -75,6 +72,9 @@ export type AutomationOptions = {
   targetLanguage: string;
   provider: string;
   burnSubtitles: boolean;
+  dubAudio: boolean;
+  voice: string;
+  ttsEngine: string;
   watermark: WatermarkConfig;
 };
 
@@ -93,9 +93,16 @@ export function buildStageParams(
       return { provider: options.provider, target_language: options.targetLanguage };
     case "subtitle":
       return {};
+    case "tts":
+      return {
+        target_language: options.targetLanguage,
+        ...(options.ttsEngine ? { engine: options.ttsEngine } : {}),
+        ...(options.voice ? { voice: options.voice } : {}),
+      };
     case "render":
       return {
         ...(options.burnSubtitles ? {} : { burn_subtitles: "false" }),
+        ...(options.dubAudio ? { voice_track: "true" } : {}),
         ...(watermarkToWire(options.watermark)
           ? { watermark: watermarkToWire(options.watermark) }
           : {}),
@@ -147,6 +154,7 @@ export type PlanOptions = {
   sourceLanguage: string;
   targetLanguage: string;
   provider: string;
+  dubAudio: boolean;
 };
 
 /** Which stage job has been submitted (jobIds are assigned as we go). */
@@ -156,16 +164,21 @@ export type PipelinePlan = {
   options?: PlanOptions;
 };
 
-export function initialPipelinePlan(): PipelinePlan {
+export function initialPipelinePlan(dubAudio = false): PipelinePlan {
   return {
-    stages: PIPELINE_STAGE_ORDER.map((key) => ({ key, jobId: null })),
+    // The tts stage only exists when dubbing is enabled; otherwise it is
+    // skipped entirely (the stage-submission loop advances past it).
+    stages: PIPELINE_STAGE_ORDER.filter((key) => key !== "tts" || dubAudio).map((key) => ({
+      key,
+      jobId: null,
+    })),
     startedAt: null,
   };
 }
 
 /** Begin a run, capturing the options the user clicked AUTOMATE with. */
 export function startPipeline(options: PlanOptions): PipelinePlan {
-  return { ...initialPipelinePlan(), options };
+  return { ...initialPipelinePlan(options.dubAudio), options };
 }
 
 /** Record the jobId returned by `job.submit` for a stage. */
@@ -250,9 +263,14 @@ export function derivePhase(stages: DerivedStageRun[], startedAt: number | null)
  * counts its own progress within its slice.
  */
 export function pipelineProgress(stages: DerivedStageRun[]): number {
+  // Each stage owns an equal slice, so the math is correct whether the run
+  // has 4 stages (no dubbing) or 5 (dubbing adds the tts stage).
+  const n = stages.length;
+  if (n === 0) return 0;
   let total = 0;
-  for (let i = 0; i < stages.length; i++) {
-    const [start, end] = STAGE_SLICES[i];
+  for (let i = 0; i < n; i++) {
+    const start = i / n;
+    const end = (i + 1) / n;
     const stage = stages[i];
     if (stage.status === "succeeded") {
       total += end - start;

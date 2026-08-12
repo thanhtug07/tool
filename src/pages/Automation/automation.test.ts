@@ -19,6 +19,9 @@ const OPTIONS = {
   targetLanguage: "vi",
   provider: "gemini",
   burnSubtitles: true,
+  dubAudio: false,
+  voice: "vi-VN-HoaiMyNeural",
+  ttsEngine: "edge",
   watermark: DEFAULT_WATERMARK,
 };
 
@@ -138,10 +141,39 @@ describe("pipeline plan + derivation", () => {
   });
 
   it("startPipeline captures the run options", () => {
-    const plan = startPipeline({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini" });
-    expect(plan.options).toEqual({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini" });
+    const plan = startPipeline({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini", dubAudio: false });
+    expect(plan.options).toEqual({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      provider: "gemini",
+      dubAudio: false,
+    });
     expect(plan.startedAt).toBeNull();
     expect(plan.stages.every((s) => s.jobId === null)).toBe(true);
+    // Without dubbing the tts stage is skipped entirely.
+    expect(plan.stages.map((s) => s.key)).toEqual(["transcribe", "translate", "subtitle", "render"]);
+  });
+
+  it("startPipeline includes the tts stage when dubbing is enabled", () => {
+    const plan = startPipeline({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini", dubAudio: true });
+    expect(plan.stages.map((s) => s.key)).toEqual(["transcribe", "translate", "subtitle", "tts", "render"]);
+  });
+
+  it("tts stage params carry voice, engine and target language", () => {
+    expect(buildStageParams("tts", OPTIONS)).toEqual({
+      target_language: "vi",
+      engine: "edge",
+      voice: "vi-VN-HoaiMyNeural",
+    });
+    expect(buildStageParams("tts", { ...OPTIONS, dubAudio: true, voice: "vi-VN-NamMinhNeural", ttsEngine: "piper" })).toEqual({
+      target_language: "vi",
+      engine: "piper",
+      voice: "vi-VN-NamMinhNeural",
+    });
+  });
+
+  it("render requests the voice track when dubbing is on", () => {
+    expect(buildStageParams("render", { ...OPTIONS, dubAudio: true })).toEqual({ voice_track: "true" });
   });
 
   it("marks a submitted stage and derives running from the job snapshot", () => {
@@ -154,7 +186,7 @@ describe("pipeline plan + derivation", () => {
     expect(derivePhase(stages, plan.startedAt)).toBe("running");
     expect(stages[0].status).toBe("running");
     expect(stages[0].progress).toBe(0.5);
-    // transcribe slice is [0, 0.25]; half of it → 12.5%
+    // 4-stage plan (no dubbing): transcribe slice is [0, 0.25]; half of it → 12.5%
     expect(pipelineProgress(stages)).toBeCloseTo(0.125, 5);
   });
 
