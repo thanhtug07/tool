@@ -89,10 +89,10 @@ last_updated: "2026-08-12"
 
 
 release_phase: ACTIVE (post-TASKS.md release completion, started 2026-08-12)
-release_current_task: RELEASE-P0-008 (installer/clean-machine validation)
-release_last_completed_task: RELEASE-P0-007 (worker+FFmpeg packaging)
-release_next_task: RELEASE-P0-008 -> RELEASE-P1 (performance/GPU/security/docs)
-release_last_commit: "65c89eb"
+release_current_task: RELEASE-P1 (performance / GPU / security / docs)
+release_last_completed_task: RELEASE-P1-001 (performance benchmarks 1/10/30/60 min + TM segment-id fix)
+release_next_task: RELEASE-P1-002 (NVIDIA GPU validation - BLOCKED locally; gitleaks scan; docs set)
+release_last_commit: "350c611"
 
 release_completed_tasks:
   - id: RELEASE-P0-001
@@ -129,11 +129,17 @@ release_completed_tasks:
     goal: installer smoke test on clean machine
     status: BLOCKED (external infrastructure - clean Windows VM required)
     evidence: MSI/NSIS built and contain runtime; portable self-contained run PASS; fresh-machine install/uninstall/launch/pipeline not executable locally
+  - id: RELEASE-P1-001
+    goal: performance benchmarks 1/10/30/60 min (RAM/VRAM/time/progress, MASTER_PLAN §4.1, §29.2)
+    status: PASS (CPU) / NOT VERIFIED (GPU)
+    commit: 350c611
+    evidence: benchmark_performance.py drives real worker HTTP pipeline on deterministic synthetic media, merges runs into one report. worker/perf_report.json: 1min RTF 0.268 total 21.1s, 10min 0.233 total 182.0s, 30min 0.262 total 580.0s, 60min 0.309 total 1490.6s; peak worker RAM 140-151 MB (stable, no OOM at 60min). GPU NOT VERIFIED: ctranslate2 reports 1 CUDA device but faster-whisper CUDA encode fails "Library cublas64_12.dll is not found or cannot be loaded" - CUDA toolkit libs absent locally. Also fixed a translation-service bug found by the benchmark: TM cache-hit re-used a stale segment_id for repeated source text, so duplicate segments were reported "missing" by the subtitle stage; _assemble now re-pins idx/segment_id/source_text to the current segment (regression test added). Worker suite 583 pass.
 
 release_known_blockers:
   - clean-machine installer validation (needs Windows VM or dedicated test machine)
   - code signing certificate (OV) - external credential
   - updater infrastructure (post-MVP, Phase 14)
   - clean-machine FFmpeg/WebView2 first-run model download unverified on fresh OS
+  - NVIDIA GPU validation blocked locally: cublas64_12.dll missing (CUDA toolkit libs not installed; ctranslate2 sees 1 device but encode fails)
 
-release_next_action: continue RELEASE-P1 - performance benchmarks (1/10/30/60 min), NVIDIA GPU validation, security verification (gitleaks), docs (DEVELOPMENT/API/SECURITY/TESTING/RELEASE/DATABASE/PIPELINE/LICENSING), then regenerate RELEASE_READINESS_AUDIT.md
+release_next_action: RELEASE-P1-002 - NVIDIA GPU validation (needs machine with CUDA toolkit libs; else keep NOT VERIFIED with reason), security verification (gitleaks detect), documentation set (DEVELOPMENT/API/SECURITY/TESTING/RELEASE/DATABASE/PIPELINE/LICENSING), then regenerate RELEASE_READINESS_AUDIT.md
