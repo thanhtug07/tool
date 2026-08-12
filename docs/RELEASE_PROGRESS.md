@@ -54,7 +54,7 @@ Next action: re-run STT + render on a machine with a working NVENC session (desk
 
 ## Gate 3 — Security verification
 
-**Status: in progress** (see evidence below as it lands).
+**Status: PASS** (all sub-gates green; one critical finding fixed: API keys were never actually persisted to Credential Manager — see 3b).
 
 Scope: gitleaks, cargo-deny, pip-licenses, secret scanning, shell-execution audit, Tauri CSP/capabilities, Credential Manager, logging audit, FFmpeg argument safety, dependency/license audit.
 
@@ -99,4 +99,32 @@ Scope: gitleaks, cargo-deny, pip-licenses, secret scanning, shell-execution audi
 
 ## Gate 6 — Final regression
 
-**Status: pending.** Full suite: worker pytest, Rust fmt/check/clippy/test, frontend typecheck/lint/format/test/build, golden E2E, translation benchmark, packaging, available security checks.
+**Status: PASS** — full suite green on the post-security-fix tree (commit `401dc16`), installers rebuilt and verified end-to-end.
+
+| Layer | Command | Result |
+|---|---|---|
+| Worker | `py -3.13 -m pytest tests -q -p no:cacheprovider` | **583 passed**, 1 deselected (the `@pytest.mark.ai` live-Gemini test needs a real `GEMINI_API_KEY` — absent by design, correctly deselected) |
+| Rust | `cargo fmt --check` | clean |
+| Rust | `cargo check` | clean |
+| Rust | `cargo clippy --all-targets --all-features -- -D warnings` | clean (0 warnings) |
+| Rust | `cargo test` | **162 passed**, 0 failed |
+| Frontend | `npm run typecheck` | clean |
+| Frontend | `npm run lint` | clean |
+| Frontend | `npm run format` | clean (all already formatted) |
+| Frontend | `npm run test` (vitest) | **136 passed** (22 files) |
+| Frontend | `npm run build` | clean (271 kB JS, 24 kB CSS) |
+| Golden E2E (source worker) | `run_golden.py --device cpu` | **16/16 PASS in 4.3 s** |
+| Golden E2E (packaged worker) | `--worker-exe <install>\worker\worker.exe` | **16/16 PASS in 4.7 s** |
+| Security | `gitleaks git` (final) | 71 commits scanned, **no leaks** |
+| Security | `cargo-deny check licenses advisories bans sources` | **all ok** |
+
+Packaging after the keyring fix:
+- `npx tauri build` (cargo on PATH) → fresh MSI + NSIS installers containing the `401dc16` binary.
+- Fresh silent install (`/S /D=temp`) → exit 0; `ai-video-localization.exe`, `uninstall.exe`, `worker\worker.exe`, `worker\_internal\*`, `ffmpeg\{ffmpeg,ffprobe}.exe` extracted.
+- Installed-worker golden E2E (see table) PASS.
+- `uninstall.exe /S` → install directory removed entirely (no leftovers).
+
+Outstanding (documented, not re-runnable in this environment):
+- Live `GEMINI_API_KEY` provider test — needs a real key; network + key intended for pre-beta, not CI.
+- Clean-VM first-run model download — needs a fresh OS (see Gate 1).
+- NVENC encode session — needs a desktop GPU with a working NVENC session (see Gate 2).

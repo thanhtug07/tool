@@ -4,16 +4,16 @@ Testing strategy and commands for **AI Video Localization Studio**. Required doc
 
 ## Layers
 
-| Layer | Tool | Where | Default command |
-|---|---|---|---|
-| Frontend unit | vitest | `src/**/*.test.tsx` / `*.test.ts` | `npm run test` |
-| Frontend type/lint/format/build | tsc / eslint / prettier / vite | `src/` | `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run build` |
-| Rust unit | cargo test | `src-tauri/src/**` (inline `#[cfg(test)]`) | `cargo test` (+ `cargo clippy -- -D warnings`, `cargo fmt --check`) |
-| Worker unit | pytest | `worker/tests/unit/` | `py -m pytest tests/unit -q` |
-| Worker integration (real ffmpeg) | pytest | `worker/tests/integration/` | `py -m pytest tests/integration -q` (skips if ffmpeg absent) |
-| Worker AI (real inference) | pytest `ai` marker | `worker/tests/**` | `py -m pytest tests -m ai` (excluded by default — needs model/key) |
-| Secret scan | gitleaks | repo | `gitleaks detect` (CI) |
-| License audit | cargo-deny / pip-licenses | repo | CI job (`licenses`) |
+| Layer                            | Tool                           | Where                                      | Default command                                                              |
+| -------------------------------- | ------------------------------ | ------------------------------------------ | ---------------------------------------------------------------------------- |
+| Frontend unit                    | vitest                         | `src/**/*.test.tsx` / `*.test.ts`          | `npm run test`                                                               |
+| Frontend type/lint/format/build  | tsc / eslint / prettier / vite | `src/`                                     | `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run build` |
+| Rust unit                        | cargo test                     | `src-tauri/src/**` (inline `#[cfg(test)]`) | `cargo test` (+ `cargo clippy -- -D warnings`, `cargo fmt --check`)          |
+| Worker unit                      | pytest                         | `worker/tests/unit/`                       | `py -m pytest tests/unit -q`                                                 |
+| Worker integration (real ffmpeg) | pytest                         | `worker/tests/integration/`                | `py -m pytest tests/integration -q` (skips if ffmpeg absent)                 |
+| Worker AI (real inference)       | pytest `ai` marker             | `worker/tests/**`                          | `py -m pytest tests -m ai` (excluded by default — needs model/key)           |
+| Secret scan                      | gitleaks                       | repo                                       | `gitleaks detect` (CI)                                                       |
+| License audit                    | cargo-deny / pip-licenses      | repo                                       | CI job (`licenses`)                                                          |
 
 ## Worker suite details
 

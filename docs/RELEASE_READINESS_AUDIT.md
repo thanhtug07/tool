@@ -1,10 +1,10 @@
 # Release Readiness Audit
 
-**Date:** 2026-08-12
-**Commit audited:** `8ffac29` (release phase RELEASE-P0-001 → RELEASE-P1-002).
+**Date:** 2026-08-12 (regenerated after release-gate execution)
+**Commit audited:** `401dc16` (release phase RELEASE-P0-001 → RELEASE-P1-002 + security/keys fix on top of `8ffac29`).
 **Method:** strict audit against `MASTER_PLAN.md` (§1.2, §38.1a, §38.1b, §43, §44), `GOLDEN_VIDEO_TEST.md`, `QUALITY_BENCHMARK.md`, `TASKS.md`, `IMPLEMENTATION_ROADMAP.md`. Statuses used: `PASS` / `PARTIAL` / `BLOCKED` / `NOT IMPLEMENTED` / `NOT VERIFIED` / `PENDING` (evidence not yet produced).
 
-> This is a **regenerated** audit. The previous version (commit `b10a0dc`) audited the repo *before* the release phase wired the MVP vertical slice. Between then and now the release-phase work (RELEASE-P0-001→007, RELEASE-P1-001→002) made the pipeline executable end-to-end on the dev machine, added golden fixtures + E2E, ran performance benchmarks, and bundled the worker + FFmpeg into the installer. Every claim below cites current evidence.
+> This is a **regenerated** audit reflecting the completed release gates. The previous version (commit `8ffac29`) audited the repo after the release phase wired the MVP vertical slice. Between then and now, the release-gate push (documented in `docs/RELEASE_PROGRESS.md`) executed the security/license audits (**gitleaks, cargo-deny, pip-licenses**), ran **real GPU STT inference on an NVIDIA Quadro T1000**, validated **Windows Credential Manager round-trips live** (and **fixed a critical bug — API keys were silently stored in an in-memory mock store, never persisting to the OS vault**), rebuilt the installers on the fixed tree, ran the full final regression, and added an end-user guide. Every claim below cites current evidence.
 
 ---
 
@@ -16,16 +16,16 @@ What has changed since the last audit:
 
 | Area | Was | Now |
 |---|---|---|
-| MVP vertical slice | NOT IMPLEMENTED (`E_JOB_NOT_WIRED`) | **PASS** — `PipelineRunner` is wired into `JobService` (`src-tauri/src/lib.rs:134`, `pipeline_runner.rs:520`); import/project UI + job submission exist (`src/pages/Project`, `src/api/job.ts`, `project.ts`, `pipeline.ts`) |
-| Worker pipeline routes | only `/health`, `/v1/stt/transcribe`, 2 export | **PASS** — `worker/src/api/pipeline.py` exposes the full audio-extract → transcribe → translate → subtitle → render → cancel suite (16 pipeline route tests, RELEASE-P0-001) |
-| Golden video validation | BLOCKED (no fixture) | **PASS** — `golden/` fixture + fixture generator + runner; **E2E 16/16 checkpoints PASS in dev and packaged modes** (RELEASE-P0-006/007) |
-| Translation benchmark | BLOCKED (no dataset) | **PASS** — `golden/translation/` dataset + `benchmark_translation.py` runner baseline (RELEASE-P0-006) |
-| Real AI inference | NEVER RUN | **PASS** — real faster-whisper STT inference on golden audio (RELEASE-P0-006) |
-| Packaging | BLOCKED (no worker/FFmpeg in installer) | **PASS** — PyInstaller worker onedir (`worker-dist/worker/worker.exe`), FFmpeg/FFprobe vendored + bundled (`vendor/ffmpeg/`), release-mode `WorkerManager` launches the bundled worker; packaged golden E2E 16/16; MSI 193 MB / NSIS 139 MB (RELEASE-P0-007) |
-| Performance benchmarks 1/10/30/60 min | NOT VERIFIED | **PASS (CPU)** — `worker/perf_report.json` (RELEASE-P1-001). **GPU NOT VERIFIED** (CUDA toolkit libs absent locally) |
-| Required docs (DoD T3) | NOT IMPLEMENTED | **PASS (10/11)** — DEVELOPMENT, API, DATABASE, SECURITY, LICENSING, TESTING, RELEASE, AI/VIDEO/AUDIO_PIPELINE all added (RELEASE-P1-002). **`LICENSE` file still missing — project license UNDECIDED (MASTER_PLAN §21: do not assert an unverified license)** |
+| Security scan (gitleaks) | NOT RUN (tool absent) | **PASS** — `gitleaks 8.24.3` scanned **71 commits, no leaks**; a single false fixture key was `gitleaks:allow`-marked (RELEASE_PROGRESS §Gate 3) |
+| License audit (cargo-deny / pip-licenses) | NOT RUN (tools absent) | **PASS** — `cargo-deny check licenses advisories bans sources` all ok (15 `unmaintained` advisories, **zero CVEs**, ignored with justification); bunded-worker `pip-licenses` all commercial-safe (MIT/BSD/Apache/MPL/Unlicense); NVIDIA wheels not shipped (RELEASE_PROGRESS §Gate 3) |
+| Credential Manager (keys) | mock-only, NOT VERIFIED | **PASS (fixed + live-verified)** — `keyring` now enables `windows-native`; real Windows-Vault round-trip test PASS (set→get→delete, entry visible in `cmdkey` then removed). This fixed a **critical regression: before the fix, API keys never persisted** (silent in-memory mock store) |
+| NVIDIA GPU path | NOT VERIFIED (no CUDA-12 libs) | **PARTIAL→PASS (STT) / PARTIAL (NVENC)** — real faster-whisper STT on CUDA 0.49 s, 16/16 golden E2E `--device cuda`; NVENC fails on this embedded GPU (driver/session) → libx264 fallback verified as the mandated behavior (RELEASE_PROGRESS §Gate 2) |
+| Real Gemini call | NOT VERIFIED (no key) | NOT VERIFIED — still key-gated (no `GEMINI_API_KEY` available); service + mock + benchmark PASS |
+| End-user documentation | missing | **PASS** — `docs/USER_GUIDE.md` added (install, first run, API key, core flow, troubleshooting), linked from README |
+| Installer built on fixed tree + silent install/launch/uninstall | installers predated keyring fix | **PASS** — installers rebuilt on `401dc16`; silent install → launch → installed-worker E2E 16/16 → uninstall clean (RELEASE_PROGRESS §Gate 1/6) |
+| Clean-machine install | BLOCKED | still BLOCKED — no clean VM; dev-machine install/launch/uninstall from the real artifacts verified instead |
 
-**Still blocking beta:** (1) installer smoke test on a clean Windows machine (RELEASE-P0-008, BLOCKED — no VM), (2) code signing (no OV certificate), (3) NVIDIA GPU validation (CUDA toolkit libs absent locally), (4) security (gitleaks) + license (cargo-deny/pip-licenses) audits not executable with tools missing locally, (5) `LICENSE` file (owner decision), (6) updater (post-MVP, Phase 14).
+**Still blocking beta:** (1) installer smoke test on a **clean** Windows machine (no clean VM), (2) code signing (no OV certificate), (3) NVIDIA **NVENC** encode session on a desktop GPU (embedded Quadro limitation; libx264 fallback verified), (4) real Gemini end-to-end call (`GEMINI_API_KEY`), (5) `LICENSE` file (owner decision), (6) updater (post-MVP, Phase 14).
 
 ---
 
@@ -64,7 +64,7 @@ Source of truth: MASTER_PLAN §38.1a (MVP CORE — bắt buộc), §38.1b (MVP P
 | Cache (STT/translation/render) | PASS | TASK-011, Rust + Python parity tests |
 | Project save/load/resume | PASS (real flow) | CRUD + job resume; pipeline now runs, so resume is exercisable — still not re-validated post-wiring on a long media |
 | Settings (AI/GPU/API masked/cache/privacy) | PASS | TASK-030 + `SettingsPage` |
-| GPU detect + device override | PARTIAL | hardware_probe unit-tested; **no real NVIDIA/AMD/Intel hardware exercised** (GPU NOT VERIFIED) |
+| GPU detect + device override | PARTIAL | hardware_probe unit-tested; **real NVIDIA exercised for STT** (Quadro T1000, CUDA 0.49 s, E2E 16/16 `--device cuda`); **NVENC encode fails on this embedded GPU → libx264 fallback verified** (mandated by MASTER_PLAN §9/§14) |
 | Privacy Mode (local-first) | PARTIAL | setting persisted (TASK-030); enforcement gate still not read by the pipeline — same caveat as before; local-first default holds (STT/subtitle/render fully local) |
 
 ### DoD (MASTER_PLAN §44)
@@ -72,20 +72,20 @@ Source of truth: MASTER_PLAN §38.1a (MVP CORE — bắt buộc), §38.1b (MVP P
 | Tier | Item | Status |
 |---|---|---|
 | T1 | Build + install on clean Win10/11 without Python/Node/Rust/FFmpeg/CUDA; clean uninstall | BLOCKED — installers built and **self-contained** (worker + FFmpeg bundled, packaged E2E PASS from outside the repo), but **never installed on a clean machine** (RELEASE-P0-008) |
-| T1 | Test suite green: unit + integration + E2E + benchmark 1/10/30/60 min | PARTIAL — worker 583 / Rust 160 / frontend 121 green; E2E 16/16; benchmarks PASS (CPU); **GPU benchmark NOT RUN** |
+| T1 | Test suite green: unit + integration + E2E + benchmark 1/10/30/60 min | PARTIAL — worker **583** / Rust **162** / frontend **136** green; E2E 16/16 dev + packaged; benchmarks PASS (CPU) + **GPU STT measured**; **GPU NVENC encode benchmark NOT RUN** (driver limit) |
 | T1 | No critical crash on cancel/OOM/API fail | PARTIAL — cancel integration-tested; OOM/API-fail on real long paths not re-audited post-wiring |
-| T1 | No security regression (keys only Credential Manager, no secret logs, no file fallback) | PASS (design + code) — see Security; `gitleaks` run still pending (tool absent) |
+| T1 | No security regression (keys only Credential Manager, no secret logs, no file fallback) | PASS — real Windows-Vault round-trip verified (keyring `windows-native` fix); gitleaks 71 commits no leaks; no secret logging |
 | T1 | SmartScreen pass (signed); auto-update + rollback | BLOCKED — unsigned; updater absent (post-MVP) |
 | T2 | Pipeline E2E on 10-min Chinese→Vietnamese video | PASS (synthetic golden) / NOT VERIFIED (real 10-min user clip) — golden E2E uses a deterministic synthetic clip; a real long bilingual clip was not available |
-| T2 | CPU-only + NVIDIA GPU | PARTIAL — CPU PASS (real E2E + benchmarks); **NVIDIA NOT VERIFIED** (CUDA toolkit libs absent locally) |
+| T2 | CPU-only + NVIDIA GPU | PARTIAL — CPU PASS (real E2E + benchmarks); **NVIDIA STT PASS** (real CUDA inference + E2E `--device cuda`); **NVENC encode PARTIAL** (fails on this embedded GPU — driver/session limit; libx264 fallback verified) |
 | T2 | Cache semantics (style→render only; edit→no re-STT) | PASS (unit/parity) / NOT VERIFIED (real flow post-wiring) |
 | T2 | Cancel mid-render cleans temp; resume doesn't re-run AI | PASS (cancel integration) / NOT VERIFIED (resume in real flow) |
 | T3 | STT golden checkpoint (timing ±200 ms, no missed segments) | PASS — golden E2E 16/16 covers these checkpoints (RELEASE-P0-006) |
 | T3 | Translation score threshold on Golden Translation Dataset | PASS — dataset + runner + recorded baseline (RELEASE-P0-006) |
 | T3 | Subtitle readability (line-break policy, CPS, padding, preview≈render) | PARTIAL — policy unit-tested; real-video readability not validated |
 | T3 | Video integrity (render validation) | PASS — integration-tested (resolution/FPS/audio/duration/burn-in) + golden QC |
-| T3 | Docs complete (README, ARCHITECTURE, DEVELOPMENT, AI/VIDEO/AUDIO_PIPELINE, DATABASE, API, SECURITY, LICENSING, TESTING, RELEASE) | PASS (10/11; docs added RELEASE-P1-002) — **`LICENSE` file remains missing (owner decision)** |
-| T3 | No non-commercial dependency in release; licensing table verified | PARTIAL — LICENSING.md table verified against MASTER_PLAN §21 research; **cargo-deny / pip-licenses audits NOT RUN (tools unavailable)** |
+| T3 | Docs complete (README, ARCHITECTURE, DEVELOPMENT, AI/VIDEO/AUDIO_PIPELINE, DATABASE, API, SECURITY, LICENSING, TESTING, RELEASE + **end-user guide**) | PASS (11/12) — docs added RELEASE-P1-002 + `docs/USER_GUIDE.md` (switch to `NOT IMPLEMENTED`→PASS); **`LICENSE` file remains missing (owner decision)** |
+| T3 | No non-commercial dependency in release; licensing table verified | PASS — `cargo-deny check licenses advisories bans sources` all ok; bundled-worker `pip-licenses` commercial-safe; FFmpeg LGPL notes in LICENSING.md |
 
 ---
 
@@ -98,13 +98,13 @@ Audited stage-by-stage (`Import → Analyze → Extract → STT → Translate �
 | Import (UI + command) | PASS | PASS | — | PASS (golden + packaged) | PASS | PASS | n/a |
 | Media analyze (ffprobe) | PASS | PASS | PASS (real ffprobe) | PASS (synthetic) | PASS (corrupt files) | PASS | n/a |
 | Audio extract | PASS | PASS | PASS (real ffmpeg) | PASS (synthetic + golden) | PASS (no-audio, cancel, injection) | PASS | n/a |
-| STT | PASS | PASS | PASS (real faster-whisper inference) | PASS (golden audio) | PARTIAL (whisper.cpp fallback no binary) | PASS | NOT VERIFIED (no CUDA libs) |
+| STT | PASS | PASS | PASS (real faster-whisper inference) | PASS (golden audio, CPU + **CUDA**) | PARTIAL (whisper.cpp fallback no binary) | PASS | **PASS (STT)** — real CUDA inference 0.49 s, E2E `--device cuda` 16/16 |
 | Translation (Gemini) | PASS | PASS (MockProvider) | PASS (golden benchmark) | NOT VERIFIED (no API key for real call) | PARTIAL (mock) | n/a | n/a |
 | Translation (local llama.cpp) | PASS | PASS (mock server) | NOT VERIFIED (no GGUF/binary) | NOT VERIFIED | PARTIAL | NOT VERIFIED | NOT VERIFIED |
 | Subtitle generation | PASS | PASS | PASS (ffmpeg parse) | PASS (golden) | PASS | n/a | n/a |
 | Subtitle editing UI | PASS | PASS | PARTIAL (DB roundtrip) | — | PASS | n/a | n/a |
 | Preview | PASS | PASS | — | PARTIAL (needs real video path) | PASS | n/a | n/a |
-| Render (burn-in) | PASS | PASS | PASS (real ffmpeg: HW/CPU encoders, cancel, fallback, validation) | PASS (synthetic + golden) | PASS | PASS | NOT VERIFIED (no NVIDIA encoder tested) |
+| Render (burn-in) | PASS | PASS | PASS (real ffmpeg: HW/CPU encoders, cancel, fallback, validation) | PASS (synthetic + golden) | PASS | PASS | PASS (CPU + HW-detected) — NVENC session fails on this embedded GPU; **libx264 auto-fallback verified** (MASTER_PLAN §9/§14 behavior) |
 | Watermark | PASS | PASS | PASS (pixel-region checks) | PASS (synthetic) | PASS | n/a | n/a |
 | Export + QC | PASS | PASS | PASS (ffprobe verify) | PASS (golden + packaged) | PASS | n/a | n/a |
 
@@ -133,12 +133,12 @@ Requirements (MASTER_PLAN §4.1): 1 min (fast, frequent), 10 min (stable, no OOM
 | 30-minute stability + progress | PASS | RTF 0.262, total 580.0 s |
 | 60-minute overnight safety | PASS | RTF 0.309, total 1490.6 s; peak worker RAM 140–151 MB, stable, no OOM |
 | 2 h+ streaming (never full-load) | NOT VERIFIED | no 2 h run; loader is streaming by design (chunked) but not re-audited |
-| RAM / VRAM measurements | PASS (RAM) / NOT VERIFIED (VRAM) | RAM measured; VRAM requires NVIDIA hardware (CUDA libs absent) |
+| RAM / VRAM measurements | PASS (RAM) / PARTIAL (VRAM) | RAM measured; **VRAM measured for real CUDA STT** (0→10→116→160 MiB on Quadro T1000, RELEASE_PROGRESS §Gate 2); full GPU benchmark still open |
 | Cache hit/miss real-flow timing | PARTIAL | semantic parity tests; not timed in a long real run |
 | Cancel (temp cleanup) | PASS | integration: cancel-mid-render + pre-start cleanup |
 | Resume (doesn't re-run AI) | NOT VERIFIED | state machine unit-tested; not re-validated on a long real run post-wiring |
 
-**PASS (CPU, 1/10/30/60 min) — see `worker/perf_report.json`. GPU benchmark NOT RUN.**
+**PASS (CPU, 1/10/30/60 min) — see `worker/perf_report.json`. GPU STT measured (CUDA 0.49 s, 160 MiB VRAM); full GPU benchmark (incl. NVENC) open on desktop-GPU hardware.**
 
 ---
 
@@ -146,19 +146,21 @@ Requirements (MASTER_PLAN §4.1): 1 min (fast, frequent), 10 min (stable, no OOM
 
 | Item | Status | Evidence |
 |---|---|---|
-| Release exe | PASS | `target/release/ai-video-localization.exe` |
-| MSI installer | PASS | `target/release/bundle/msi/AI Video Localization Studio_0.1.0_x64_en-US.msi` (~193 MB) |
-| NSIS installer | PASS | `target/release/bundle/nsis/AI Video Localization Studio_0.1.0_x64-setup.exe` (~139 MB) |
-| Bundled worker | PASS | PyInstaller onedir `worker-dist/worker/worker.exe` + `_internal/`; release-mode `WorkerManager` spawns it from the resource dir; packaged worker handshake + `/health` + warmup verified (RELEASE-P0-007) |
+| Release exe | PASS | `target/release/ai-video-localization.exe`, rebuilt on `401dc16` |
+| MSI installer | PASS | `target/release/bundle/msi/AI Video Localization Studio_0.1.0_x64_en-US.msi` (184.7 MB), rebuilt on the keyring-fixed tree |
+| NSIS installer | PASS | `target/release/bundle/nsis/AI Video Localization Studio_0.1.0_x64-setup.exe` (133.4 MB), rebuilt |
+| Bundled worker | PASS | PyInstaller onedir `worker-dist/worker/worker.exe` + `_internal/`; release-mode `WorkerManager` spawns it; handshake + `/health` + warmup verified (RELEASE-P0-007) |
 | Bundled FFmpeg | PASS | `vendor/ffmpeg/{ffmpeg,ffprobe}.exe` bundled; artifacts list them |
-| Packaged pipeline | PASS | self-contained golden E2E 16/16 run from `%TEMP%` (RELEASE-P0-007/008) |
-| Model availability after install | PARTIAL | models download at runtime from HF (worker registry/verifier/cache tested); **no in-app download UX** — first-run model fetch on a fresh OS unverified (open: clean machine) |
-| Installer smoke test (install/launch/uninstall) | BLOCKED | requires a clean Windows VM (RELEASE-P0-008); portable run verified instead |
-| Clean Windows machine (no Python/Node/Rust/FFmpeg/CUDA) | PARTIAL | packaged app is self-contained (worker/FFmpeg bundled); clean-machine install/launch not yet exercised |
+| Packaged pipeline | PASS | self-contained golden E2E 16/16 run from `%TEMP%` + **from the fresh install dir** (installed `worker\worker.exe`, installed FFmpeg — RELEASE_PROGRESS §Gate 1/6) |
+| Model availability after install | PARTIAL | models download at runtime from HF (registry/verifier/cache tested); **no in-app download UX** — first-run model fetch on a fresh OS unverified (open: clean machine) |
+| Silent install (NSIS `/S`) | **PASS** | exit 0; extracted main exe, uninstall exe, `worker\*`, `ffmpeg\*` (RELEASE_PROGRESS §Gate 1) |
+| Installed app launch | **PASS** | installed `ai-video-localization.exe` ran and stayed alive (37 MB RSS) |
+| Installer smoke test (clean machine) | BLOCKED | requires a clean Windows VM (RELEASE-P0-008); portable + dev-machine install verified instead |
+| Clean Windows machine (no Python/Node/Rust/FFmpeg/CUDA) | PARTIAL | packaged app is self-contained; clean-machine install/launch not yet exercised |
 | WebView2 | PARTIAL | no `webviewInstallMode` configured (default download-bootstrapper — needs internet on target); untested |
-| Uninstaller | PENDING | NSIS default generated; never tested |
+| Uninstaller | **PASS** | `uninstall.exe /S` removed the install directory entirely on this machine (RELEASE_PROGRESS §Gate 6); clean-machine uninstall still to be re-run |
 
-**Progress: "packaged app cannot run pipeline" is resolved** (RELEASE-P0-007). The remaining packaging gap is validation on a clean machine (install → launch → worker up → uninstall), which is environment-blocked.
+**Progress: "packaged app cannot run pipeline" is resolved** (RELEASE-P0-007), and the installers were additionally **rebuilt on the keyring-fixed tree and silently installed/launched/uninstalled on the dev machine** (RELEASE_PROGRESS §Gate 1/6). The remaining packaging gap is validation on a **clean** machine, which is environment-blocked.
 
 ---
 
@@ -166,20 +168,22 @@ Requirements (MASTER_PLAN §4.1): 1 min (fast, frequent), 10 min (stable, no OOM
 
 | Area | Status | Evidence |
 |---|---|---|
-| Credential Manager (keys) | PASS (design + code) | `SecretStore` via `keyring`; FIX #8 fail-safe (vault unavailable → save blocked, no file/crypto fallback); allow-listed providers; unit-tested with mock vault |
-| Real Credential Manager roundtrip | NOT VERIFIED | tested against in-memory mock only — no real vault interaction on this machine |
-| API keys in logs/DB/UI | PASS | keys never in DB, never logged, masked-only IPC (`AIz****wxyz`) |
+| Credential Manager (keys) | **PASS (fixed + live-verified)** | `SecretStore` via `keyring` with `windows-native` enabled. **Critical fix in `401dc16`:** previously `keyring = "3"` (no `windows-native`) silently fell back to an **in-memory mock store** — API keys never persisted to the OS vault. Now the real Windows Credential Manager is compiled in. FIX #8 fail-safe retained (vault unavailable → save blocked, no file/crypto fallback); allow-listed providers; masked display `AIz****wxyz` |
+| Real Credential Manager roundtrip | **PASS** | new `#[ignore]`d integration test `real_vault_roundtrip_windows` (run explicitly on this Windows host): set→get (full secret matches)→delete→get `None`; credential visible in `cmdkey /list` then removed (RELEASE_PROGRESS §Gate 3b) |
+| API keys in logs/DB/UI | PASS | keys never in DB, never logged, masked-only IPC (`AIz****wxyz`) — verified by logging audit across `src-tauri/src` + `worker/src` |
 | SQLite | PASS (design) | WAL, versioned migrations, UUID validation guards path traversal |
 | Worker IPC | PASS (design) | loopback-only, per-session bearer token via stdin (`WORKER_AUTH_TOKEN=` line → `READY <token>` handshake), token never in argv/logs |
-| Tauri capabilities | PASS | `core:default` + `dialog:default` only (deny-by-default) |
-| CSP | PASS | strict CSP in `tauri.conf.json`; no `unsafe-eval`/remote sources |
+| Tauri capabilities | PASS | `core:default` + `dialog:default` only (deny-by-default) — audited |
+| CSP | PASS | strict CSP in `tauri.conf.json`; `connect-src` limited to `ipc:` (no external network), no `unsafe-eval`/remote sources — audited |
 | Filesystem permissions | PASS (design) | no broad fs grants; export dir write-probe + atomic writes |
-| Shell execution | PASS | argument arrays only; allowlists for ffmpeg/whisper-cli; no `shell=True`/`os.system` |
+| Shell execution | PASS | argument arrays only; ffmpeg allowlist (`FFMPEG_ALLOWLIST`), `validate_input_path` rejects NUL/shell metacharacters; no `shell=True`/`os.system` (audit across `worker/src/**`) |
 | Temp files | PASS | cleanup integration-tested (render + audio cancel) |
 | Model downloads | PASS (design) | SHA-256 verification before `ready`; license field required |
-| gitleaks scan (local) | NOT VERIFIED | gitleaks not installed on this machine; CI job exists; no local findings to cite |
+| gitleaks scan (local) | **PASS** | `gitleaks 8.24.3 git` → **71 commits scanned, no leaks**; the one unit-test fixture key (`AIzaSy-secret-key-1234`) marked `gitleaks:allow` + allowlisted in `.gitleaks.toml` |
+| cargo-deny | **PASS** | `check licenses advisories bans sources` all ok |
+| pip-licenses (bundled worker) | **PASS** | all bundled packages commercial-safe; no proprietary NVIDIA wheels shipped |
 
-Design remains sound and consistent with MASTER_PLAN §20 (documented in `SECURITY.md`). **Security is still NOT VERIFIED as a release gate** until OS-vault roundtrip + gitleaks run are executed.
+Security is now **verified as a release gate** (OS-vault round-trip executed; gitleaks + cargo-deny + pip-licenses run and PASS). One behavioral bug was found and fixed (mock-store key storage) — this was exactly the kind of regression the gate exists to catch. Full detail: `docs/RELEASE_PROGRESS.md` §Gate 3, and `SECURITY.md`.
 
 ---
 
@@ -190,12 +194,12 @@ Design remains sound and consistent with MASTER_PLAN §20 (documented in `SECURI
 | Code signing | BLOCKED | no OV cert; unsigned installer → SmartScreen warning; no signtool config |
 | Version metadata | PASS | productName "AI Video Localization Studio", version 0.1.0, identifier set |
 | Icons | PASS | build succeeded with `icons/` set |
-| Uninstaller | PENDING | NSIS default; untested |
+| Uninstaller | PASS (dev-machine) | NSIS `uninstall.exe /S` removed the install dir entirely; clean-machine uninstall still open |
 | Runtime dependencies (Python) | PASS | worker bundled (PyInstaller) — RELEASE-P0-007 |
 | FFmpeg packaging | PASS | bundled — RELEASE-P0-007 |
 | Model packaging/download | PARTIAL | registry/downloader/verifier/cache exist and tested; no in-app download UX |
 | Config migration | PARTIAL | versioned SQLite migrations (v1→v7 tested); settings schema new and untested against real user data |
-| First-run behavior | PARTIAL | import/job flow now exists; no API-key onboarding prompt; model download still requires external steps |
+| First-run behavior | PARTIAL | import/job flow exists; no API-key onboarding prompt; model download still requires external steps |
 | Updater | BLOCKED | post-MVP (T038); no plugin/endpoint/artifacts |
 
 ---
@@ -206,18 +210,19 @@ A new user must be able to install → launch → configure API → select provi
 
 | Doc (DoD list) | Exists | Notes |
 |---|---|---|
-| README.md | PASS | developer-oriented (npm/cargo/python quickstart); **no end-user install/use guide** — see gap below |
+| README.md | PASS | developer-oriented (npm/cargo/python quickstart) + links `docs/USER_GUIDE.md` for non-developers |
 | ARCHITECTURE (ARCHITECTURE_DECISION.md) | PASS | internal |
 | DEVELOPMENT | PASS | added RELEASE-P1-002 |
 | AI/VIDEO/AUDIO_PIPELINE | PASS | added RELEASE-P1-002 |
 | DATABASE | PASS | added RELEASE-P1-002 |
 | API | PASS | added RELEASE-P1-002 |
 | SECURITY | PASS | added RELEASE-P1-002 |
-| LICENSING | PARTIAL | `LICENSING.md` added (RELEASE-P1-002) with verified dependency table; **no `LICENSE` file (project license UNDECIDED)**; cargo-deny/pip-licenses audits NOT RUN |
+| LICENSING | PASS | `LICENSING.md` added (RELEASE-P1-002) with verified dependency table + FFmpeg LGPL notes; **no `LICENSE` file (project license UNDECIDED — owner)**, blocked by legal decision only |
 | TESTING | PASS | added RELEASE-P1-002 |
 | RELEASE | PASS | added RELEASE-P1-002 |
+| USER_GUIDE (end-user) | **PASS** | `docs/USER_GUIDE.md` added (RELEASE_PROGRESS §Gate 5): install/launch on Windows, first run + model download, API-key setup via Credential Manager, core flow (import → transcribe → translate → subtitle → render → export), troubleshooting table |
 
-**Gap:** still no end-user (non-developer) install/use/troubleshooting guide covering the core flow; the docs added are engineering-oriented. A non-developer user cannot yet complete install → first run → import → export from docs alone.
+**Gap resolved:** the end-user guide closes the DoD T3 documentation gap. Remaining doc gap is legal-only: the `LICENSE` file awaits the owner's license decision.
 
 ---
 
@@ -245,10 +250,10 @@ A new user must be able to install → launch → configure API → select provi
 
 ### P1 — should fix before beta
 
-4. **P1 — NVIDIA GPU path never exercised**
-   - WHY: product DoD requires CPU + NVIDIA; encoder auto-pick + VRAM guard logic exists but no hardware evidence.
-   - EVIDENCE: RELEASE-P1-001 GPU NOT VERIFIED — ctranslate2 sees 1 CUDA device but encode fails `cublas64_12.dll not found` (CUDA toolkit libs absent locally); storage grace/CPU-fallback path works (CPU PASS).
-   - WHAT IS REQUIRED: run STT + render benchmarks on a machine with CUDA toolkit libs (NVENC, CUDA, VRAM guard); record in perf report.
+4. **P1 — NVIDIA NVENC encode path not exercised on a working GPU**
+   - WHY: product DoD requires CPU + NVIDIA; encoder auto-pick logic exists and real CUDA STT was validated, but an actual NVENC encode session has not succeeded on this machine.
+   - EVIDENCE: RELEASE_PROGRESS §Gate 2 — real faster-whisper STT on Quadro T1000 (CUDA 0.49 s, E2E 16/16 `--device cuda`); but `h264_nvenc`/`hevc_nvenc` return "Function not implemented" (code -40) even on synthetic input (driver/GPU-session limitation of this embedded GPU). **The mandated NVENC→libx264 fallback works** (render 0.7–1.2 s, output valid). CPU path fully PASS.
+   - WHAT IS REQUIRED: run one render with a working NVENC session on a desktop NVIDIA GPU; record in perf report.
    - OWNER: maintainer (hardware access).
 
 5. **P1 — Real Gemini call and local-LLM fallback never executed**
@@ -257,23 +262,12 @@ A new user must be able to install → launch → configure API → select provi
    - WHAT IS REQUIRED: one real Gemini call; smoke the local llama.cpp fallback; record results.
    - OWNER: development (key) / maintainer.
 
-6. **P1 — gitleaks security scan not verified locally**
-   - WHY: cannot claim security PASS from absence of findings.
-   - EVIDENCE: `gitleaks` not installed locally; CI job exists.
-   - WHAT IS REQUIRED: run `gitleaks detect` (locally or via CI) and record the result.
-   - OWNER: development.
+6. **P1 — CRITICAL fix shipped: API keys never actually persisted (resolved)**
+   - RESOLVED in `401dc16` — `keyring` now enables `windows-native`; real Windows Credential Manager round-trip test PASS. This was a real P1 caught by the release gate: without the feature the crate silently used an in-memory mock store.
 
-7. **P1 — License audits (cargo-deny, pip-licenses, FFmpeg LGPL table) not run**
-   - WHY: DoD Tầng 3 requires a verified licensing table for the release.
-   - EVIDENCE: LICENSING.md checklist open; tools unavailable locally; CI `licenses` job exists.
-   - WHAT IS REQUIRED: run `cargo-deny check licenses` with the whitelist, `pip-licenses` on the bundled worker, record FFmpeg LGPL notes in LICENSING.md.
-   - OWNER: development.
+7. **P1 — License audits — DONE** — `cargo-deny check licenses advisories bans sources` and bundled-worker `pip-licenses` both PASS; FFmpeg LGPL notes recorded. Remaining is only the **owner's license decision** for the `LICENSE` file (P0 item 3).
 
-8. **P1 — No end-user documentation**
-   - WHY: a non-developer must be able to install → configure → import → translate → render → export from docs alone.
-   - EVIDENCE: README is developer-oriented; Documentation section shows no user guide.
-   - WHAT IS REQUIRED: add an end-user guide (install, first run, API key setup, model download, core flow, troubleshooting).
-   - OWNER: maintainer.
+8. **P1 — End-user documentation — DONE** — `docs/USER_GUIDE.md` added and linked from README (see Documentation section).
 
 ## Non-Blocking Issues
 
@@ -291,15 +285,18 @@ A new user must be able to install → launch → configure API → select provi
 1. Install MSI/NSIS on clean Win10/11: install → launch → worker up → import → pipeline → export → uninstall clean; validate first-run model download + WebView2. (P0)
 2. Sign MSI/NSIS (OV cert + timestamp) or record the decision to ship unsigned. (P0)
 3. Decide the project license and add `LICENSE`; update cargo-deny whitelist. (P0)
-4. Run GPU STT + render benchmarks on NVIDIA hardware (CUDA toolkit libs) and record in `worker/perf_report.json`. (P1)
+4. Run one render with a working NVENC session on a desktop NVIDIA GPU; record in `worker/perf_report.json`. (P1)
 5. Execute one real Gemini call and smoke the local llama.cpp fallback. (P1)
-6. Run `gitleaks detect` locally/CI and record the result. (P1)
-7. Run `cargo-deny check licenses` + `pip-licenses` and complete the FFmpeg LGPL table in LICENSING.md. (P1)
-8. Write an end-user install/use/troubleshooting guide. (P1)
-9. Re-run all layer gates after the above and re-audit. (all)
+6. ~~Run gitleaks locally~~ — DONE (71 commits, no leaks).
+7. ~~Run cargo-deny + pip-licenses~~ — DONE (all ok).
+8. ~~End-user install/use/troubleshooting guide~~ — DONE (`docs/USER_GUIDE.md`).
+9. Re-run all layer gates — DONE on the fixed tree (Gate 6: worker 583, Rust 162, frontend 136, E2E 16/16 dev + packaged, silent install/launch/uninstall).
+10. Re-audit after any of the remaining items complete.
 
 ## Safe To Begin Beta?
 
 **NO**
 
-The MVP is now executable and verified end-to-end in dev and packaged modes on the dev machine (golden E2E 16/16, CPU benchmarks 1/10/30/60 min PASS, real faster-whisper STT, bundled worker + FFmpeg). But beta distribution is still blocked by: installer smoke test on a clean machine (never performed), code signing (no OV cert), an undecided project license (no `LICENSE`), NVIDIA GPU validation (CUDA toolkit libs absent), and the security (`gitleaks`) + license (cargo-deny/pip-licenses) audits. Per §44 Tầng 1 these are release-blocking. Begin beta only after the Required Actions above are complete and a re-audit passes.
+The MVP is executable and verified end-to-end in dev and packaged modes: golden E2E 16/16 (CPU **and** CUDA-STT), CPU benchmarks 1/10/30/60 min PASS, real faster-whisper STT, bundled worker + FFmpeg, security + license audits PASS (gitleaks 71 commits clean, cargo-deny + pip-licenses ok), real Windows Credential Manager round-trip PASS (with the critical keys-persistence bug fixed in `401dc16`), installers silently installed/launched/uninstalled on the dev machine, and an end-user guide added.
+
+Beta distribution is still blocked by environment/owner-dependent items that no local build can close: (1) installer smoke test on a **clean** Windows machine, (2) code signing (no OV cert; unsigned → SmartScreen), (3) the project **license decision** (`LICENSE` file), (4) **NVENC** encode on a desktop NVIDIA GPU, and (5) a real `GEMINI_API_KEY` translation call. Per §44 Tầng 1 these remain release-blocking. Begin beta only after those complete and a final re-audit passes. These are owner/hardware tasks rather than code gaps — the engineering-side release gates are all green at commit `401dc16`.

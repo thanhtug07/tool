@@ -10,15 +10,15 @@ SQLite database design for the Tauri core (`src-tauri/src/db/`). Required doc pe
 
 ## Schema (current version 7)
 
-| Table | Purpose | Key columns |
-|---|---|---|
-| `projects` | Project records | `id` (uuid v4), `name`, `source_video_path`, `status` (draft/analyzed/transcribed/translated/rendered), `settings_json` |
-| `jobs` | Pipeline job records + progress/state | `id` (`job_NNNN`), `project_id` FK cascade, `type` (transcribe/translate/subtitle/render), `status`, `progress`, `stage`, `error_code/message/log`, `params_json`, `retry_count`, `cancel_requested`, timestamps |
-| `cache_entries` | Content-addressed stage cache | `(project_id, key)` PK, `stage`, `file_name`, `size_bytes`, `last_accessed_at` |
-| `glossary_entries` | Glossary term→translation | `(project_id, term)` PK |
-| `character_entries` | Character/context descriptions | `(project_id, name)` PK |
-| `subtitle_cues` | Persistent subtitle cue rows | `id` (uuid v4), `(project_id, cue_number)` unique, `start/end` (s), `text`, `speaker`, `source_text`, `status`, `style_json` |
-| `settings` | App settings (whitelisted keys) | `key` PK, `value` |
+| Table               | Purpose                               | Key columns                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects`          | Project records                       | `id` (uuid v4), `name`, `source_video_path`, `status` (draft/analyzed/transcribed/translated/rendered), `settings_json`                                                                                          |
+| `jobs`              | Pipeline job records + progress/state | `id` (`job_NNNN`), `project_id` FK cascade, `type` (transcribe/translate/subtitle/render), `status`, `progress`, `stage`, `error_code/message/log`, `params_json`, `retry_count`, `cancel_requested`, timestamps |
+| `cache_entries`     | Content-addressed stage cache         | `(project_id, key)` PK, `stage`, `file_name`, `size_bytes`, `last_accessed_at`                                                                                                                                   |
+| `glossary_entries`  | Glossary term→translation             | `(project_id, term)` PK                                                                                                                                                                                          |
+| `character_entries` | Character/context descriptions        | `(project_id, name)` PK                                                                                                                                                                                          |
+| `subtitle_cues`     | Persistent subtitle cue rows          | `id` (uuid v4), `(project_id, cue_number)` unique, `start/end` (s), `text`, `speaker`, `source_text`, `status`, `style_json`                                                                                     |
+| `settings`          | App settings (whitelisted keys)       | `key` PK, `value`                                                                                                                                                                                                |
 
 Indexes exist for the common access paths (`projects.updated_at`, `jobs.project_id`, `jobs.status`, `cache_entries` by last-access/stage, per-project rows on glossary/characters/cues).
 

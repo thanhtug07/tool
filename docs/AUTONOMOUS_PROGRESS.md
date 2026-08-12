@@ -42,25 +42,35 @@ completed_tasks:
 failed_tasks: []
 retry_count: 0
 
-last_commit: "b10a0dc"
+last_commit: "401dc16"
 last_test_status: PASS
 current_blocker: null
 
 release_gates:
   - gate: all TASKS.md tasks (001-030)
     status: PASS
-  - gate: frontend gates (typecheck/lint/format/test 121/build)
-    status: PASS
-  - gate: rust gates (fmt/check/clippy -D warnings/test 144)
-    status: PASS
-  - gate: worker gates (pytest 566, no ai marker)
-    status: PASS
+  - gate: frontend gates (typecheck/lint/format/test/build)
+    status: PASS (136 vitest + typecheck/lint/format clean, commit 401dc16)
+  - gate: rust gates (fmt/check/clippy -D warnings/test)
+    status: PASS (162 tests, fmt/check/clippy clean, commit 401dc16)
+  - gate: worker gates (pytest 583, no ai marker)
+    status: PASS (583 passed; ai marker needs GEMINI_API_KEY - absent)
   - gate: security scan (gitleaks)
-    status: SKIP (gitleaks not installed - no findings claimed)
+    status: PASS (gitleaks 8.24.3 - 71 commits scanned, no leaks; fake fixture key gitleaks:allow-marked)
+  - gate: license audit (cargo-deny + pip-licenses)
+    status: PASS (cargo-deny licenses/advisories/bans/sources ok - 15 non-CVE unmaintained advisories ignored with justification; bundled-worker pip-licenses commercial-safe)
+  - gate: Credential Manager (real vault)
+    status: PASS (FIXED in 401dc16 - keyring windows-native enabled; real Windows vault roundtrip verified live)
+  - gate: NVIDIA GPU (real hardware)
+    status: PARTIAL (STT CUDA PASS - 0.49s, E2E 16/16 --device cuda; NVENC encode fails on embedded GPU, libx264 fallback verified)
   - gate: packaging (tauri build)
-    status: PASS (release exe + MSI + NSIS setup.exe at target/release/bundle/)
-  - gate: installer smoke test (install/uninstall on clean Win10/11)
-    status: NOT_RUN (requires manual execution on a clean machine)
+    status: PASS (release exe + MSI 184.7MB + NSIS 133.4MB at target/release/bundle/, rebuilt on 401dc16)
+  - gate: installer smoke test on dev machine (silent install/launch/worker/E2E/uninstall)
+    status: PASS (fresh install -> launch (37MB) -> installed-worker E2E 16/16 -> uninstall removed dir entirely)
+  - gate: installer smoke test on clean Win10/11
+    status: BLOCKED (external - no clean VM available)
+  - gate: end-user documentation
+    status: PASS (docs/USER_GUIDE.md added and linked from README)
   - gate: code signing (OV cert + signtool + timestamp)
     status: BLOCKED (external credential)
   - gate: updater (plugin + HTTPS endpoint + pubkey + createUpdaterArtifacts)
@@ -88,13 +98,13 @@ last_updated: "2026-08-12"
 
 
 
-release_phase: ACTIVE (post-TASKS.md release completion, started 2026-08-12)
-release_current_task: null (RELEASE-P1-002 complete; remaining items are external/blocked)
-release_status: PASS (docs deliverables done)
-release_last_completed_task: RELEASE-P1-002 (documentation set; deliverable closed)
-release_next_task: GPU validation / gitleaks / license audits (all BLOCKED or NOT RUN locally - see blocks below)
-release_last_commit: "8ffac29"
-release_docs_status: complete - RELEASE-P1-002 doc set (10 docs at repo root) committed 8ffac29; RELEASE_READINESS_AUDIT.md regenerated to reflect RELEASE-P0/P1 (audit commit 8ffac29) - status remains NOT BETA READY (clean-machine smoke test, signing, LICENSE decision, GPU, security/license audits)
+release_phase: ACTIVE (release gate execution, completed 2026-08-12)
+release_current_task: null (security, GPU validation, license audits, end-user docs, final regression all executed)
+release_status: PASS (engineering-side gates green at 401dc16; remaining items are owner/external)
+release_last_completed_task: release-gate execution (Gates 1-6 per docs/RELEASE_PROGRESS.md)
+release_next_task: owner/external only - clean-VM installer test, code signing, LICENSE decision, NVENC-on-desktop-GPU, real Gemini call
+release_last_commit: "401dc16"
+release_docs_status: complete - RELEASE_PROGRESS.md (gate log Gates 1-6), USER_GUIDE.md (end-user), RELEASE_READINESS_AUDIT.md regenerated at 401dc16 - status remains NOT BETA READY (clean-machine smoke test, signing, LICENSE decision, NVENC, real Gemini)
 
 release_completed_tasks:
   - id: RELEASE-P0-001
@@ -135,19 +145,43 @@ release_completed_tasks:
     goal: performance benchmarks 1/10/30/60 min (RAM/VRAM/time/progress, MASTER_PLAN §4.1, §29.2)
     status: PASS (CPU) / NOT VERIFIED (GPU)
     commit: 350c611
-    evidence: benchmark_performance.py drives real worker HTTP pipeline on deterministic synthetic media, merges runs into one report. worker/perf_report.json: 1min RTF 0.268 total 21.1s, 10min 0.233 total 182.0s, 30min 0.262 total 580.0s, 60min 0.309 total 1490.6s; peak worker RAM 140-151 MB (stable, no OOM at 60min). GPU NOT VERIFIED: ctranslate2 reports 1 CUDA device but faster-whisper CUDA encode fails "Library cublas64_12.dll is not found or cannot be loaded" - CUDA toolkit libs absent locally. Also fixed a translation-service bug found by the benchmark: TM cache-hit re-used a stale segment_id for repeated source text, so duplicate segments were reported "missing" by the subtitle stage; _assemble now re-pins idx/segment_id/source_text to the current segment (regression test added). Worker suite 583 pass.
+    evidence: benchmark_performance.py drives real worker HTTP pipeline on deterministic synthetic media, merges runs into one report. worker/perf_report.json: 1min RTF 0.268 total 21.1s, 10min 0.233 total 182.0s, 30min 0.262 total 580.0s, 60min 0.309 total 1490.6s; peak worker RAM 140-151 MB (stable, no OOM at 60min). Also fixed a translation-service bug found by the benchmark: TM cache-hit re-used a stale segment_id (RELEASE-P1-001 fix 350c611). Worker suite 583 pass.
   - id: RELEASE-P1-002
-    goal: documentation set per MASTER_PLAN §22 (DEVELOPMENT, API, DATABASE, SECURITY, LICENSING, TESTING, RELEASE, AI_PIPELINE, VIDEO_PIPELINE, AUDIO_PIPELINE) at repo root, README links updated
-    status: PASS (commit 8ffac29). LICENSE file deliberately NOT added - project license is UNDECIDED (README "License" TODO + Cargo.toml license TBD); per MASTER_PLAN §21 do not assert an unverified license - recorded as blocking owner decision in LICENSING.md checklist. SECURITY.md documents token/stdin handshake, keyring vault with FIX #8 no-fallback, capability allow-list, strict CSP. All facts cross-checked against repo code (main.py token extraction, secret_store.rs, worker Cargo.toml, capabilities/default.json).
+    goal: documentation set per MASTER_PLAN §22 at repo root, README links updated
+    status: PASS (commit 8ffac29). LICENSE file deliberately NOT added - project license is UNDECIDED; per MASTER_PLAN §21 do not assert an unverified license - recorded as blocking owner decision. SECURITY.md documents token/stdin handshake, keyring vault with FIX #8 no-fallback, capability allow-list, strict CSP. Facts cross-checked against repo code.
+  - id: RELEASE-GATE-1
+    goal: install smoke test from actual installer (silent install/launch/worker sticky)
+    status: PARTIAL (dev-machine install verified; clean VM still BLOCKED)
+    commit: (evidence in docs/RELEASE_PROGRESS.md)
+    evidence: rebuilt stale packaged worker (RELEASE-P1-001 fix), rebuilt installers, silent install exit 0, installed app runs, installed worker READY/health/real STT, E2E 16/16 in 3.6s
+  - id: RELEASE-GATE-2
+    goal: NVIDIA GPU validation (real hardware)
+    status: PARTIAL (CUDA STT PASS; NVENC encode fails - libx264 fallback verified)
+    commit: (evidence in docs/RELEASE_PROGRESS.md)
+    evidence: ctranslate2 1 device; faster-whisper CUDA inference 0.49s (GPU util 0->6->50%, VRAM 0->10->116->160MiB); E2E --device cuda 16/16 (5.8s source, 9.5s packaged); NVENC -40 on synthetic input (driver/session), NVDEC works, render falls back to libx264
+  - id: RELEASE-GATE-3
+    goal: security verification
+    status: PASS (incl. CRITICAL fix)
+    commit: 401dc16
+    evidence: gitleaks 71 commits no leaks; cargo-deny licenses/advisories/bans/sources ok (15 non-CVE unmaintained ignored); pip-licenses bundled worker commercial-safe; no shell=True/os.system (arg arrays + allowlist + path validation); strict CSP (connect-src ipc only) + deny-by-default capabilities; no secret logging. CRITICAL FINDING+fix: keyring lacked windows-native, silently used in-memory mock store (keys never persisted) - enabled windows-native, real-vault roundtrip test added+passed against real Windows Credential Manager
+  - id: RELEASE-GATE-5
+    goal: end-user documentation
+    status: PASS
+    commit: (evidence in docs/RELEASE_PROGRESS.md)
+    evidence: docs/USER_GUIDE.md (install/first-run/API key/core flow/troubleshooting) added and linked from README
+  - id: RELEASE-GATE-6
+    goal: final regression on the fixed tree + rebuilt installers
+    status: PASS
+    commit: 401dc16
+    evidence: worker 583 pass; Rust fmt/check/clippy clean + 162 tests; frontend typecheck/lint/format/build + 136 tests; golden E2E 16/16 (source 4.3s, installed-worker 4.7s); gitleaks + cargo-deny re-runs clean; installers rebuilt on 401dc16; silent install -> install-launch -> E2E -> uninstall clean
 
 release_known_blockers:
   - clean-machine installer validation (needs Windows VM or dedicated test machine)
   - code signing certificate (OV) - external credential
   - updater infrastructure (post-MVP, Phase 14)
   - clean-machine FFmpeg/WebView2 first-run model download unverified on fresh OS
-  - NVIDIA GPU validation blocked locally: cublas64_12.dll missing (CUDA toolkit libs not installed; ctranslate2 sees 1 device but encode fails)
-  - gitleaks detect not runnable locally (gitleaks not installed) - CI job exists
-  - cargo-deny / pip-licenses license audits not runnable locally (tools unavailable) - LICENSING.md checklist open
+  - NVIDIA NVENC encode session unverified on a desktop GPU (embedded Quadro: "Function not implemented"; libx264 fallback verified)
+  - real Gemini translation call unverified (no GEMINI_API_KEY available; @pytest.mark.ai test skipped by design)
   - LICENSE file cannot be added (project license UNDECIDED - owner decision required; do not fabricate)
 
-release_next_action: (resume block) only owner/external actions remain for the release gate: provide OV signing cert or decide unsigned; run installer on clean VM once available; run gitleaks + cargo-deny + pip-licenses on a machine with those tools; decide project license. No more local code deliverables in RELEASE-P1.
+release_next_action: (resume block) only owner/external actions remain for the release gate: provide OV signing cert or decide unsigned; run installer on clean VM once available; decide project license; run one NVENC-enabled render on a desktop GPU; run one real Gemini call. No more local code deliverables remain.

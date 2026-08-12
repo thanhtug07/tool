@@ -9,7 +9,7 @@ A local-first desktop tool whose only network ingress is loopback HTTP and only 
 ## Secrets
 
 - **API keys live in the OS credential store** (`src-tauri/src/security/secret_store.rs`) via `keyring` → Windows Credential Manager. Never in SQLite, never in files, never logged.
-- **FIX #8 fail-safe:** if the credential service is unavailable, key *save is blocked* — there is **no** file/crypto fallback and no plaintext-on-disk path.
+- **FIX #8 fail-safe:** if the credential service is unavailable, key _save is blocked_ — there is **no** file/crypto fallback and no plaintext-on-disk path.
 - Provider names are validated against a fixed allow-list before touching the vault (no attacker-controlled `service`/`user`).
 - IPC only exposes the key **masked** (`AIz****wxyz`); the full key is never sent to the renderer UI.
 - Secrets never appear in: `git`, `.env` (gitignored), logs, argv (the token handshake uses stdin).

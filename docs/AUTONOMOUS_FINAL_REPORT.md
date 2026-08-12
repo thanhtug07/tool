@@ -34,6 +34,15 @@
     "TASK-029",
     "TASK-030"
   ],
-  "last_commit": "b10a0dc",
-  "note": "MVP tasks in TASKS.md (001-030) are complete; all layer gates pass (frontend 121 tests, Rust 144 tests, worker 566 tests). Packaging built the unsigned Windows installer (exe + MSI + NSIS setup.exe). Code signing, installer smoke test, updater, and beta/release remain blocked on external credentials/infrastructure (see AUTONOMOUS_PROGRESS.md release_gates)."
+  "release_gate_results": {
+    "RELEASE-GATE-1_install_smoke": "PARTIAL - dev-machine installer verified end-to-end (silent install, launch, installed-worker E2E 16/16, uninstall); clean-VM smoke test BLOCKED (no clean VM)",
+    "RELEASE-GATE-2_nvidia_gpu": "PARTIAL - real CUDA STT PASS (0.49s, VRAM 0-160MiB, E2E 16/16 --device cuda); NVENC encode fails on embedded GPU -> libx264 fallback verified (mandated behavior)",
+    "RELEASE-GATE-3_security": "PASS - gitleaks 71 commits no leaks; cargo-deny licenses/advisories/bans/sources ok (15 non-CVE unmaintained ignored w/ justification); pip-licenses bundled worker commercial-safe; strict CSP/capabilities; no secret logging; CRITICAL fix: keyring windows-native enabled (previously keys silently stored in in-memory mock store, never persisted) + real Windows Credential Manager roundtrip verified",
+    "RELEASE-GATE-4_license": "BLOCKED - OWNER DECISION REQUIRED (project license still TBD; no LICENSE file fabricated per AGENTS/MASTER_PLAN 21)",
+    "RELEASE-GATE-5_end_user_docs": "PASS - docs/USER_GUIDE.md added and linked from README",
+    "RELEASE-GATE-6_final_regression": "PASS - worker 583, Rust 162 (fmt/check/clippy clean), frontend 136 (typecheck/lint/format/build clean), golden E2E 16/16 source + installed-worker, gitleaks + cargo-deny re-runs clean, installers rebuilt on 401dc16"
+  },
+  "last_commit": "401dc16",
+  "beta_readiness": "NOT BETA READY",
+  "note": "All engineering-side release gates pass at commit 401dc16 (security + license audits executed and PASS, real GPU STT validated, keys-persistence critical bug fixed, installers rebuilt/installed/launched/uninstalled on the dev machine, full final regression green, end-user guide added). Beta remains blocked only by owner/external items no local build can close: clean-Windows-VM installer smoke test, OV code-signing certificate (or decision to ship unsigned), project LICENSE decision, NVENC encode on a desktop NVIDIA GPU, and a real GEMINI_API_KEY translation call. Full detail: docs/RELEASE_PROGRESS.md, docs/RELEASE_READINESS_AUDIT.md."
 }

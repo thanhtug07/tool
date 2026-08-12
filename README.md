@@ -139,6 +139,7 @@ Workflow: `.github/workflows/ci.yml` — chạy trên mọi **Pull Request** và
 - [TESTING.md](TESTING.md) — chiến lược test + lệnh chạy
 - [RELEASE.md](RELEASE.md) — build/packaging/release gates
 - [LICENSING.md](LICENSING.md) — bảng license + checklist
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — hướng dẫn cài đặt & sử dụng cho người dùng cuối
 
 ## Trạng thái / Roadmap
 
