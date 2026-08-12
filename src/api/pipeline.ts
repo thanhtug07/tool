@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 /** Canonical per-project artifact paths (RELEASE-P0-005). */
 export type ArtifactPaths = {
@@ -17,5 +17,5 @@ export type ArtifactPaths = {
  * export commands, and check stage outputs.
  */
 export function getArtifactPaths(projectId: string): Promise<ArtifactPaths> {
-  return invoke("pipeline.artifact_paths", { projectId });
+  return safeInvoke("pipeline.artifact_paths", { projectId });
 }

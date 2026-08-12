@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 /** Lifecycle state of the Python sidecar (mirrors Rust `WorkerState`). */
 export type WorkerState = "stopped" | "starting" | "ready" | "stopping" | "failed";
@@ -14,10 +14,10 @@ export type WorkerStateInfo = {
 
 /** Current lifecycle snapshot of the Python sidecar. */
 export function getWorkerState(): Promise<WorkerStateInfo> {
-  return invoke("worker.get_worker_state");
+  return safeInvoke("worker.get_worker_state");
 }
 
 /** Stop and restart the Python sidecar (fresh port + session token). */
 export function restartWorker(): Promise<WorkerStateInfo> {
-  return invoke("worker.restart");
+  return safeInvoke("worker.restart");
 }

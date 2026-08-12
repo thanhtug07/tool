@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 /** Capability identifiers (mirrors Rust ProviderService). */
 export type ProviderCapability = "translation" | "stt" | "tts";
@@ -54,18 +54,18 @@ export type ProviderTestResult = {
 };
 
 export function listProviders(): Promise<ProvidersList> {
-  return invoke("providers.list");
+  return safeInvoke("providers.list");
 }
 
 export function getProvider(id: string): Promise<ProviderView> {
-  return invoke("providers.get", { id });
+  return safeInvoke("providers.get", { id });
 }
 
 export function createProvider(
   input: ProviderInput,
   test?: boolean,
 ): Promise<ProviderView> {
-  return invoke("providers.create", { input, test });
+  return safeInvoke("providers.create", { input, test });
 }
 
 export function updateProvider(
@@ -73,22 +73,22 @@ export function updateProvider(
   input: ProviderInput,
   test?: boolean,
 ): Promise<ProviderView> {
-  return invoke("providers.update", { id, input, test });
+  return safeInvoke("providers.update", { id, input, test });
 }
 
 export function deleteProvider(id: string): Promise<void> {
-  return invoke("providers.delete", { id });
+  return safeInvoke("providers.delete", { id });
 }
 
 export function setProviderDefault(id: string, capability: string): Promise<void> {
-  return invoke("providers.set_default", { id, capability });
+  return safeInvoke("providers.set_default", { id, capability });
 }
 
 export function setProviderEnabled(id: string, enabled: boolean): Promise<ProviderView> {
-  return invoke("providers.set_enabled", { id, enabled });
+  return safeInvoke("providers.set_enabled", { id, enabled });
 }
 
 /** Test with the stored key, or `apiKey` as a one-shot override (never stored). */
 export function testProvider(id: string, apiKey?: string | null): Promise<ProviderTestResult> {
-  return invoke("providers.test", { id, apiKey });
+  return safeInvoke("providers.test", { id, apiKey });
 }

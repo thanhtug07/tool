@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { pickFile } from "@/api/dialog";
 
 import { onJobStatus } from "@/api/events";
 import { exportSubtitles, exportVideo } from "@/api/export";
@@ -148,7 +148,7 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
 
   async function pickVideo() {
     try {
-      const picked = await openDialog({
+      const picked = await pickFile({
         multiple: false,
         filters: [{ name: "Video", extensions: ["mp4", "mkv", "mov", "avi", "webm", "m4v"] }],
       });
@@ -236,7 +236,7 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
     if (!artifacts) return;
     setError(null);
     try {
-      const targetDir = await openDialog({ directory: true, multiple: false });
+      const targetDir = await pickFile({ directory: true, multiple: false });
       if (typeof targetDir === "string") {
         const result = await exportVideo(artifacts.renderedVideo, targetDir, { runQc: true });
         setNotice(
@@ -252,7 +252,7 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
     if (!artifacts) return;
     setError(null);
     try {
-      const targetDir = await openDialog({ directory: true, multiple: false });
+      const targetDir = await pickFile({ directory: true, multiple: false });
       if (typeof targetDir === "string") {
         const path = await exportSubtitles(artifacts.subtitleSrt, targetDir, { format: "srt" });
         setNotice(`Subtitles exported to ${path}.`);

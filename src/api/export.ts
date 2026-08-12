@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 /** QC verdict for an exported video (TASK-029). */
 export type ExportQcReport = {
@@ -26,7 +26,7 @@ export function exportVideo(
   targetDir: string,
   options: { name?: string; runQc?: boolean } = {},
 ): Promise<ExportVideoResult> {
-  return invoke("export.video", {
+  return safeInvoke("export.video", {
     sourceVideo,
     targetDir,
     name: options.name ?? null,
@@ -43,7 +43,7 @@ export function exportSubtitles(
   targetDir: string,
   options: { name?: string; format?: SubtitleExportFormat } = {},
 ): Promise<string> {
-  return invoke("export.subtitles", {
+  return safeInvoke("export.subtitles", {
     sourceSubtitle,
     targetDir,
     name: options.name ?? null,

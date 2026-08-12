@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 /** Whitelisted settings keys exposed to the UI (mirrors Rust SettingsService). */
 export type SettingsKey =
@@ -32,7 +32,7 @@ export type ApiProvider = "gemini" | "local" | "openai";
 
 /** Store an API key for `provider` in the OS credential vault. */
 export function setApiKey(provider: ApiProvider, key: string): Promise<void> {
-  return invoke("secrets.set_api_key", { provider, key });
+  return safeInvoke("secrets.set_api_key", { provider, key });
 }
 
 /**
@@ -40,20 +40,20 @@ export function setApiKey(provider: ApiProvider, key: string): Promise<void> {
  * stored. The full secret never leaves the Rust core.
  */
 export function getApiKeyMasked(provider: ApiProvider): Promise<string | null> {
-  return invoke("secrets.get_api_key_masked", { provider });
+  return safeInvoke("secrets.get_api_key_masked", { provider });
 }
 
 /** Remove the stored key for `provider`. */
 export function deleteApiKey(provider: ApiProvider): Promise<void> {
-  return invoke("secrets.delete_api_key", { provider });
+  return safeInvoke("secrets.delete_api_key", { provider });
 }
 
 /** Read every known setting (stored value or default). */
 export function getSettings(): Promise<SettingsSnapshot> {
-  return invoke("settings.get_all");
+  return safeInvoke("settings.get_all");
 }
 
 /** Validate + persist one setting; resolves with the updated snapshot. */
 export function setSetting(key: SettingsKey, value: string): Promise<SettingsSnapshot> {
-  return invoke("settings.set", { key, value });
+  return safeInvoke("settings.set", { key, value });
 }

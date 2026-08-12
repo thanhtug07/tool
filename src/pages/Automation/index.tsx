@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { pickFile } from "@/api/dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Check,
@@ -182,7 +182,7 @@ export default function AutomationPage({
 
   async function pickVideo() {
     try {
-      const picked = await openDialog({
+      const picked = await pickFile({
         multiple: false,
         filters: [{ name: "Video", extensions: ["mp4", "mkv", "mov", "avi", "webm", "m4v"] }],
       });
@@ -275,7 +275,7 @@ export default function AutomationPage({
   async function handleExport() {
     if (!artifacts) return;
     try {
-      const targetDir = await openDialog({ directory: true, multiple: false });
+      const targetDir = await pickFile({ directory: true, multiple: false });
       if (typeof targetDir !== "string") return;
       const result = await exportVideo(artifacts.renderedVideo, targetDir, { runQc: true });
       toast.push(
@@ -337,7 +337,11 @@ export default function AutomationPage({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => void restartWorker().then(() => setWorkerBanner(false))}
+            onClick={() => {
+              void restartWorker()
+                .then(() => setWorkerBanner(false))
+                .catch((error) => toast.push(String(error), "error"));
+            }}
           >
             <RotateCcw className="size-3.5" aria-hidden="true" /> Restart Worker
           </Button>
@@ -858,7 +862,7 @@ function SettingsPanel({
 
   async function pickWatermarkImage() {
     try {
-      const picked = await openDialog({
+      const picked = await pickFile({
         multiple: false,
         filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }],
       });

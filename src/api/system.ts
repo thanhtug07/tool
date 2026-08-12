@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 /** GPU vendor inferred from the device name (mirrors Rust `GpuVendor`). */
 export type GpuVendor = "nvidia" | "amd" | "intel";
@@ -19,5 +19,5 @@ export type HardwareProfile = {
  * usage %. There is no backend endpoint for live CPU/GPU/RAM usage.
  */
 export function getHardware(): Promise<HardwareProfile> {
-  return invoke("system.hardware");
+  return safeInvoke("system.hardware");
 }

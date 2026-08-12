@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -27,7 +27,7 @@ export type JobStatusEvent = {
 };
 
 export function getJob(id: string): Promise<Job> {
-  return invoke("job.get", { id });
+  return safeInvoke("job.get", { id });
 }
 
 /** Submit a pipeline job for a project (RELEASE-P0-005 workflow). */
@@ -36,12 +36,12 @@ export function submitJob(
   type: string,
   params: Record<string, unknown>,
 ): Promise<Job> {
-  return invoke("job.submit", { projectId, jobType: type, params });
+  return safeInvoke("job.submit", { projectId, jobType: type, params });
 }
 
 /** All jobs for a project, most recently updated first. */
 export function listJobs(projectId: string): Promise<Job[]> {
-  return invoke("job.list", { projectId });
+  return safeInvoke("job.list", { projectId });
 }
 
 /**
@@ -49,14 +49,14 @@ export function listJobs(projectId: string): Promise<Job[]> {
  * feed and the single source of truth for "current job".
  */
 export function listAllJobs(limit?: number): Promise<Job[]> {
-  return invoke("job.list_all", { limit: limit ?? null });
+  return safeInvoke("job.list_all", { limit: limit ?? null });
 }
 
 /** Cancel a queued or running job. */
 export function cancelJob(id: string): Promise<void> {
-  return invoke("job.cancel", { id });
+  return safeInvoke("job.cancel", { id });
 }
 
 export function retryJob(id: string): Promise<void> {
-  return invoke("job.retry", { id });
+  return safeInvoke("job.retry", { id });
 }

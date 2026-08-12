@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 export type GlossaryEntry = {
   project_id: string;
@@ -15,7 +15,7 @@ export type CharacterEntry = {
 };
 
 export function glossaryList(projectId: string): Promise<GlossaryEntry[]> {
-  return invoke("dictionary.glossary.list", { projectId });
+  return safeInvoke("dictionary.glossary.list", { projectId });
 }
 
 export function glossaryUpsert(
@@ -23,19 +23,19 @@ export function glossaryUpsert(
   term: string,
   translation: string,
 ): Promise<GlossaryEntry> {
-  return invoke("dictionary.glossary.upsert", { projectId, term, translation });
+  return safeInvoke("dictionary.glossary.upsert", { projectId, term, translation });
 }
 
 export function glossaryDelete(projectId: string, term: string): Promise<void> {
-  return invoke("dictionary.glossary.delete", { projectId, term });
+  return safeInvoke("dictionary.glossary.delete", { projectId, term });
 }
 
 export function glossaryFingerprint(projectId: string): Promise<string> {
-  return invoke("dictionary.glossary.fingerprint", { projectId });
+  return safeInvoke("dictionary.glossary.fingerprint", { projectId });
 }
 
 export function characterList(projectId: string): Promise<CharacterEntry[]> {
-  return invoke("dictionary.character.list", { projectId });
+  return safeInvoke("dictionary.character.list", { projectId });
 }
 
 export function characterUpsert(
@@ -43,9 +43,9 @@ export function characterUpsert(
   name: string,
   description: string,
 ): Promise<CharacterEntry> {
-  return invoke("dictionary.character.upsert", { projectId, name, description });
+  return safeInvoke("dictionary.character.upsert", { projectId, name, description });
 }
 
 export function characterDelete(projectId: string, name: string): Promise<void> {
-  return invoke("dictionary.character.delete", { projectId, name });
+  return safeInvoke("dictionary.character.delete", { projectId, name });
 }

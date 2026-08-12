@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 export type PingResult = {
   response: "pong";
@@ -19,7 +19,7 @@ export type PingError = {
 export async function ping(): Promise<PingResult> {
   const started = performance.now();
   try {
-    const response = await invoke<string>("ping");
+    const response = await safeInvoke<string>("ping");
     if (response !== "pong") {
       throw {
         code: "E_IPC_UNAVAILABLE",

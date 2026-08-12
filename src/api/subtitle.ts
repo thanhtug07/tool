@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 
 export type CueStatus = "draft" | "translated" | "edited" | "approved";
 
@@ -40,13 +40,13 @@ export type SubtitleCueInput = {
 };
 
 export function getSubtitleCues(projectId: string): Promise<SubtitleCue[]> {
-  return invoke("subtitle.get_cues", { projectId });
+  return safeInvoke("subtitle.get_cues", { projectId });
 }
 
 export function replaceSubtitleCues(projectId: string, cues: SubtitleCueInput[]): Promise<number> {
-  return invoke("subtitle.replace_cues", { projectId, cues });
+  return safeInvoke("subtitle.replace_cues", { projectId, cues });
 }
 
 export function updateSubtitleCue(id: string, patch: CuePatch): Promise<SubtitleCue> {
-  return invoke("subtitle.update_cue", { id, patch });
+  return safeInvoke("subtitle.update_cue", { id, patch });
 }
