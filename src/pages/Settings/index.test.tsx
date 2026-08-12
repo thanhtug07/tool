@@ -14,12 +14,15 @@ vi.mock("@/api/settings", () => ({
 }));
 
 import { ToastProvider } from "@/components/toast";
+import { ProvidersProvider } from "@/stores/providers";
 import { ConnectionStatus, default as SettingsPage } from "./index";
 
 function renderPage() {
   return renderToStaticMarkup(
     <ToastProvider>
-      <SettingsPage />
+      <ProvidersProvider>
+        <SettingsPage />
+      </ProvidersProvider>
     </ToastProvider>,
   );
 }
@@ -37,7 +40,7 @@ describe("SettingsPage (unit — mocked bridge, no Tauri IPC)", () => {
   it("renders the General, Providers, Processing, Storage and Privacy sections", () => {
     const html = renderPage();
     expect(html).toContain("General");
-    expect(html).toContain("AI providers");
+    expect(html).toContain("Providers");
     expect(html).toContain("Processing");
     expect(html).toContain("Storage");
     expect(html).toContain("Privacy");

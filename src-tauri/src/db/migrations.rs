@@ -145,6 +145,60 @@ pub const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        version: 8,
+        name: "create providers + provider_defaults tables",
+        sql: r#"
+            -- Dynamic provider registry (Provider Management). Providers are
+            -- configuration rows, not code: Automation resolves the provider
+            -- to use from this table + provider_defaults, never from a
+            -- hard-coded UI list. API keys are NOT stored here — they live in
+            -- the OS credential vault keyed by provider id (SecretStore).
+            CREATE TABLE providers (
+                id TEXT PRIMARY KEY,               -- slug for builtins (free/gemini/local/mock), uuid for custom
+                name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,       -- capability area: 'translation' (stt/tts reserved for later builds)
+                provider_kind TEXT NOT NULL,       -- worker registry kind: free/gemini/local/mock
+                enabled INTEGER NOT NULL DEFAULT 1,
+                base_url TEXT,                     -- provider-specific endpoint (None = default)
+                model TEXT,                        -- default model for this provider
+                config_json TEXT NOT NULL DEFAULT '{}',
+                capabilities_json TEXT NOT NULL DEFAULT '[]',  -- ['translation','stt','tts',...]
+                last_test_status TEXT,             -- 'success' | 'failure' | NULL
+                last_test_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- One default provider per capability; capability-level defaults
+            -- are ready for STT/TTS, translation is live in this build.
+            CREATE TABLE provider_defaults (
+                capability TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE
+            );
+
+            -- Seed the built-in registry. FREE is the first-class default and
+            -- is never deletable (enforced in ProviderService).
+            INSERT INTO providers
+                (id, name, provider_type, provider_kind, enabled, base_url, model,
+                 config_json, capabilities_json, last_test_status, last_test_at,
+                 created_at, updated_at)
+            VALUES
+                ('free',   'FREE',           'translation', 'free',   1, 'http://127.0.0.1:8080', NULL,
+                 '{}', '["translation","stt"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+                ('gemini', 'Gemini (cloud)', 'translation', 'gemini', 1, NULL, 'gemini-2.5-flash-lite',
+                 '{}', '["translation"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+                ('local',  'Local LLM',      'translation', 'local',  1, 'http://127.0.0.1:8080', NULL,
+                 '{}', '["translation"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+                ('mock',   'Mock (offline)', 'translation', 'mock',   1, NULL, NULL,
+                 '{}', '["translation"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
+
+            INSERT INTO provider_defaults (capability, provider_id) VALUES
+                ('translation', 'free'),
+                ('stt', 'free'),
+                ('tts', 'free');
+        "#,
+    },
 ];
 
 /// Apply every pending migration (versions greater than `user_version`) in order.

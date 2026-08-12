@@ -1,16 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ping, type PingError, type PingResult } from "@/api/bridge";
-import {
-  deleteApiKey,
-  getApiKeyMasked,
-  getSettings,
-  setApiKey,
-  setSetting,
-  type ApiProvider,
-  type SettingsKey,
-  type SettingsSnapshot,
-} from "@/api/settings";
+import { getSettings, setSetting, type SettingsKey, type SettingsSnapshot } from "@/api/settings";
 import { useToast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { isTauri } from "@/lib/env";
@@ -19,7 +10,6 @@ import {
   GeneralSection,
   PrivacySection,
   ProcessingSection,
-  ProvidersSection,
   SecuritySection,
   SettingsGroup,
   StorageSection,
@@ -27,6 +17,7 @@ import {
   VideoSection,
   VoiceSection,
 } from "./sections";
+import { ProvidersPanel } from "./ProvidersPanel";
 
 type ConnectionState =
   | { status: "idle" }
@@ -56,11 +47,6 @@ export default function SettingsPage() {
   const [restarting, setRestarting] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>({ status: "idle" });
   const [settings, setSettings] = useState<SettingsSnapshot>(FALLBACK_SETTINGS);
-  const [provider, setProvider] = useState<ApiProvider>("gemini");
-  const [maskedKey, setMaskedKey] = useState<string | null>(null);
-  const [baseUrl, setBaseUrl] = useState("");
-  const [keyDraft, setKeyDraft] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +56,6 @@ export default function SettingsPage() {
         const snapshot = await getSettings();
         if (!cancelled) {
           setSettings(snapshot);
-          setBaseUrl(snapshot["api.gemini.base_url"]);
         }
       } catch (error) {
         if (!cancelled) {
@@ -82,25 +67,6 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, [toast]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!isTauri()) return;
-    void getApiKeyMasked(provider)
-      .then((masked) => {
-        if (!cancelled) {
-          setMaskedKey(masked);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          toast.push(String(error), "error");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [provider, toast]);
 
   const saveSetting = useCallback(
     async (key: SettingsKey, value: string) => {
@@ -114,31 +80,6 @@ export default function SettingsPage() {
     },
     [toast],
   );
-
-  const handleSaveKey = useCallback(async () => {
-    setSavingKey(true);
-    try {
-      await setApiKey(provider, keyDraft.trim());
-      const masked = await getApiKeyMasked(provider);
-      setMaskedKey(masked);
-      setKeyDraft("");
-      toast.push("API key saved to Windows Credential Manager", "success");
-    } catch (error) {
-      toast.push(String(error), "error");
-    } finally {
-      setSavingKey(false);
-    }
-  }, [provider, keyDraft, toast]);
-
-  const handleDeleteKey = useCallback(async () => {
-    try {
-      await deleteApiKey(provider);
-      setMaskedKey(null);
-      toast.push("API key removed", "success");
-    } catch (error) {
-      toast.push(String(error), "error");
-    }
-  }, [provider, toast]);
 
   const handleTestConnection = useCallback(async () => {
     setConnection({ status: "testing" });
@@ -184,33 +125,10 @@ export default function SettingsPage() {
 
       <SettingsGroup
         id="group-providers"
-        title="AI providers"
-        description="Translation backends and their credentials."
+        title="Providers"
+        description="AI providers used by Automation. API keys live in the OS credential vault (Windows Credential Manager) — never in the database."
       >
-        <ProvidersSection
-          provider={provider}
-          maskedKey={maskedKey}
-          baseUrl={baseUrl}
-          keyDraft={keyDraft}
-          saving={savingKey}
-          onProviderChange={(next) => {
-            setProvider(next);
-            setBaseUrl(
-              next === "local" ? settings["api.local.base_url"] : settings["api.gemini.base_url"],
-            );
-            setKeyDraft("");
-          }}
-          onBaseUrlChange={setBaseUrl}
-          onSaveBaseUrl={() =>
-            void saveSetting(
-              provider === "local" ? "api.local.base_url" : "api.gemini.base_url",
-              baseUrl,
-            )
-          }
-          onKeyDraftChange={setKeyDraft}
-          onSaveKey={() => void handleSaveKey()}
-          onDeleteKey={() => void handleDeleteKey()}
-        />
+        <ProvidersPanel />
       </SettingsGroup>
 
       <SettingsGroup

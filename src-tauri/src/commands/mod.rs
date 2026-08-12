@@ -8,6 +8,7 @@ pub mod export;
 pub mod job;
 pub mod pipeline;
 pub mod project;
+pub mod provider;
 pub mod settings;
 pub mod subtitle;
 pub mod system;

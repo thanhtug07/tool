@@ -24,20 +24,6 @@ export function languageLabel(code: string): string {
   return all.find((l) => l.code === code)?.label ?? code;
 }
 
-/** Real translation providers (worker `build_translation_provider` registry). */
-export const PROVIDERS = [
-  { id: "mock", label: "Mock (offline)", needsKey: false, hint: "Deterministic, no network" },
-  { id: "gemini", label: "Gemini (cloud)", needsKey: true, hint: "Best quality, needs API key" },
-  {
-    id: "local",
-    label: "Local LLM",
-    needsKey: false,
-    hint: "llama.cpp / OpenAI-compatible server",
-  },
-] as const;
-
-export type ProviderId = (typeof PROVIDERS)[number]["id"];
-
 /** Ordered pipeline stages (job types the backend actually runs). */
 export const PIPELINE_STAGE_ORDER = ["transcribe", "translate", "subtitle", "render"] as const;
 export type StageKey = (typeof PIPELINE_STAGE_ORDER)[number];

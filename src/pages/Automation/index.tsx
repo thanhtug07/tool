@@ -17,7 +17,7 @@ import { cancelJob, retryJob, submitJob } from "@/api/job";
 import { toMediaUrl } from "@/api/media";
 import { getArtifactPaths, type ArtifactPaths } from "@/api/pipeline";
 import { createProject, type Project } from "@/api/project";
-import { getApiKeyMasked } from "@/api/settings";
+import type { ProviderView } from "@/api/provider";
 import { exportVideo } from "@/api/export";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
@@ -29,6 +29,7 @@ import WatermarkConfig, {
 } from "@/components/WatermarkConfig";
 import { fileBaseName, formatDuration, formatProcessingTime } from "@/lib/format";
 import { useJobs } from "@/stores/jobs";
+import { useProviders } from "@/stores/providers";
 import { restartWorker, useWorker } from "@/stores/worker";
 import type { NavKey } from "@/components/layout/Sidebar";
 import type { ToolId } from "@/pages/Tools";
@@ -44,7 +45,6 @@ import {
   markStageSubmitted,
   pipelineProgress,
   startPipeline,
-  PROVIDERS,
   SOURCE_LANGUAGES,
   STAGE_CHECKLIST,
   TARGET_LANGUAGES,
@@ -71,19 +71,19 @@ export default function AutomationPage({
   const toast = useToast();
   const { jobs } = useJobs();
   const { info: workerInfo } = useWorker();
+  const { providersFor, defaultFor, providers } = useProviders();
 
   const [artifacts, setArtifacts] = useState<ArtifactPaths | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [originalMeta, setOriginalMeta] = useState<MediaMeta | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("vi");
-  // Default to the real provider. "mock" stays available as an explicit opt-in
-  // (labelled "Mock (offline)") so a production run can never silently produce
-  // fake subtitles; the key guard below blocks gemini without a configured key.
-  const [provider, setProvider] = useState("gemini");
+  // Provider Management: the provider comes from the registry — never a
+  // hard-coded list. Seeded to FREE; once the registry loads, the selection
+  // follows the configured default translation provider.
+  const [provider, setProvider] = useState("free");
   const [burnSubtitles, setBurnSubtitles] = useState(true);
   const [watermark, setWatermark] = useState<WatermarkConfigType>(DEFAULT_WATERMARK);
-  const [geminiKeyConfigured, setGeminiKeyConfigured] = useState<boolean | null>(null);
   const [plan, setPlan] = useState<PipelinePlan>(initialPipelinePlan);
   const [runError, setRunError] = useState<string | null>(null);
   const [workerBanner, setWorkerBanner] = useState(false);
@@ -98,20 +98,17 @@ export default function AutomationPage({
   const phase = derivePhase(stages, plan.startedAt);
   const overallProgress = pipelineProgress(stages);
 
-  // Gem API-key presence (masked read — never the secret itself).
+  // Translation-capable, enabled providers from the registry.
+  const providerOptions = useMemo(() => providersFor("translation"), [providersFor, providers]);
+  const selectedProvider = providerOptions.find((p) => p.id === provider) ?? null;
+
+  // First selection: follow the configured default once the registry loads.
   useEffect(() => {
-    let cancelled = false;
-    void getApiKeyMasked("gemini")
-      .then((masked) => {
-        if (!cancelled) setGeminiKeyConfigured(masked !== null);
-      })
-      .catch(() => {
-        if (!cancelled) setGeminiKeyConfigured(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (providerOptions.length === 0) return;
+    if (providerOptions.some((p) => p.id === provider)) return;
+    const def = defaultFor("translation");
+    setProvider(def && providerOptions.some((p) => p.id === def.id) ? def.id : providerOptions[0].id);
+  }, [providerOptions, provider, defaultFor]);
 
   // Follow the active project: fetch artifact paths + original video URL.
   useEffect(() => {
@@ -238,7 +235,7 @@ export default function AutomationPage({
       setWorkerBanner(true);
       return;
     }
-    if (provider === "gemini" && geminiKeyConfigured !== true) {
+    if (selectedProvider?.needs_key && !selectedProvider.api_key_configured) {
       setProviderBanner(true);
       return;
     }
@@ -349,8 +346,9 @@ export default function AutomationPage({
       {providerBanner && (
         <Banner title="Translation provider isn't configured">
           <p className="text-sm text-muted-foreground">
-            The Gemini provider needs an API key. Add one in Settings — keys are stored in the OS
-            credential vault, never in the database.
+            The {selectedProvider?.name ?? "selected"} provider needs an API key. Add one in
+            Settings → Providers — keys are stored in the OS credential vault, never in the
+            database.
           </p>
           <div className="flex gap-2">
             <Button size="sm" onClick={() => onNavigate("settings")}>
@@ -432,7 +430,7 @@ export default function AutomationPage({
           onTargetLanguageChange={setTargetLanguage}
           provider={provider}
           onProviderChange={setProvider}
-          geminiKeyConfigured={geminiKeyConfigured}
+          providerOptions={providerOptions}
           burnSubtitles={burnSubtitles}
           onBurnSubtitlesChange={setBurnSubtitles}
           watermark={watermark}
@@ -641,6 +639,7 @@ function CompletionView({
   onReprocess: () => void;
   onEdit: () => void;
 }) {
+  const { providers } = useProviders();
   const [showResult, setShowResult] = useState(true);
   const resultUrl = artifacts ? toMediaUrl(artifacts.renderedVideo) : null;
   const sourceUrl = project ? toMediaUrl(project.source_video_path) : null;
@@ -716,7 +715,9 @@ function CompletionView({
         <div>
           <p className="uppercase tracking-wide text-muted-foreground/70">Provider</p>
           <p className="text-foreground">
-            {PROVIDERS.find((p) => p.id === plan.options?.provider)?.label ?? "—"}
+            {providers.find((p) => p.id === plan.options?.provider)?.name ??
+              plan.options?.provider ??
+              "—"}
           </p>
         </div>
         <div>
@@ -832,7 +833,7 @@ function SettingsPanel({
   onTargetLanguageChange,
   provider,
   onProviderChange,
-  geminiKeyConfigured,
+  providerOptions,
   burnSubtitles,
   onBurnSubtitlesChange,
   watermark,
@@ -846,7 +847,7 @@ function SettingsPanel({
   onTargetLanguageChange: (v: string) => void;
   provider: string;
   onProviderChange: (v: string) => void;
-  geminiKeyConfigured: boolean | null;
+  providerOptions: ProviderView[];
   burnSubtitles: boolean;
   onBurnSubtitlesChange: (v: boolean) => void;
   watermark: WatermarkConfigType;
@@ -990,32 +991,40 @@ function SettingsPanel({
           <div className="space-y-4 border-t border-border p-3">
             <Setting
               label="Translation provider"
-              hint={
-                provider === "gemini"
-                  ? geminiKeyConfigured === true
-                    ? "API key configured"
-                    : geminiKeyConfigured === false
-                      ? "No API key stored — needs configuration"
-                      : "Checking key…"
-                  : undefined
-              }
+              hint={(() => {
+                const sel = providerOptions.find((p) => p.id === provider);
+                if (!sel) return undefined;
+                if (!sel.needs_key) {
+                  return sel.provider_kind === "free"
+                    ? "Local / free — no API key"
+                    : undefined;
+                }
+                return sel.api_key_configured
+                  ? "API key configured"
+                  : "No API key stored — needs configuration";
+              })()}
             >
               <select
+                data-role="translation-provider"
                 className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                 value={provider}
                 onChange={(e) => onProviderChange(e.target.value)}
               >
-                {PROVIDERS.map((p) => (
+                {providerOptions.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.label}
+                    {p.name}
+                    {p.provider_kind === "free" ? " (local, free)" : ""}
                   </option>
                 ))}
               </select>
-              {provider === "gemini" && geminiKeyConfigured === false && (
-                <Button size="sm" variant="outline" className="mt-1.5" onClick={onOpenSettings}>
-                  Configure API key
-                </Button>
-              )}
+              {(() => {
+                const sel = providerOptions.find((p) => p.id === provider);
+                return sel?.needs_key && !sel.api_key_configured ? (
+                  <Button size="sm" variant="outline" className="mt-1.5" onClick={onOpenSettings}>
+                    Configure API key
+                  </Button>
+                ) : null;
+              })()}
             </Setting>
 
             <div className="space-y-1.5">

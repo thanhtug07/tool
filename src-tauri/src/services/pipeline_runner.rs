@@ -41,6 +41,7 @@ use crate::security::secret_store::SecretStore;
 use crate::services::dictionary_service::DictionaryService;
 use crate::services::job_service::{JobRunContext, JobRunError, JobRunner};
 use crate::services::project_service::ProjectService;
+use crate::services::provider_service::ProviderService;
 use crate::services::settings_service::SettingsService;
 use crate::services::subtitle_service::{CueInput, SubtitleService};
 use crate::services::worker_client::{
@@ -95,9 +96,6 @@ pub fn artifact_paths(project_dir: &Path) -> ArtifactPaths {
             .join(format!("{DEFAULT_RENDER_NAME}.mp4")),
     }
 }
-/// Providers that never need a credential (worker registry: mock/local).
-const KEYLESS_PROVIDERS: &[&str] = &["mock", "local"];
-
 /// Where the runner gets its authenticated worker client for a job run.
 ///
 /// `WorkerManager` is the production source; tests inject a stub pointing at a
@@ -120,6 +118,7 @@ pub struct PipelineRunner {
     secrets: Arc<SecretStore>,
     subtitles: Arc<SubtitleService>,
     dictionary: Arc<DictionaryService>,
+    providers: Arc<ProviderService>,
 }
 
 impl PipelineRunner {
@@ -130,6 +129,7 @@ impl PipelineRunner {
         secrets: Arc<SecretStore>,
         subtitles: Arc<SubtitleService>,
         dictionary: Arc<DictionaryService>,
+        providers: Arc<ProviderService>,
     ) -> Self {
         Self {
             workers,
@@ -138,6 +138,7 @@ impl PipelineRunner {
             secrets,
             subtitles,
             dictionary,
+            providers,
         }
     }
 
@@ -421,59 +422,55 @@ impl PipelineRunner {
         let p = &job.params;
         let transcript: Transcript =
             self.read_json(&job.project_id, ARTIFACT_TRANSCRIPT, "transcribe")?;
-        let provider = param_str(p, "provider")
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "mock".to_string());
+        // Provider Management: the provider is resolved from the registry —
+        // an explicit id from the job params, or the capability default
+        // (seeded to FREE) when absent. No hard-coded defaults here.
+        let provider_param = param_str(p, "provider").filter(|v| !v.trim().is_empty());
+        let resolved = self
+            .providers
+            .resolve_translation(provider_param.as_deref())
+            .map_err(map_db)?;
         let target_language = param_str(p, "target_language").ok_or_else(|| {
             permanent(
                 "E_PARAMS_INVALID",
                 "translate job is missing `target_language`",
             )
         })?;
-        let model = if provider == "gemini" {
-            self.setting_or(p, "model", "api.gemini.model", "gemini-2.5-flash-lite")?
-        } else {
-            param_str(p, "model")
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or_else(|| "gemini-2.5-flash-lite".to_string())
-        };
+        let model = param_str(p, "model")
+            .filter(|v| !v.trim().is_empty())
+            .or(resolved.model.clone())
+            .unwrap_or_else(|| "gemini-2.5-flash-lite".to_string());
 
         // Secrets come exclusively from the OS credential vault — never from
-        // params, files, or logs.
-        let api_key = if KEYLESS_PROVIDERS.contains(&provider.as_str()) {
-            None
-        } else {
-            match self.secrets.get_api_key(&provider) {
+        // params, files, or logs. Only providers whose worker kind needs a
+        // credential (e.g. gemini) require one.
+        let api_key = if resolved.needs_key {
+            match self.secrets.get_api_key(&resolved.id) {
                 Ok(Some(key)) => Some(key),
                 Ok(None) => {
                     return Err(permanent(
                         "E_API_KEY_MISSING",
                         format!(
-                            "no API key stored for provider `{provider}` — add one in Settings → API keys"
+                            "no API key stored for provider `{}` — add one in Settings → Providers",
+                            resolved.id
                         ),
                     ))
                 }
                 Err(e) => {
                     return Err(permanent(
                         "E_API_KEY_MISSING",
-                        format!("cannot read the stored API key for `{provider}`: {e}"),
+                        format!("cannot read the stored API key for `{}`: {e}", resolved.id),
                     ))
                 }
             }
+        } else {
+            None
         };
 
-        // Provider-specific non-secret config from Settings.
-        let mut provider_config = serde_json::Map::new();
-        let base_url_key = if provider == "local" {
-            "api.local.base_url"
-        } else {
-            "api.gemini.base_url"
-        };
-        if let Ok(Value::String(base)) = self.settings.get(base_url_key) {
-            if !base.trim().is_empty() {
-                provider_config.insert("base_url".into(), Value::String(base));
-            }
-        }
+        // Provider-specific non-secret config from the provider row (model /
+        // base URL / local server), mapped to the worker's expectations.
+        let provider_config = self.providers.translation_config(&resolved);
+        let provider = resolved.kind.clone();
 
         // Project glossary → translation memory (term → translation).
         let mut glossary = serde_json::Map::new();
@@ -860,6 +857,7 @@ mod tests {
         secrets: Arc<SecretStore>,
         subtitles: Arc<SubtitleService>,
         dictionary: Arc<DictionaryService>,
+        providers: Arc<ProviderService>,
         dir: PathBuf,
     }
 
@@ -877,6 +875,7 @@ mod tests {
             secrets: Arc::new(SecretStore::new()),
             subtitles: Arc::new(SubtitleService::open(dir.clone())),
             dictionary: Arc::new(DictionaryService::open(dir.clone())),
+            providers: Arc::new(ProviderService::open(dir.clone())),
             dir,
         }
     }
@@ -918,6 +917,7 @@ mod tests {
             h.secrets.clone(),
             h.subtitles.clone(),
             h.dictionary.clone(),
+            h.providers.clone(),
         )
     }
 
@@ -1010,6 +1010,65 @@ mod tests {
             translation.blocks[0].translations[0].translated_text,
             "你好"
         );
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn translate_without_provider_param_resolves_registry_default() {
+        // Provider Management: no `provider` param → the capability default
+        // (seeded FREE) is resolved from the registry — no hard-coded fallback.
+        let h = harness();
+        let pid = seed_project(&h, "translate-default");
+        let project = h.dir.join("projects").join(&pid);
+        fs::create_dir_all(project.join("cache")).expect("cache dir");
+        fs::write(project.join(ARTIFACT_TRANSCRIPT), TRANSCRIPT_BODY).expect("seed transcript");
+
+        let server = CannedServer {
+            routes: &[("/v1/translate", 200, TRANSLATION_BODY)],
+            delay_ms: 0,
+            seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let port = server.spawn();
+        let runner = runner(&h, port);
+        let j = job(
+            &pid,
+            JobType::Translate,
+            serde_json::json!({"target_language": "zh"}),
+        );
+        run(&j, &runner).expect("default provider resolves and translates");
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn translate_with_disabled_provider_fails_hard() {
+        let h = harness();
+        let pid = seed_project(&h, "translate-disabled");
+        let project = h.dir.join("projects").join(&pid);
+        fs::create_dir_all(project.join("cache")).expect("cache dir");
+        fs::write(project.join(ARTIFACT_TRANSCRIPT), TRANSCRIPT_BODY).expect("seed transcript");
+
+        // Disable the seeded gemini row, then ask for it explicitly: the
+        // runner must refuse instead of silently using another provider.
+        h.providers
+            .set_enabled("gemini", false)
+            .expect("disable gemini");
+        let runner = runner(&h, 1);
+        let j = job(
+            &pid,
+            JobType::Translate,
+            serde_json::json!({"provider": "gemini", "target_language": "zh"}),
+        );
+        let err = run(&j, &runner).expect_err("disabled provider must fail");
+        match err {
+            JobRunError::Permanent { code, message } => {
+                assert_eq!(code, "E_DB");
+                assert!(
+                    message.contains("disabled"),
+                    "message should explain the provider is disabled: {message}"
+                );
+            }
+            other => panic!("expected permanent error, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&h.dir);
     }
 
@@ -1166,6 +1225,7 @@ mod tests {
             h.secrets.clone(),
             h.subtitles.clone(),
             h.dictionary.clone(),
+            h.providers.clone(),
         );
         let j = job(&pid, JobType::Transcribe, serde_json::json!({}));
         let err = run(&j, &runner).expect_err("no client must fail");

@@ -51,22 +51,32 @@ dịch video có phụ đề, và xử lý lỗi thường gặp.
 
 ---
 
-## 3. Cấu hình dịch máy (API key)
+## 3. Cấu hình dịch máy (Provider Management)
 
 Ứng dụng transcribe bằng model chạy local (miễn phí, không upload video). Phần
-**dịch** ("translation") có thể dùng provider ngoài:
+**dịch** ("translation") dùng **Provider Management** — provider được quản lý
+trong **Settings → Providers** dưới dạng cấu hình động (không hard-code):
 
 | Provider | Cần gì? | Ghi chú |
 | --- | --- | --- |
-| **gemini** | Google AI API key | Được hỗ trợ chính thức ở 0.1.0; tạo key tại Google AI Studio. |
-| **openai** | OpenAI API key | Có trong danh sách nhưng mang nhãn *(post-MVP)* — chưa hoàn thiện ở 0.1.0. Cú pháp `api.openai.*` dành cho bản sau. |
-| **local** | Không cần gì | Đang phát triển; chưa có trong màn hình cấu hình 0.1.0. |
+| **FREE** | Không cần gì (mặc định) | Provider built-in, không thể xóa/vô hiệu hóa. STT chạy local (faster-whisper). Dịch dùng local LLM server — cấu hình trong mục Configure nếu muốn dịch offline. |
+| **gemini** | Google AI API key | Cloud, chất lượng cao nhất. Tạo key tại Google AI Studio, dán vào form Add/Configure provider. |
+| **local** | Không cần key | llama.cpp / OpenAI-compatible server (cần base URL hoặc model path). |
+| **mock** | Không cần gì | Chỉ dùng để test ngoại tuyến (đầu ra giả — KHÔNG phải bản dịch thật). Tùy chọn tường minh, không bao giờ là mặc định. |
 
-Cú pháp (dạng thuần — ứng dụng sẽ có màn hình Settings để nhập):
+Thao tác trong **Settings → Providers**:
 
-- Trong **Settings** của ứng dụng, chọn provider và dán API key.
-- Key được lưu trong **Windows Credential Manager** (không lưu trong file, không
-  hiển thị lại đầy đủ sau khi lưu — chỉ hiện dạng che như `AIz****wxyz`).
+- **Add Provider** — tạo provider mới (tên, loại, capabilities, base URL, model, cấu hình JSON).
+- **Save & Test** — lưu và kiểm tra kết nối ngay; API key chỉ được lưu nếu test **thành công**.
+- **Test** — kiểm tra kết nối từng provider (ghi nhận "Last test: success/failure").
+- **Set Default** — chọn provider mặc định cho từng capability (Translation). Mỗi capability có đúng một default.
+- **Enable / Disable** — bật/tắt provider (FREE không thể tắt).
+- **Delete** — xóa provider tùy chỉnh; nếu provider đang là default thì default tự động fallback về **FREE**. FREE không thể xóa.
+- Key được lưu trong **Windows Credential Manager** (không lưu trong database, không
+  hiển thị lại đầy đủ sau khi lưu — chỉ hiện dạng che như `AIz****wxyz` hoặc trạng thái
+  "API key configured").
+
+Automation (và Projects) lấy danh sách provider từ registry — không hard-code.
 
 > Quyền riêng tư: API key chỉ được gửi tới provider bạn chọn cho hành động **dịch**.
 > Video/audio KHÔNG được upload — transcribe chạy 100% local.

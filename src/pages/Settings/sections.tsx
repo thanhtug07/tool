@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { ApiProvider, SettingsSnapshot } from "@/api/settings";
+import type { SettingsSnapshot } from "@/api/settings";
 import type { WorkerStateInfo } from "@/api/worker";
 import { workerStateLabel } from "@/components/layout/Sidebar";
 
@@ -101,108 +101,6 @@ export function GeneralSection() {
       <InfoRow label="Interface language" value="English (fixed in this build)" />
       <InfoRow label="Theme" value="Dark (default)" />
       <InfoRow label="Startup behavior" value="Open on Dashboard" />
-    </SettingsSection>
-  );
-}
-
-// ---- AI PROVIDERS ----------------------------------------------------------
-
-export function ProvidersSection({
-  provider,
-  maskedKey,
-  baseUrl,
-  keyDraft,
-  saving,
-  onProviderChange,
-  onBaseUrlChange,
-  onSaveBaseUrl,
-  onKeyDraftChange,
-  onSaveKey,
-  onDeleteKey,
-}: {
-  provider: ApiProvider;
-  maskedKey: string | null;
-  baseUrl: string;
-  keyDraft: string;
-  saving: boolean;
-  onProviderChange: (provider: ApiProvider) => void;
-  onBaseUrlChange: (value: string) => void;
-  onSaveBaseUrl: () => void;
-  onKeyDraftChange: (value: string) => void;
-  onSaveKey: () => void;
-  onDeleteKey: () => void;
-}) {
-  return (
-    <SettingsSection
-      id="providers-subheading"
-      title="AI providers"
-      description="API keys are stored in the Windows Credential Manager — never in the database."
-    >
-      <ControlRow label="Provider">
-        <select
-          data-role="api-provider"
-          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-          value={provider}
-          onChange={(event) => onProviderChange(event.target.value as ApiProvider)}
-        >
-          <option value="gemini">Gemini (translation, MVP)</option>
-          <option value="local">Local LLM (llama.cpp / OpenAI-compatible)</option>
-          <option value="openai">OpenAI (post-MVP)</option>
-        </select>
-      </ControlRow>
-      <ControlRow label="API key">
-        <input
-          data-role="api-key-input"
-          type="password"
-          className="w-72 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-          placeholder={maskedKey ? `${maskedKey} (stored)` : "Paste key…"}
-          value={keyDraft}
-          onChange={(event) => onKeyDraftChange(event.target.value)}
-        />
-        <button
-          type="button"
-          data-role="api-key-save"
-          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
-          disabled={saving || keyDraft.trim().length === 0}
-          onClick={onSaveKey}
-        >
-          {saving ? "Saving…" : "Save key"}
-        </button>
-        {maskedKey && (
-          <button
-            type="button"
-            data-role="api-key-delete"
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
-            onClick={onDeleteKey}
-          >
-            Remove
-          </button>
-        )}
-      </ControlRow>
-      {maskedKey ? (
-        <InfoRow label="Connection" value={`Key stored (${maskedKey})`} />
-      ) : (
-        <InfoRow label="Connection" value="No key stored — provider unavailable" />
-      )}
-      <ControlRow label="Base URL">
-        <input
-          data-role="api-base-url"
-          className="w-72 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-          placeholder="(provider default)"
-          value={baseUrl}
-          onChange={(event) => onBaseUrlChange(event.target.value)}
-        />
-        <button
-          type="button"
-          data-role="api-base-url-save"
-          className="rounded-md border border-border px-3 py-1.5 text-sm"
-          onClick={onSaveBaseUrl}
-        >
-          Save
-        </button>
-      </ControlRow>
-      <InfoRow label="STT provider" value="faster-whisper (local — no key required)" />
-      <InfoRow label="TTS provider" value="Not available in this build" />
     </SettingsSection>
   );
 }

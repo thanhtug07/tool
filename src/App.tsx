@@ -8,6 +8,7 @@ import AutomationPage from "@/pages/Automation";
 import ToolsPage, { type ToolRequest } from "@/pages/Tools";
 import SettingsPage from "@/pages/Settings";
 import { JobsProvider } from "@/stores/jobs";
+import { ProvidersProvider } from "@/stores/providers";
 
 export default function App() {
   const [active, setActive] = useState<NavKey>("dashboard");
@@ -26,7 +27,8 @@ export default function App() {
 
   return (
     <JobsProvider>
-      <div className="flex h-screen overflow-hidden">
+      <ProvidersProvider>
+        <div className="flex h-screen overflow-hidden">
         <Sidebar active={active} onNavigate={setActive} />
         <main className="flex-1 overflow-y-auto p-6">
           {active === "dashboard" && (
@@ -50,8 +52,9 @@ export default function App() {
           )}
           {active === "settings" && <SettingsPage />}
         </main>
-        <JobFailBanner />
-      </div>
+          <JobFailBanner />
+        </div>
+      </ProvidersProvider>
     </JobsProvider>
   );
 }

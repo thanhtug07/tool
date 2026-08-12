@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { onJobStatus } from "@/api/events";
@@ -7,6 +7,7 @@ import { cancelJob, listJobs, retryJob, submitJob, type Job, type JobStatus } fr
 import { getArtifactPaths, type ArtifactPaths } from "@/api/pipeline";
 import { createProject, deleteProject, listProjects, type Project } from "@/api/project";
 import { Button } from "@/components/ui/button";
+import { useProviders } from "@/stores/providers";
 
 /** Ordered pipeline stages (MASTER_PLAN §17.1 job types). */
 export const PIPELINE_STAGES = [
@@ -88,12 +89,29 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
   const [artifacts, setArtifacts] = useState<ArtifactPaths | null>(null);
   const [name, setName] = useState("");
   const [videoPath, setVideoPath] = useState("");
-  // Real provider by default; "mock" is an explicit opt-in (never silent).
-  const [provider, setProvider] = useState("gemini");
+  // Provider Management: the provider comes from the registry — never a
+  // hard-coded list. Seeded to FREE; once the registry loads, the selection
+  // follows the configured default translation provider.
+  const [provider, setProvider] = useState("free");
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { providersFor, defaultFor, providers } = useProviders();
+  const providerOptions = useMemo(
+    () => providersFor("translation"),
+    [providersFor, providers],
+  );
+
+  // First selection: follow the configured default once the registry loads.
+  useEffect(() => {
+    if (providerOptions.length === 0) return;
+    if (providerOptions.some((p) => p.id === provider)) return;
+    const def = defaultFor("translation");
+    setProvider(
+      def && providerOptions.some((p) => p.id === def.id) ? def.id : providerOptions[0].id,
+    );
+  }, [providerOptions, provider, defaultFor]);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -370,13 +388,17 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
             <label className="flex flex-col gap-1 text-sm">
               <span>Provider</span>
               <select
+                data-role="translation-provider"
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
                 className="h-9 rounded-md border border-input bg-background px-2 text-sm"
               >
-                <option value="mock">Mock (offline)</option>
-                <option value="gemini">Gemini (cloud, needs API key)</option>
-                <option value="local">Local LLM</option>
+                {providerOptions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                    {p.provider_kind === "free" ? " (local, free)" : ""}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">

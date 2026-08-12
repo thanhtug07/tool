@@ -176,3 +176,26 @@ Outstanding (unchanged, owner-side):
 - Clean-VM first-run model download — needs a fresh OS.
 - NVENC encode session — needs a desktop GPU (libx264 fallback verified).
 - The user's real ~40-minute video test — the definitive scale check.
+
+---
+
+## Provider Management (dynamic provider registry)
+
+Implemented `feat: add dynamic provider management`:
+
+- Migration v8: `providers` + `provider_defaults` tables; seeded **FREE** (default,
+  immutable) + gemini/local/mock builtins.
+- Rust `ProviderService` (CRUD, capability-level defaults, delete-default → FREE
+  fallback, resolve_translation) + `providers.*` IPC commands.
+- SecretStore now accepts dynamic provider ids (shape-validated) — keys stay in
+  the OS credential vault, never in SQLite, never returned to the UI.
+- Worker: `free` kind in `build_translation_provider` + `POST /v1/providers/test`
+  (Save & Test stores a key only on success).
+- PipelineRunner resolves the translate provider from the registry (no
+  hard-coded fallback); disabled/missing providers fail explicitly.
+- UI: Settings → Providers (cards, add/edit form, test, set default,
+  enable/disable, delete confirm); Automation/Projects provider dropdowns and
+  the Dashboard provider status are registry-driven.
+- Tests: worker **601 passed** (12 new provider tests), Rust **178 passed**
+  (9 new provider/migration/runner tests), frontend **156 passed**
+  (4 new store tests), golden E2E **16/16**, production build **PASS**.

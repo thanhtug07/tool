@@ -149,6 +149,24 @@ pub struct ExportSubtitleResponse {
     pub path: String,
 }
 
+/// Request body for `POST /v1/providers/test` (Provider Management).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderTestRequest {
+    pub provider_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_config: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+/// Result of `POST /v1/providers/test`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderTestResult {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub detail: String,
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline stage contracts (RELEASE-P0). Mirror worker/src/api/pipeline.py +
 // worker/src/api/schemas.py exactly; unknown fields are rejected by the worker
@@ -514,6 +532,30 @@ impl WorkerClient {
             &[("Authorization", format!("Bearer {}", self.token))],
             PROGRESS_READ_TIMEOUT,
         )?;
+        parse_json_response(status, body)
+    }
+
+    /// Probe whether a provider kind is reachable/configured (Provider test).
+    ///
+    /// The worker validates credentials/endpoints against the *live* provider
+    /// (or the local server for free/local kinds); the Rust core records the
+    /// outcome on the provider row.
+    pub fn test_provider(
+        &self,
+        provider_kind: &str,
+        config: &serde_json::Map<String, serde_json::Value>,
+        api_key: Option<&str>,
+    ) -> Result<ProviderTestResult, HttpError> {
+        let request = ProviderTestRequest {
+            provider_kind: provider_kind.to_string(),
+            provider_config: if config.is_empty() {
+                None
+            } else {
+                Some(config.clone())
+            },
+            api_key: api_key.map(str::to_string),
+        };
+        let (status, body) = self.post_json("/v1/providers/test", &request)?;
         parse_json_response(status, body)
     }
 

@@ -130,6 +130,20 @@ class SubtitleRequest(BaseModel):
     job_id: str | None = None
 
 
+class ProviderTestRequest(BaseModel):
+    """One-shot provider connectivity test (Provider Management).
+
+    ``provider_kind`` is the worker registry kind (``free``/``gemini``/
+    ``local``/``mock``); ``provider_config`` carries the non-secret options
+    (base URL / model / model path). ``api_key`` is used ONLY for this call
+    and is never stored or logged.
+    """
+
+    provider_kind: str = Field(min_length=1)
+    provider_config: dict[str, str] | None = None
+    api_key: str | None = None
+
+
 class WatermarkTextRequest(BaseModel):
     text: str = Field(min_length=1)
     position: str = "bottom-right"
@@ -203,6 +217,24 @@ def build_translation_provider(name: str, config: dict[str, str] | None, api_key
         return LocalLLMProvider(
             model_path=config.get("model_path"),
             server_url=config.get("server_url"),
+            model=config.get("model"),
+        )
+    if name == "free":
+        # FREE = the first-class local/free provider: no API key, no cloud
+        # egress. Translation requires a local LLM server (llama.cpp /
+        # OpenAI-compatible) or a model file; otherwise the error is explicit
+        # — never a silent fallback to a fake provider.
+        server_url = config.get("server_url") or config.get("base_url")
+        model_path = config.get("model_path")
+        if not server_url and not model_path:
+            raise ProviderError(
+                "E_PROVIDER_UNAVAILABLE",
+                "FREE translation needs a local LLM server (llama.cpp / OpenAI-compatible). "
+                "Configure one in Settings → Providers, or choose a cloud provider.",
+            )
+        return LocalLLMProvider(
+            model_path=model_path,
+            server_url=server_url,
             model=config.get("model"),
         )
     raise ProviderError("E_PROVIDER_UNAVAILABLE", f"No translation provider named {name!r}.")
@@ -285,6 +317,102 @@ def translate(request: TranslateRequest) -> JSONResponse:
             blocks=blocks,
         ).model_dump()
     )
+
+
+@router.post("/v1/providers/test")
+def provider_test(request: ProviderTestRequest) -> JSONResponse:
+    """Probe whether a provider kind is reachable/configured (Provider test).
+
+    - ``mock`` always answers (offline deterministic test).
+    - ``gemini`` validates the key + model against the live API (auth errors
+      surface as ``E_API_AUTH``, missing key as ``E_API_KEY_MISSING``).
+    - ``local``/``free`` require a local llama-server URL or a model file and
+      probe the server health.
+
+    ``request.api_key`` is used only for this call — never stored, never
+    logged.
+    """
+    import time  # noqa: PLC0415
+
+    kind = request.provider_kind
+    config = request.provider_config or {}
+    started = time.monotonic()
+    try:
+        if kind == "mock":
+            detail = "Mock provider is always available (offline test)."
+        elif kind == "gemini":
+            from src.services.providers.translation.gemini_provider import (  # noqa: PLC0415
+                E_API_AUTH,
+                E_API_ERROR,
+                E_API_RATE_LIMIT,
+                GeminiProvider,
+                _AUTH_CODES,
+                _rest_code,
+            )
+
+            api_key = request.api_key
+            if not api_key:
+                return _error(
+                    "E_API_KEY_MISSING",
+                    "Gemini needs an API key to test.",
+                    http=status.HTTP_400_BAD_REQUEST,
+                )
+            provider = GeminiProvider(api_key=api_key, model=config.get("model"))
+            client = provider._resolve_client()  # E_PROVIDER_UNAVAILABLE when SDK missing
+            try:
+                client.models.get(provider.model_name)
+            except Exception as exc:  # noqa: BLE001 - classify every API failure
+                code = _rest_code(exc)
+                if code in _AUTH_CODES:
+                    raise ProviderError(
+                        E_API_AUTH, "Gemini authentication failed (invalid API key)."
+                    ) from exc
+                if code == 429:
+                    raise ProviderError(E_API_RATE_LIMIT, "Gemini rate limit hit.") from exc
+                raise ProviderError(
+                    E_API_ERROR, f"Gemini request failed (HTTP {code})."
+                ) from exc
+            detail = f"Connected — model {provider.model_name} reachable."
+        elif kind in ("local", "free"):
+            from src.services.providers.translation.local_llm_provider import _health_ok  # noqa: PLC0415
+
+            server_url = config.get("server_url") or config.get("base_url") or ""
+            model_path = config.get("model_path") or ""
+            if not server_url and not model_path:
+                return _error(
+                    "E_PROVIDER_UNAVAILABLE",
+                    "FREE/local translation needs a local LLM server URL or a model path — "
+                    "configure one in Settings → Providers.",
+                    http=status.HTTP_400_BAD_REQUEST,
+                )
+            if server_url:
+                if not _health_ok(server_url):
+                    return _error(
+                        "E_API_ERROR",
+                        f"Cannot reach the local LLM server at {server_url}.",
+                        http=status.HTTP_400_BAD_REQUEST,
+                    )
+                detail = f"Connected — local LLM server healthy at {server_url}."
+            else:
+                import os  # noqa: PLC0415
+
+                if not os.path.isfile(model_path):
+                    return _error(
+                        "E_LOCAL_LLM_START",
+                        f"Model file not found: {model_path}",
+                        http=status.HTTP_400_BAD_REQUEST,
+                    )
+                detail = f"Model file present: {model_path}"
+        else:
+            return _error(
+                "E_PROVIDER_UNAVAILABLE",
+                f"No provider kind named {kind!r}.",
+                http=status.HTTP_400_BAD_REQUEST,
+            )
+    except ProviderError as exc:
+        return _error(exc.code, exc.message, http=status.HTTP_400_BAD_REQUEST)
+    latency_ms = int((time.monotonic() - started) * 1000)
+    return JSONResponse({"ok": True, "latency_ms": latency_ms, "detail": detail})
 
 
 @router.post("/v1/subtitle")

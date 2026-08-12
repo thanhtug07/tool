@@ -218,6 +218,8 @@ value before the user's own real test.
 
 **READY FOR USER TO TEST REAL 40-MINUTE VIDEO**
 
-Reminder for the test: the provider dropdown now defaults to **Gemini** — add a
-Gemini API key in Settings first (or explicitly choose "Mock (offline)" if an
-offline run is intended). STT + rendering always run locally.
+Reminder for the test: since **Provider Management** landed, the translation
+provider defaults to **FREE** (Settings → Providers → Set Default). FREE is a
+local/free provider — for translation it needs a local LLM server configured
+(or pick **Gemini** and add its API key in Settings → Providers). STT +
+rendering always run locally.

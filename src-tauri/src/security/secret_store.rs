@@ -173,12 +173,23 @@ impl Default for SecretStore {
 
 fn validate_provider(provider: &str) -> Result<String, SecretStoreError> {
     if PROVIDERS.contains(&provider) {
-        Ok(provider.to_string())
-    } else {
-        Err(SecretStoreError::InvalidInput(format!(
-            "unknown provider {provider:?}"
-        )))
+        return Ok(provider.to_string());
     }
+    // Dynamic provider registry (Provider Management): custom providers get a
+    // vault entry keyed by their provider id. The id is shape-validated so
+    // attacker-controlled values can never reach the credential service as a
+    // service/user name: 1–64 chars, [A-Za-z0-9_-] only.
+    if provider.len() <= 64
+        && !provider.is_empty()
+        && provider
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Ok(provider.to_string());
+    }
+    Err(SecretStoreError::InvalidInput(format!(
+        "invalid provider id {provider:?} (1-64 chars, [A-Za-z0-9_-])"
+    )))
 }
 
 /// Mask a secret for display: first 3 chars + `****` + last 4 chars.
@@ -269,16 +280,34 @@ mod tests {
     }
 
     #[test]
-    fn unknown_provider_is_rejected() {
+    fn invalid_provider_ids_are_rejected_but_dynamic_ids_are_allowed() {
         let store = store();
+        // Path traversal / control chars must never reach the credential
+        // service as a service/user name.
         assert!(matches!(
             store.set_api_key("../../etc", "secret"),
             Err(SecretStoreError::InvalidInput(_))
         ));
         assert!(matches!(
-            store.has_api_key("bogus"),
+            store.set_api_key("bad id!", "secret"),
             Err(SecretStoreError::InvalidInput(_))
         ));
+        assert!(matches!(
+            store.set_api_key("", "secret"),
+            Err(SecretStoreError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            store.set_api_key(&"x".repeat(65), "secret"),
+            Err(SecretStoreError::InvalidInput(_))
+        ));
+        // The dynamic Provider Management registry may store keys for any
+        // shape-valid provider id (custom providers get a uuid slug).
+        store
+            .set_api_key("3f4e9c2a-1b2c-4d5e-8f90-a1b2c3d4e5f6", "secret")
+            .expect("dynamic id accepted");
+        assert!(store
+            .has_api_key("3f4e9c2a-1b2c-4d5e-8f90-a1b2c3d4e5f6")
+            .expect("has"));
     }
 
     #[test]

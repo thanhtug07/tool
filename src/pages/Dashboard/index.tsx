@@ -3,7 +3,7 @@ import { ArrowRight, ArrowUpRight, Plus, Wrench } from "lucide-react";
 
 import type { Job } from "@/api/job";
 import type { Project } from "@/api/project";
-import { getApiKeyMasked, getSettings, type SettingsSnapshot } from "@/api/settings";
+import { getSettings, type SettingsSnapshot } from "@/api/settings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
 import { StatusBadge, StatusDot, type StatusTone } from "@/components/ui/status";
@@ -11,6 +11,7 @@ import { fileBaseName, formatDateTime, formatDuration, formatProcessingTime } fr
 import { isToday, jobProcessingMs, jobTypeLabel, stageLabel, STATUS_TONES } from "@/lib/pipeline";
 import { isTauri } from "@/lib/env";
 import { useJobs } from "@/stores/jobs";
+import { useProviders } from "@/stores/providers";
 import { useWorker } from "@/stores/worker";
 import type { NavKey } from "@/components/layout/Sidebar";
 import { workerStateLabel } from "@/components/layout/Sidebar";
@@ -39,25 +40,16 @@ const FUTURE_LINES = ["Voice generation", "Audio mixing", "Logo removal"] as con
 export default function DashboardPage({ onNavigate, onOpenProject }: DashboardPageProps) {
   const { jobs, projects, activeJob } = useJobs();
   const { info, hardware } = useWorker();
+  const { providers, defaultFor } = useProviders();
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
-  const [geminiKey, setGeminiKey] = useState<boolean>(false);
-  const [localConfigured, setLocalConfigured] = useState<boolean>(false);
 
-  // Real provider state (masked reads only — the secret never reaches the UI).
   useEffect(() => {
     if (!isTauri()) return;
     let cancelled = false;
     void (async () => {
       try {
-        const [snapshot, geminiMasked, localMasked] = await Promise.all([
-          getSettings(),
-          getApiKeyMasked("gemini").catch(() => null),
-          getApiKeyMasked("local").catch(() => null),
-        ]);
-        if (cancelled) return;
-        setSettings(snapshot);
-        setGeminiKey(geminiMasked !== null);
-        setLocalConfigured(localMasked !== null || snapshot["api.local.base_url"].length > 0);
+        const snapshot = await getSettings();
+        if (!cancelled) setSettings(snapshot);
       } catch {
         if (!cancelled) setSettings(null);
       }
@@ -81,13 +73,20 @@ export default function DashboardPage({ onNavigate, onOpenProject }: DashboardPa
   }, [projects]);
 
   const providerStatus = useMemo(() => {
-    if (geminiKey && localConfigured) {
-      return { label: "Gemini + Local LLM", tone: "ok" as StatusTone };
+    // Provider Management: status comes from the registry, never hard-coded.
+    const translationProviders = providers.filter(
+      (p) => p.enabled && p.capabilities.includes("translation"),
+    );
+    if (translationProviders.length === 0) {
+      return { label: "No translation provider enabled", tone: "error" as StatusTone };
     }
-    if (geminiKey) return { label: "Gemini key stored", tone: "ok" as StatusTone };
-    if (localConfigured) return { label: "Local LLM URL set", tone: "ok" as StatusTone };
-    return { label: "Mock (offline)", tone: "muted" as StatusTone };
-  }, [geminiKey, localConfigured]);
+    const def = defaultFor("translation") ?? translationProviders[0];
+    if (def.needs_key && !def.api_key_configured) {
+      return { label: `${def.name} — key missing`, tone: "error" as StatusTone };
+    }
+    const extra = translationProviders.length > 1 ? ` +${translationProviders.length - 1} more` : "";
+    return { label: `${def.name}${extra}`, tone: "ok" as StatusTone };
+  }, [providers, defaultFor]);
 
   return (
     <section aria-labelledby="dashboard-heading" className="mx-auto max-w-6xl space-y-5">

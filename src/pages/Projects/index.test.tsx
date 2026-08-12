@@ -39,6 +39,7 @@ vi.mock("@/api/export", () => ({
   exportSubtitles: vi.fn(),
 }));
 
+import { ProvidersProvider } from "@/stores/providers";
 import {
   buildStageParams,
   canRunStage,
@@ -125,8 +126,16 @@ describe("pipeline helpers (pure)", () => {
 });
 
 describe("ProjectsPage (unit — mocked bridge, no Tauri IPC)", () => {
+  function renderPage() {
+    return renderToStaticMarkup(
+      <ProvidersProvider>
+        <ProjectsPage />
+      </ProvidersProvider>,
+    );
+  }
+
   it("renders the import form and empty project list", () => {
-    const html = renderToStaticMarkup(<ProjectsPage />);
+    const html = renderPage();
     expect(html).toContain("Projects");
     expect(html).toContain("New project");
     expect(html).toContain("Browse…");
@@ -135,7 +144,7 @@ describe("ProjectsPage (unit — mocked bridge, no Tauri IPC)", () => {
   });
 
   it("renders no pipeline panel without a selected project", () => {
-    const html = renderToStaticMarkup(<ProjectsPage />);
+    const html = renderPage();
     expect(html).not.toContain("Run Transcribe");
   });
 });

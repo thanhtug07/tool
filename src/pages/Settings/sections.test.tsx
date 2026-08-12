@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SettingsSnapshot } from "@/api/settings";
-import { PrivacySection, ProcessingSection, ProvidersSection, StorageSection } from "./sections";
+import { ToastProvider } from "@/components/toast";
+import { ProvidersProvider } from "@/stores/providers";
+import { ProvidersPanel } from "./ProvidersPanel";
+import { PrivacySection, ProcessingSection, StorageSection } from "./sections";
 
 const SETTINGS: SettingsSnapshot = {
   "ai.model": "large-v3",
@@ -40,69 +43,41 @@ describe("ProcessingSection", () => {
   });
 });
 
-describe("ProvidersSection", () => {
-  it("shows a masked stored key and never the full secret", () => {
-    const html = renderToStaticMarkup(
-      <ProvidersSection
-        provider="gemini"
-        maskedKey="AIz****wxyz"
-        baseUrl=""
-        keyDraft=""
-        saving={false}
-        onProviderChange={() => {}}
-        onBaseUrlChange={() => {}}
-        onSaveBaseUrl={() => {}}
-        onKeyDraftChange={() => {}}
-        onSaveKey={() => {}}
-        onDeleteKey={() => {}}
-      />,
+describe("ProvidersPanel", () => {
+  function renderPanel() {
+    return renderToStaticMarkup(
+      <ToastProvider>
+        <ProvidersProvider>
+          <ProvidersPanel />
+        </ProvidersProvider>
+      </ToastProvider>,
     );
-    expect(html).toContain("AIz****wxyz");
-    expect(html).toContain('data-role="api-key-input"');
-    expect(html).toContain('data-role="api-key-delete"');
-    // The middle of the secret must not appear anywhere.
-    expect(html).not.toContain("abcdefghijklmn");
+  }
+
+  it("shows FREE as the default translation provider with its capabilities", () => {
+    const html = renderPanel();
+    expect(html).toContain('data-role="provider-card-free"');
+    expect(html).toContain("FREE");
+    expect(html).toContain("Default");
+    expect(html).toContain("Capabilities: Translation · STT");
+    expect(html).toContain('data-role="default-translation-provider"');
   });
 
-  it("disables save when the key draft is empty", () => {
-    const html = renderToStaticMarkup(
-      <ProvidersSection
-        provider="gemini"
-        maskedKey={null}
-        baseUrl=""
-        keyDraft=""
-        saving={false}
-        onProviderChange={() => {}}
-        onBaseUrlChange={() => {}}
-        onSaveBaseUrl={() => {}}
-        onKeyDraftChange={() => {}}
-        onSaveKey={() => {}}
-        onDeleteKey={() => {}}
-      />,
-    );
-    expect(html.match(/data-role="api-key-save"[^>]*disabled=""/g) ?? []).toHaveLength(1);
-    expect(html).not.toContain('data-role="api-key-delete"');
+  it("never offers a Delete button on FREE and hides its enable toggle", () => {
+    const html = renderPanel();
+    // Only the FREE card section: no Delete / Disable buttons on it.
+    const freeCard = html.slice(html.indexOf('data-role="provider-card-free"'));
+    const nextCard = freeCard.indexOf('data-role="provider-card-');
+    const slice = nextCard === -1 ? freeCard : freeCard.slice(0, nextCard);
+    expect(slice).not.toContain("Delete");
+    expect(slice).not.toContain("Disable");
+    // Other providers (gemini/local/mock) do have delete + toggle affordances.
+    expect(html).toContain("Delete");
   });
 
-  it("offers the MVP providers", () => {
-    const html = renderToStaticMarkup(
-      <ProvidersSection
-        provider="gemini"
-        maskedKey={null}
-        baseUrl=""
-        keyDraft=""
-        saving={false}
-        onProviderChange={() => {}}
-        onBaseUrlChange={() => {}}
-        onSaveBaseUrl={() => {}}
-        onKeyDraftChange={() => {}}
-        onSaveKey={() => {}}
-        onDeleteKey={() => {}}
-      />,
-    );
-    expect(html).toContain("Gemini (translation, MVP)");
-    expect(html).toContain("Local LLM");
-    expect(html).toContain("OpenAI (post-MVP)");
+  it("exposes Add Provider and Save & Test entry points", () => {
+    const html = renderPanel();
+    expect(html).toContain('data-role="add-provider"');
   });
 });
 

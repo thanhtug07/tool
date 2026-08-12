@@ -25,6 +25,7 @@ use services::hardware_probe::SystemInfo;
 use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig};
 use services::pipeline_runner::PipelineRunner;
 use services::project_service::ProjectService;
+use services::provider_service::ProviderService;
 use services::settings_service::SettingsService;
 use services::subtitle_service::SubtitleService;
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
@@ -89,6 +90,14 @@ pub fn run() {
             commands::settings::delete_api_key,
             commands::settings::get_all,
             commands::settings::set,
+            commands::provider::list_providers,
+            commands::provider::get_provider,
+            commands::provider::create_provider,
+            commands::provider::update_provider,
+            commands::provider::delete_provider,
+            commands::provider::set_provider_default,
+            commands::provider::set_provider_enabled,
+            commands::provider::test_provider,
         ])
         .setup(|app| {
             // Release-mode packaging (MASTER_PLAN §32): when the bundled
@@ -127,6 +136,7 @@ pub fn run() {
             let secrets = Arc::new(SecretStore::new());
             let subtitles = Arc::new(SubtitleService::open(data_dir.clone()));
             let dictionary = Arc::new(DictionaryService::open(data_dir.clone()));
+            let providers = Arc::new(ProviderService::open(data_dir.clone()));
             let cache = Arc::new(CacheService::open(
                 data_dir.clone(),
                 CacheServiceConfig::default(),
@@ -145,6 +155,7 @@ pub fn run() {
                     secrets.clone(),
                     subtitles.clone(),
                     dictionary.clone(),
+                    providers.clone(),
                 )),
                 Arc::new(AppEventSink {
                     app: app.handle().clone(),
@@ -157,6 +168,7 @@ pub fn run() {
             app.manage(secrets);
             app.manage(subtitles);
             app.manage(dictionary);
+            app.manage(providers);
             app.manage(cache);
             Ok(())
         })
