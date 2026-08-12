@@ -1,7 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { isTauri } from "@/lib/env";
-import type { JobStatusEvent } from "./job";
+import type { JobLogEvent, JobStatusEvent } from "./job";
 
 /**
  * Subscribe to `job:status` events emitted by the Rust JobService.
@@ -15,4 +15,15 @@ export function onJobStatus(handler: (event: JobStatusEvent) => void): Promise<U
     return Promise.resolve(() => {});
   }
   return listen<JobStatusEvent>("job:status", (event) => handler(event.payload));
+}
+
+/**
+ * Subscribe to `job:log` events (live-log console lines) emitted by the Rust
+ * JobService / pipeline runner. No-op outside the Tauri runtime.
+ */
+export function onJobLog(handler: (event: JobLogEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(() => {});
+  }
+  return listen<JobLogEvent>("job:log", (event) => handler(event.payload));
 }

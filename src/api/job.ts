@@ -26,6 +26,13 @@ export type JobStatusEvent = {
   error: { code: string; message: string } | null;
 };
 
+/** `job:log` event payload — a live-log console line. */
+export type JobLogEvent = {
+  jobId: string;
+  level: "info" | "success" | "warn" | "error";
+  message: string;
+};
+
 export function getJob(id: string): Promise<Job> {
   return safeInvoke("job.get", { id });
 }

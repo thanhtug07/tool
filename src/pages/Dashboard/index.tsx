@@ -139,7 +139,7 @@ export default function DashboardPage({ onNavigate, onOpenProject }: DashboardPa
           <StatusCard title="AI providers" tone={providerStatus.tone}>
             <p className="text-sm font-medium">{providerStatus.label}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              STT: faster-whisper (local) · TTS: not in this build
+              STT: faster-whisper (local) · TTS: edge-tts / piper (local)
             </p>
           </StatusCard>
 

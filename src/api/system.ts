@@ -21,3 +21,11 @@ export type HardwareProfile = {
 export function getHardware(): Promise<HardwareProfile> {
   return safeInvoke("system.hardware");
 }
+
+/**
+ * Reveal a file/folder in the OS file manager (Explorer on Windows) — the
+ * Automation live-log "Open Output" / "Open Folder" actions.
+ */
+export function revealInFileManager(path: string): Promise<void> {
+  return safeInvoke("system.reveal", { path });
+}

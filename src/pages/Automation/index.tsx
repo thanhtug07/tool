@@ -52,6 +52,7 @@ import {
   type StageKey,
   type DerivedStageRun,
 } from "./automation";
+import LiveLog from "./LiveLog";
 
 interface AutomationPageProps {
   project: Project | null;
@@ -155,6 +156,27 @@ export default function AutomationPage({
       cancelled = true;
     };
   }, [project]);
+
+  // Output preview sync: once the render stage succeeds, re-read the artifact
+  // paths so the completed result (and the Live Log's Open Output) point at the
+  // freshly written video without an app reload.
+  useEffect(() => {
+    if (!project) return;
+    const render = stages.find((s) => s.key === "render");
+    if (!render || render.status !== "succeeded") return;
+    let cancelled = false;
+    void getArtifactPaths(project.id)
+      .then((paths) => {
+        if (!cancelled) setArtifacts(paths);
+      })
+      .catch(() => {
+        // Artifact refresh is best-effort; the periodic job store refresh and
+        // the completion view degrade gracefully when it fails.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, stages]);
 
   // ---- video import (dialog + webview drag-drop) ---------------------------
 
@@ -469,6 +491,18 @@ export default function AutomationPage({
           onOpenSettings={() => onNavigate("settings")}
         />
       </div>
+
+      {/* LIVE LOG — real job events under the video workspace */}
+      <LiveLog
+        plan={plan}
+        stages={stages}
+        phase={phase}
+        overallProgress={overallProgress}
+        jobs={jobs}
+        artifacts={artifacts}
+        onCancel={() => void handleCancel()}
+        onRetry={() => void handleRetry()}
+      />
     </section>
   );
 }
@@ -950,21 +984,6 @@ function SettingsPanel({
             ))}
           </select>
         </Setting>
-
-        {/* Voice & dubbing — TTS backend is not in this build (honest). */}
-        <div className="space-y-1.5 rounded-md border border-border bg-muted/20 p-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Voice &amp; dubbing
-            </p>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Later
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Voice selection and dubbed audio require the TTS pipeline, which is not in this build.
-          </p>
-        </div>
 
         <div className="space-y-1.5">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
