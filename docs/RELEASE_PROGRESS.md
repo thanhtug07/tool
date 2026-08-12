@@ -224,3 +224,29 @@ Implemented `feat: add dynamic provider management`:
   Remaining non-blockers: real AI translation needs a Gemini key / local LLM
   server (this run used offline mock); TTS + logo removal not in this build;
   packaged worker does not bundle CUDA libs (source worker used for GPU STT).
+
+## Gate 9 — TTS DUBBING STAGE (local voice over) — PASS 2026-08-12
+
+- **New stage**: Automation now supports a real dubbing stage between
+  translation and render. `worker/src/services/tts_service.py` synthesizes
+  each translated cue into a full-duration 44.1 kHz mono voice track
+  (`/v1/tts/synthesize`), and `render_service` mixes it over the original
+  audio (original ducked to 45%, format preserved — the mix adopts the
+  source's channels/sample rate so render QC still passes).
+- **Engines**: `edge-tts` (online, Microsoft neural voices, default) and
+  `piper` (offline; vi/zh medium models auto-download once to
+  `~/.cache/piper-voices`). Both verified live. Piper API compat shim for
+  the new chunk-based piper (>=1.6) vs legacy rhasspy API.
+- **Frontend**: Automation page enables the Voice & dubbing block (Dub audio
+  checkbox + voice + engine select); the pipeline plan gains the `tts` stage
+  when dubbing is on (5 stages, dynamic progress slices); render requests
+  the voice track.
+- **Bugs fixed during E2E**: (1) atempo fit branch renamed the cue wav
+  backwards (`Path(wav).replace(fit)` — left the fitted audio at
+  `*.fit.wav` and the track assembly failed); (2) same class of backwards
+  rename in the piper normalizer; (3) voice mix forced stereo 44.1 kHz
+  instead of the source format (render QC 422 on mono 22.05 kHz sources);
+  (4) `_DEFAULT_VOICE["ja"]` pointed at a Vietnamese voice.
+- Tests: worker **627 passed** (1 deselected), Rust **182 passed**, frontend
+  **159 passed** + typecheck + lint clean, golden E2E **16/16**, golden dub
+  E2E (TTS + mix + export) **13/13**.

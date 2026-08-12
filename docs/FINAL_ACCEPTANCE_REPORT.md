@@ -37,9 +37,10 @@ render preserving the original audio, QC 0 issues. ffprobe: duration
 ## Test matrix (final tree)
 
 - Worker: **607 passed, 1 deselected** (live Gemini — needs a real key)
-- Rust: **178 passed** (`cargo test`; fmt + clippy `-D warnings` clean)
-- Frontend: **156 passed** + typecheck clean + eslint clean
+- Rust: **182 passed** (`cargo test`; fmt + clippy clean)
+- Frontend: **159 passed** + typecheck clean + eslint clean
 - Golden E2E: **16/16** (source worker, tiny/cpu)
+- Golden dub E2E (TTS + voice mix): **13/13**
 - Real 48-min video: **15/15** in 14.0 min
 - Production build: PASS (`npx tauri build` — exe + MSI + NSIS)
 
@@ -47,16 +48,19 @@ render preserving the original audio, QC 0 issues. ffprobe: duration
 
 **RUN — PASS.** The user's real ~48-minute video was processed end-to-end
 (real AI STT + subtitle burn-in + render + export). Full 40-minute real-AI
-translation and TTS were intentionally not exercised (no Gemini key on this
-machine; TTS not in this build).
+translation was intentionally not exercised (no Gemini key on this machine).
+TTS is now live: the short golden E2E ran dubbing end-to-end (edge-tts voice
+track → render mix → export), and both engines (edge-tts online, piper
+offline) were verified live.
 
 ## Verdict
 
 **READY FOR PERSONAL USE.**
 
-- Automation executes: input → STT → translate route → subtitle → render →
-  output video → export → UI progress. ✔
-- Real output video generated, playable, original audio preserved. ✔
+- Automation executes: input → STT → translate route → subtitle → TTS (opt.) →
+  render → output video → export → UI progress. ✔
+- Real output video generated, playable, original audio preserved; dubbed
+  voice mix verified (output audio measurably differs from source). ✔
 - Provider configurable, default = FREE (local, no key required). ✔
 - Error handling does not crash; no known P0/P1 blocker. ✔
 - Windows build + packaged worker run. ✔
@@ -66,7 +70,7 @@ machine; TTS not in this build).
 1. Real AI translation: configure Gemini (Settings → Providers → add key) or
    run a local LLM server for the FREE provider — subtitles will then be
    genuinely translated (this run used the offline `mock` provider).
-2. TTS/dubbed voice and logo removal are not in this build.
+2. Logo removal (OCR + inpainting) is not in this build.
 3. Packaged worker does not bundle CUDA libs — GPU STT uses the dev/source
    worker (`npm run tauri dev`) or a rebuilt bundle with the `cuda` extra.
 4. GPU video encode unavailable in the system FFmpeg; libx264 fallback is

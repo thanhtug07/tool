@@ -130,8 +130,12 @@ khi bạn xử lý xong (bấm **Retry** hoặc sửa lại cấu hình).
 - Model STT tải về lần đầu được lưu trong thư mục model của ứng dụng.
 - Project/dữ liệu sẽ nằm trong thư mục dữ liệu của ứng dụng trên máy (không
   upload lên server nào).
-- Trong bản 0.1.0, dịch chỉ chạy một lần theo transcript hiện có; các tính năng
-  như dubbing, tách âm, OCR, voice-cloning nằm **ngoài MVP** và chưa có.
+- Trong bản 0.1.0, dịch chỉ chạy một lần theo transcript hiện có; tách âm,
+  OCR, voice-cloning nằm **ngoài MVP** và chưa có.
+- **Dubbing (lồng tiếng) đã có** ở Automation: bật **Dub audio**, chọn giọng
+  và engine — `edge-tts` (online, giọng tự nhiên, mặc định) hoặc `piper`
+  (offline, tải model 1 lần). Giọng đọc được trộn lên audio gốc (audio nền
+  giữ bên dưới, giảm ~45% volume).
 
 ---
 
