@@ -27,6 +27,33 @@ pub fn hardware(info: State<'_, Arc<SystemInfo>>) -> HardwareProfile {
     info.get()
 }
 
+/// Reveal a file or folder in the OS file manager (Automation live-log
+/// "Open Output" / "Open Folder" buttons).
+///
+/// Windows opens an Explorer window with the target selected
+/// (`explorer /select,<path>`); other platforms are not supported yet and
+/// return a clear error instead of silently doing nothing.
+#[tauri::command]
+pub fn reveal(path: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("cannot reveal an empty path".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("failed to open Explorer for {path}: {e}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("reveal is only implemented on Windows".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

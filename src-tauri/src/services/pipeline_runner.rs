@@ -255,6 +255,7 @@ impl PipelineRunner {
 
         let (win_start, win_end) = window;
         let mut last_reported: Option<f64> = None;
+        let mut last_message: Option<String> = None;
         loop {
             if (ctx.is_cancelled)() {
                 // Ask the worker to abort the in-flight stage. A bounded wait
@@ -290,6 +291,14 @@ impl PipelineRunner {
                             if should_report {
                                 last_reported = Some(mapped);
                                 (ctx.progress)(mapped, progress.stage.as_deref().unwrap_or(""));
+                            }
+                        }
+                        // Forward the worker's real detail line to the live log
+                        // exactly once per change (e.g. ``segment 81/127``).
+                        if let Some(message) = progress.message {
+                            if last_message.as_deref() != Some(message.as_str()) {
+                                last_message = Some(message.clone());
+                                (ctx.log)("info", &message);
                             }
                         }
                     }
@@ -371,6 +380,7 @@ impl PipelineRunner {
         let job_id = job.id.clone();
         let project_id = job.project_id.clone();
 
+        (ctx.log)("info", "Extracting audio from the source video…");
         (ctx.progress)(0.02, "extract-audio");
         let extract = self.run_stage(&client, job, ctx, (0.02, 0.15), {
             let video_path = video_path.clone();
@@ -392,6 +402,7 @@ impl PipelineRunner {
         // per-segment progress maps to 0..1 instead of stalling at the anchor.
         let total_duration = total_duration.or(extract.duration_seconds);
 
+        (ctx.log)("info", "Transcribing audio…");
         (ctx.progress)(0.15, "transcribe");
         let transcript = self.run_stage(&client, job, ctx, (0.15, 1.0), {
             let audio_path = audio_path.clone();
@@ -417,6 +428,13 @@ impl PipelineRunner {
         }
 
         self.write_artifact(&job.project_id, ARTIFACT_TRANSCRIPT, &transcript)?;
+        (ctx.log)(
+            "success",
+            &format!(
+                "Transcription complete — {} segments",
+                transcript.segments.len()
+            ),
+        );
         (ctx.progress)(1.0, "done");
         Ok(())
     }
@@ -506,6 +524,13 @@ impl PipelineRunner {
         } else {
             Some(provider_config)
         };
+        (ctx.log)(
+            "info",
+            &format!(
+                "Translating {} segments → {target_language}…",
+                transcript.segments.len()
+            ),
+        );
         (ctx.progress)(0.1, "translate");
         let translation: Translation = self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
             c.translate(TranslateRequest {
@@ -528,6 +553,15 @@ impl PipelineRunner {
         }
 
         self.write_artifact(&job.project_id, ARTIFACT_TRANSLATION, &translation)?;
+        let translated_items = translation
+            .blocks
+            .iter()
+            .map(|b| b.translations.len())
+            .sum::<usize>();
+        (ctx.log)(
+            "success",
+            &format!("Translation complete — {translated_items} segments"),
+        );
         (ctx.progress)(1.0, "done");
         Ok(())
     }
@@ -551,6 +585,7 @@ impl PipelineRunner {
         let client = self.client()?;
         let job_id = job.id.clone();
         let project_id = job.project_id.clone();
+        (ctx.log)("info", "Generating subtitles…");
         (ctx.progress)(0.1, "subtitle");
         let response = self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
             c.generate_subtitles(SubtitleRequest {
@@ -583,7 +618,10 @@ impl PipelineRunner {
         self.subtitles
             .replace_project(&job.project_id, cues)
             .map_err(map_db)?;
-
+        (ctx.log)(
+            "success",
+            &format!("Subtitles generated — {} cues", response.cues.len()),
+        );
         (ctx.progress)(1.0, "done");
         Ok(())
     }
@@ -625,6 +663,9 @@ impl PipelineRunner {
 
         let client = self.client()?;
         let job_id = job.id.clone();
+        let cue_count = cues.len();
+        let engine_label = engine.clone();
+        (ctx.log)("info", "Generating dubbed audio…");
         (ctx.progress)(0.1, "tts");
         self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
             c.tts_synthesize(TtsRequest {
@@ -640,6 +681,10 @@ impl PipelineRunner {
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
+        (ctx.log)(
+            "success",
+            &format!("Voice track ready — {cue_count} cues, {engine_label}"),
+        );
         (ctx.progress)(1.0, "done");
         Ok(())
     }
@@ -710,6 +755,7 @@ impl PipelineRunner {
 
         let client = self.client()?;
         let job_id = job.id.clone();
+        (ctx.log)("info", "Rendering the final video…");
         (ctx.progress)(0.1, "render");
         let output_path_str = output_path.display().to_string();
         let encoder = param_str(p, "encoder");
@@ -733,6 +779,10 @@ impl PipelineRunner {
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
+        (ctx.log)(
+            "success",
+            &format!("Render complete — {} ready", output_path.display()),
+        );
         (ctx.progress)(1.0, "done");
         Ok(())
     }
@@ -1001,11 +1051,13 @@ mod tests {
 
     fn run(job: &Job, runner: &PipelineRunner) -> Result<(), JobRunError> {
         let progress = |_: f64, _: &str| {};
+        let log = |_: &str, _: &str| {};
         let cancelled = || false;
         runner.run(
             job,
             &JobRunContext {
                 progress: &progress,
+                log: &log,
                 is_cancelled: &cancelled,
             },
         )
@@ -1348,12 +1400,14 @@ mod tests {
         let pid = seed_project(&h, "cancelled");
         let runner = runner(&h, 1);
         let progress = |_: f64, _: &str| {};
+        let log = |_: &str, _: &str| {};
         let cancelled = || true;
         let j = job(&pid, JobType::Transcribe, serde_json::json!({}));
         let outcome = runner.run(
             &j,
             &JobRunContext {
                 progress: &progress,
+                log: &log,
                 is_cancelled: &cancelled,
             },
         );
@@ -1444,11 +1498,13 @@ mod tests {
             })
         };
         let progress = |_: f64, _: &str| {};
+        let log = |_: &str, _: &str| {};
         let cancelled_flag = cancelled.clone();
         let outcome = runner.run(
             &j,
             &JobRunContext {
                 progress: &progress,
+                log: &log,
                 is_cancelled: &|| cancelled_flag.load(std::sync::atomic::Ordering::SeqCst),
             },
         );
@@ -1504,14 +1560,32 @@ mod tests {
             let reported = reported.clone();
             move |p: f64, stage: &str| reported.lock().unwrap().push((p, stage.to_string()))
         };
+        let logs: Arc<std::sync::Mutex<Vec<(String, String)>>> = Arc::default();
+        let log = {
+            let logs = logs.clone();
+            move |level: &str, message: &str| {
+                logs.lock()
+                    .unwrap()
+                    .push((level.to_string(), message.to_string()))
+            }
+        };
         let outcome = runner.run(
             &j,
             &JobRunContext {
                 progress: &progress,
+                log: &log,
                 is_cancelled: &|| false,
             },
         );
         assert!(outcome.is_ok(), "{outcome:?}");
+        // Live-log lines: the stage-start line is always emitted, and any
+        // detail message the worker's progress registry reports is forwarded
+        // exactly once per change.
+        let logs = logs.lock().unwrap();
+        assert!(
+            logs.iter().any(|(_, m)| m.contains("Extracting audio")),
+            "stage-start log line missing: {logs:?}"
+        );
 
         // The worker's 0.5 progress landed inside the extract window (0.02..0.15),
         // i.e. ~0.085 — proving live progress reached the job.

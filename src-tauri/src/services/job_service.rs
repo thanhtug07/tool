@@ -78,6 +78,9 @@ pub enum JobRunError {
 /// `job.cancel` for this job id.
 pub struct JobRunContext<'a> {
     pub progress: &'a dyn Fn(f64, &str),
+    /// Emit an informational line to the frontend live log (`job:log`).
+    /// ``level`` is ``info`` / ``success`` / ``warn`` / ``error``.
+    pub log: &'a dyn Fn(&str, &str),
     pub is_cancelled: &'a dyn Fn() -> bool,
 }
 
@@ -525,9 +528,11 @@ impl Inner {
             }
 
             let progress = |p: f64, stage: &str| self.report_progress(job_id, p, stage);
+            let log = |level: &str, message: &str| self.emit_log(job_id, level, message);
             let is_cancelled = || cancel.load(Ordering::SeqCst);
             let ctx = JobRunContext {
                 progress: &progress,
+                log: &log,
                 is_cancelled: &is_cancelled,
             };
             let outcome = self.runner.run(&job, &ctx);

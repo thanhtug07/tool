@@ -59,6 +59,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
             commands::system::hardware,
+            commands::system::reveal,
             commands::worker::get_worker_state,
             commands::worker::restart,
             commands::project::create,

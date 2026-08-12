@@ -439,11 +439,15 @@ pub struct CancelResponse {
 ///
 /// ``progress``/``stage`` are `null` when no stage for the job is currently
 /// registered — callers keep their own stage anchors in that case.
+/// ``message`` is an optional human-readable detail line (e.g. ``segment
+/// 81/127``) forwarded to the frontend live log as-is; it is always derived
+/// from real stage state.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ProgressResponse {
     pub job_id: String,
     pub progress: Option<f64>,
     pub stage: Option<String>,
+    pub message: Option<String>,
 }
 
 impl WorkerClient {
@@ -1205,7 +1209,7 @@ mod tests {
     #[test]
     fn get_progress_parses_live_progress() {
         let port = serve(|stream| {
-            let body = r#"{"job_id":"job-1","progress":0.42,"stage":"transcribe"}"#;
+            let body = r#"{"job_id":"job-1","progress":0.42,"stage":"transcribe","message":"81/127 segments"}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
@@ -1218,12 +1222,13 @@ mod tests {
         assert_eq!(result.job_id, "job-1");
         assert_eq!(result.progress, Some(0.42));
         assert_eq!(result.stage.as_deref(), Some("transcribe"));
+        assert_eq!(result.message.as_deref(), Some("81/127 segments"));
     }
 
     #[test]
     fn get_progress_parses_unknown_job_as_null() {
         let port = serve(|stream| {
-            let body = r#"{"job_id":"job-x","progress":null,"stage":null}"#;
+            let body = r#"{"job_id":"job-x","progress":null,"stage":null,"message":null}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
@@ -1235,6 +1240,7 @@ mod tests {
             .expect("progress succeeds");
         assert_eq!(result.progress, None);
         assert_eq!(result.stage, None);
+        assert_eq!(result.message, None);
     }
 
     #[test]
