@@ -43,6 +43,7 @@ import {
   languageLabel,
   markStageSubmitted,
   pipelineProgress,
+  startPipeline,
   PROVIDERS,
   SOURCE_LANGUAGES,
   STAGE_CHECKLIST,
@@ -76,7 +77,10 @@ export default function AutomationPage({
   const [originalMeta, setOriginalMeta] = useState<MediaMeta | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("vi");
-  const [provider, setProvider] = useState("mock");
+  // Default to the real provider. "mock" stays available as an explicit opt-in
+  // (labelled "Mock (offline)") so a production run can never silently produce
+  // fake subtitles; the key guard below blocks gemini without a configured key.
+  const [provider, setProvider] = useState("gemini");
   const [burnSubtitles, setBurnSubtitles] = useState(true);
   const [watermark, setWatermark] = useState<WatermarkConfigType>(DEFAULT_WATERMARK);
   const [geminiKeyConfigured, setGeminiKeyConfigured] = useState<boolean | null>(null);
@@ -238,7 +242,7 @@ export default function AutomationPage({
       setProviderBanner(true);
       return;
     }
-    setPlan(initialPipelinePlan());
+    setPlan(startPipeline({ sourceLanguage, targetLanguage, provider }));
     void submitStage("transcribe");
     toast.push("Automation started — the pipeline runs stage by stage.", "info");
   }
@@ -267,7 +271,7 @@ export default function AutomationPage({
 
   async function handleReprocess() {
     if (!project) return;
-    setPlan(initialPipelinePlan());
+    setPlan(startPipeline({ sourceLanguage, targetLanguage, provider }));
     void submitStage("transcribe");
   }
 
@@ -403,7 +407,7 @@ export default function AutomationPage({
               project={project}
               artifacts={artifacts}
               phase={phase}
-              startedAt={plan.startedAt}
+              plan={plan}
               onExport={() => void handleExport()}
               onCopyPath={() => void handleCopyPath()}
               onReprocess={() => void handleReprocess()}
@@ -622,7 +626,7 @@ function CompletionView({
   project,
   artifacts,
   phase,
-  startedAt,
+  plan,
   onExport,
   onCopyPath,
   onReprocess,
@@ -631,7 +635,7 @@ function CompletionView({
   project: Project | null;
   artifacts: ArtifactPaths | null;
   phase: "succeeded" | "cancelled";
-  startedAt: number | null;
+  plan: PipelinePlan;
   onExport: () => void;
   onCopyPath: () => void;
   onReprocess: () => void;
@@ -663,9 +667,9 @@ function CompletionView({
           <Check className="size-4 text-emerald-400" aria-hidden="true" />
         </span>
         <p className="text-sm font-semibold">Automation completed</p>
-        {startedAt && (
+        {plan.startedAt && (
           <span className="ml-auto text-xs text-muted-foreground">
-            {formatProcessingTime(Date.now() - startedAt)} processing
+            {formatProcessingTime(Date.now() - plan.startedAt)} processing
           </span>
         )}
       </div>
@@ -703,12 +707,22 @@ function CompletionView({
       <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
         <div>
           <p className="uppercase tracking-wide text-muted-foreground/70">Source language</p>
-          <p className="text-foreground">{languageLabel("")}</p>
+          <p className="text-foreground">{languageLabel(plan.options?.sourceLanguage ?? "")}</p>
+        </div>
+        <div>
+          <p className="uppercase tracking-wide text-muted-foreground/70">Target language</p>
+          <p className="text-foreground">{languageLabel(plan.options?.targetLanguage ?? "vi")}</p>
+        </div>
+        <div>
+          <p className="uppercase tracking-wide text-muted-foreground/70">Provider</p>
+          <p className="text-foreground">
+            {PROVIDERS.find((p) => p.id === plan.options?.provider)?.label ?? "—"}
+          </p>
         </div>
         <div>
           <p className="uppercase tracking-wide text-muted-foreground/70">Processing time</p>
           <p className="text-foreground">
-            {startedAt ? formatProcessingTime(Date.now() - startedAt) : "—"}
+            {plan.startedAt ? formatProcessingTime(Date.now() - plan.startedAt) : "—"}
           </p>
         </div>
       </div>

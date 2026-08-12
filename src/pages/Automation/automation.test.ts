@@ -9,6 +9,7 @@ import {
   languageLabel,
   markStageSubmitted,
   pipelineProgress,
+  startPipeline,
   watermarkToWire,
 } from "./automation";
 
@@ -134,6 +135,13 @@ describe("pipeline plan + derivation", () => {
     expect(derivePhase(stages, plan.startedAt)).toBe("idle");
     expect(stages.every((s) => s.status === "pending")).toBe(true);
     expect(pipelineProgress(stages)).toBe(0);
+  });
+
+  it("startPipeline captures the run options", () => {
+    const plan = startPipeline({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini" });
+    expect(plan.options).toEqual({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini" });
+    expect(plan.startedAt).toBeNull();
+    expect(plan.stages.every((s) => s.jobId === null)).toBe(true);
   });
 
   it("marks a submitted stage and derives running from the job snapshot", () => {

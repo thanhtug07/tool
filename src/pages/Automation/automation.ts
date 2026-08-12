@@ -156,10 +156,18 @@ export function watermarkToWire(config: WatermarkConfig): Record<string, unknown
 
 export type StageStatus = "pending" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
+/** The options a run was started with (kept so the result view can report them). */
+export type PlanOptions = {
+  sourceLanguage: string;
+  targetLanguage: string;
+  provider: string;
+};
+
 /** Which stage job has been submitted (jobIds are assigned as we go). */
 export type PipelinePlan = {
   stages: { key: StageKey; jobId: string | null }[];
   startedAt: number | null;
+  options?: PlanOptions;
 };
 
 export function initialPipelinePlan(): PipelinePlan {
@@ -169,9 +177,15 @@ export function initialPipelinePlan(): PipelinePlan {
   };
 }
 
+/** Begin a run, capturing the options the user clicked AUTOMATE with. */
+export function startPipeline(options: PlanOptions): PipelinePlan {
+  return { ...initialPipelinePlan(), options };
+}
+
 /** Record the jobId returned by `job.submit` for a stage. */
 export function markStageSubmitted(plan: PipelinePlan, key: StageKey, jobId: string): PipelinePlan {
   return {
+    ...plan,
     startedAt: plan.startedAt ?? Date.now(),
     stages: plan.stages.map((s) => (s.key === key ? { ...s, jobId } : s)),
   };

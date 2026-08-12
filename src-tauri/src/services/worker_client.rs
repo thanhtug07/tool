@@ -26,9 +26,14 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// long videos plus their translations can exceed 1 MiB).
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// I/O timeout for pipeline stage calls (extract/transcribe/translate/
-/// subtitle/render). These run for minutes on real media; the short
-/// ``READ_TIMEOUT`` is only for the health probe.
-const PIPELINE_IO_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// subtitle/render) and export calls. These run for minutes on real media; the
+/// short ``READ_TIMEOUT`` is only for the health probe and progress polling.
+/// 2 hours comfortably bounds a 40-minute video even at RTF ~2.5 on a slow
+/// CPU; a genuinely hung worker is caught by the supervisor instead.
+const PIPELINE_IO_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+/// I/O timeout for the live-progress poll: the worker answers instantly, so a
+/// stalled poll must fail fast and be treated as "no progress available".
+const PROGRESS_READ_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Response of the worker's `GET /health` endpoint (see worker schemas).
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -376,6 +381,17 @@ pub struct CancelResponse {
     pub cancelled: bool,
 }
 
+/// Response of `GET /v1/progress/{job_id}` (live stage progress).
+///
+/// ``progress``/``stage`` are `null` when no stage for the job is currently
+/// registered — callers keep their own stage anchors in that case.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ProgressResponse {
+    pub job_id: String,
+    pub progress: Option<f64>,
+    pub stage: Option<String>,
+}
+
 impl WorkerClient {
     pub fn new(port: u16, token: String) -> Self {
         Self { port, token }
@@ -395,6 +411,7 @@ impl WorkerClient {
             self.addr(),
             "/health",
             &[("Authorization", format!("Bearer {}", self.token))],
+            READ_TIMEOUT,
         )?;
         if status != 200 {
             return Err(HttpError::Status(status));
@@ -404,6 +421,9 @@ impl WorkerClient {
     }
 
     /// Copy a rendered video to a user directory and QC it (TASK-029).
+    ///
+    /// Copying a large rendered video plus its probe/QC can take well beyond
+    /// the control-plane read timeout, so this uses the pipeline timeout.
     pub fn export_video(
         &self,
         request: ExportVideoRequest,
@@ -416,7 +436,7 @@ impl WorkerClient {
             "/v1/export/video",
             &[("Authorization", format!("Bearer {}", self.token))],
             &body,
-            READ_TIMEOUT,
+            PIPELINE_IO_TIMEOUT,
         )?;
         parse_json_response(status, body)
     }
@@ -434,7 +454,7 @@ impl WorkerClient {
             "/v1/export/subtitles",
             &[("Authorization", format!("Bearer {}", self.token))],
             &body,
-            READ_TIMEOUT,
+            PIPELINE_IO_TIMEOUT,
         )?;
         parse_json_response(status, body)
     }
@@ -484,6 +504,19 @@ impl WorkerClient {
         parse_json_response(status, body)
     }
 
+    /// Poll live stage progress for ``job_id`` (best-effort, polled by the
+    /// runner while a stage call is in flight).
+    pub fn get_progress(&self, job_id: &str) -> Result<ProgressResponse, HttpError> {
+        let path = format!("/v1/progress/{job_id}");
+        let (status, body) = http_get(
+            self.addr(),
+            &path,
+            &[("Authorization", format!("Bearer {}", self.token))],
+            PROGRESS_READ_TIMEOUT,
+        )?;
+        parse_json_response(status, body)
+    }
+
     /// Serialize a request and POST it to ``path`` with the pipeline timeout.
     fn post_json<T: Serialize>(
         &self,
@@ -523,11 +556,12 @@ fn http_get(
     addr: SocketAddr,
     path: &str,
     headers: &[(&str, String)],
+    read_timeout: Duration,
 ) -> Result<(u16, Vec<u8>), HttpError> {
     let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
         .map_err(|e| HttpError::ConnectFailed(e.to_string()))?;
     stream
-        .set_read_timeout(Some(READ_TIMEOUT))
+        .set_read_timeout(Some(read_timeout))
         .map_err(|e| HttpError::ReadFailed(e.to_string()))?;
     stream
         .set_write_timeout(Some(WRITE_TIMEOUT))
@@ -759,8 +793,13 @@ mod tests {
             let response = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
             let _ = stream.write_all(response.as_bytes());
         });
-        let (status, body) = http_get(SocketAddr::from((HOST_LOOPBACK, port)), "/health", &[])
-            .expect("request succeeds");
+        let (status, body) = http_get(
+            SocketAddr::from((HOST_LOOPBACK, port)),
+            "/health",
+            &[],
+            READ_TIMEOUT,
+        )
+        .expect("request succeeds");
         assert_eq!(status, 200);
         assert_eq!(body, b"hello");
     }
@@ -771,8 +810,13 @@ mod tests {
             let response = "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world";
             let _ = stream.write_all(response.as_bytes());
         });
-        let (status, body) = http_get(SocketAddr::from((HOST_LOOPBACK, port)), "/health", &[])
-            .expect("request succeeds");
+        let (status, body) = http_get(
+            SocketAddr::from((HOST_LOOPBACK, port)),
+            "/health",
+            &[],
+            READ_TIMEOUT,
+        )
+        .expect("request succeeds");
         assert_eq!(status, 200);
         assert_eq!(body, b"hello world");
     }
@@ -1071,6 +1115,41 @@ mod tests {
             .cancel_job("job-1")
             .expect("cancel succeeds");
         assert!(result.cancelled);
+    }
+
+    #[test]
+    fn get_progress_parses_live_progress() {
+        let port = serve(|stream| {
+            let body = r#"{"job_id":"job-1","progress":0.42,"stage":"transcribe"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .get_progress("job-1")
+            .expect("progress succeeds");
+        assert_eq!(result.job_id, "job-1");
+        assert_eq!(result.progress, Some(0.42));
+        assert_eq!(result.stage.as_deref(), Some("transcribe"));
+    }
+
+    #[test]
+    fn get_progress_parses_unknown_job_as_null() {
+        let port = serve(|stream| {
+            let body = r#"{"job_id":"job-x","progress":null,"stage":null}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = client_on(port)
+            .get_progress("job-x")
+            .expect("progress succeeds");
+        assert_eq!(result.progress, None);
+        assert_eq!(result.stage, None);
     }
 
     #[test]

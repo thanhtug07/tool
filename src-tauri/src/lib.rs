@@ -21,6 +21,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 use security::secret_store::SecretStore;
 use services::cache_service::{CacheService, CacheServiceConfig};
 use services::dictionary_service::DictionaryService;
+use services::hardware_probe::SystemInfo;
 use services::job_service::{JobEvent, JobEventSink, JobService, JobServiceConfig};
 use services::pipeline_runner::PipelineRunner;
 use services::project_service::ProjectService;
@@ -56,7 +57,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
+            commands::system::hardware,
             commands::worker::get_worker_state,
+            commands::worker::restart,
             commands::project::create,
             commands::project::open,
             commands::project::list_projects,
@@ -65,6 +68,7 @@ pub fn run() {
             commands::job::submit,
             commands::job::get,
             commands::job::list,
+            commands::job::list_all,
             commands::job::cancel,
             commands::job::retry,
             commands::dictionary::glossary_list,
@@ -109,6 +113,9 @@ pub fn run() {
             if let Err(e) = app.state::<WorkerManager>().start() {
                 log::error!("worker failed to start: {e}");
             }
+
+            // Cached hardware snapshot (probed lazily on first `system.hardware`).
+            app.manage(Arc::new(SystemInfo::new()));
 
             // Project database in the OS user-data dir (never the source tree).
             // `ProjectService::open` captures init failures internally, so the

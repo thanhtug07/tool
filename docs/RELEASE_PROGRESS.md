@@ -128,3 +128,51 @@ Outstanding (documented, not re-runnable in this environment):
 - Live `GEMINI_API_KEY` provider test — needs a real key; network + key intended for pre-beta, not CI.
 - Clean-VM first-run model download — needs a fresh OS (see Gate 1).
 - NVENC encode session — needs a desktop GPU with a working NVENC session (see Gate 2).
+
+---
+
+## Gate 7 — Final automation deep audit (pre-release)
+
+**Status: PASS** — full pre-release audit of the AUTOMATION pipeline on the
+final tree (see `docs/FINAL_AUTOMATION_AUDIT.md` for the full report).
+
+Fixes landed in this gate (all verified by tests):
+
+1. **Cancel now reaches the worker mid-stage** — worker cancel registry +
+   in-flight abort; Rust `run_stage` polls cancel + progress every 250 ms.
+2. **Live progress during long stages** — token-scoped progress registry +
+   `/v1/jobs/{id}/progress`; STT duration baseline derived from the extract.
+3. **Export timeout** raised from 3 s read timeout to the 1 h pipeline IO
+   timeout (large video export + QC would otherwise fail).
+4. **Translate/subtitle worker-cancellable** with per-block progress.
+5. **Automation render validates burn-in** (`check_window` from the cue list).
+6. **CompletionView shows the real source language** (was hard-coded
+   "Auto Detect").
+7. **Media serving capped at 32 MiB chunks** — `Range: bytes=0-` on a multi-GB
+   clip previously loaded the whole file into RAM (OOM risk).
+8. **Packaged worker bundles `google-genai`** (pyproject + PyInstaller spec) —
+   Gemini was unreachable in the production bundle; rebuilt and probed PASS.
+9. **Provider default is now `gemini`** — the UI previously defaulted to the
+   mock provider, so a production run could silently produce fake subtitles;
+   mock remains an explicit opt-in and the key guard + banner covers no-key.
+
+Final-tree evidence:
+
+| Layer | Result |
+|---|---|
+| Worker | **589 passed**, 1 deselected (live Gemini — needs real key) |
+| Rust | **169 passed**; fmt + clippy clean |
+| Frontend | typecheck clean; **152 passed** (23 files) |
+| Golden E2E (source + packaged worker) | **16/16 PASS** each |
+| Packaged-worker Gemini probe | PASS |
+| ffprobe output validation | PASS (h264 640×360 25 fps + aac, 6.44 s) |
+| Production build (`npx tauri build`) | PASS |
+
+Repository cleanup: removed `output/` (747 MB generated media) + stray build
+logs; `.gitignore` now covers `output/` and `.agents/`.
+
+Outstanding (unchanged, owner-side):
+- Live `GEMINI_API_KEY` provider test — needs a real key.
+- Clean-VM first-run model download — needs a fresh OS.
+- NVENC encode session — needs a desktop GPU (libx264 fallback verified).
+- The user's real ~40-minute video test — the definitive scale check.

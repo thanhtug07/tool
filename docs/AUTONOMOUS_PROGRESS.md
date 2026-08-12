@@ -174,6 +174,11 @@ release_completed_tasks:
     status: PASS
     commit: 401dc16
     evidence: worker 583 pass; Rust fmt/check/clippy clean + 162 tests; frontend typecheck/lint/format/build + 136 tests; golden E2E 16/16 (source 4.3s, installed-worker 4.7s); gitleaks + cargo-deny re-runs clean; installers rebuilt on 401dc16; silent install -> install-launch -> E2E -> uninstall clean
+  - id: RELEASE-GATE-7
+    goal: final automation deep audit (pre-release, user's real 40-min test gate)
+    status: PASS
+    commit: (see docs/FINAL_AUTOMATION_AUDIT.md)
+    evidence: worker 589 pass (1 ai-marker deselected); Rust 169 pass + fmt/clippy clean; frontend typecheck clean + 152 pass; golden E2E 16/16 (source + packaged worker); packaged-worker Gemini SDK probe PASS; ffprobe output validation PASS (h264 640x360 25fps + aac, 6.44s); production build PASS. Fixed: cancel reaches worker mid-stage + live stage progress (250ms poll) + STT duration baseline; export timeout 3s->1h; translate/subtitle cancellable + per-block progress; render burn-in check_window from cues; CompletionView real source language; media serving capped 32MiB chunks (OOM fix); google-genai bundled in worker.exe; provider UI default mock->gemini (mock stays explicit opt-in). Cleanup: removed output/ (747MB) + stray logs; .gitignore covers output/ + .agents/
 
 release_known_blockers:
   - clean-machine installer validation (needs Windows VM or dedicated test machine)
@@ -184,4 +189,4 @@ release_known_blockers:
   - real Gemini translation call unverified (no GEMINI_API_KEY available; @pytest.mark.ai test skipped by design)
   - LICENSE file cannot be added (project license UNDECIDED - owner decision required; do not fabricate)
 
-release_next_action: (resume block) only owner/external actions remain for the release gate: provide OV signing cert or decide unsigned; run installer on clean VM once available; decide project license; run one NVENC-enabled render on a desktop GPU; run one real Gemini call. No more local code deliverables remain.
+release_next_action: (resume block) only owner/external actions remain for the release gate: provide OV signing cert or decide unsigned; run installer on clean VM once available; decide project license; run one NVENC-enabled render on a desktop GPU; run one real Gemini call (add GEMINI_API_KEY in Settings - provider default is now gemini). No more local code deliverables remain. Next local event: the user's real ~40-minute AUTOMATION test (definitive scale check - audit + short E2E + output validation all PASS).

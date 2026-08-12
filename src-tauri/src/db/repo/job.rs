@@ -212,6 +212,20 @@ impl<'a> JobRepo<'a> {
         Ok(out)
     }
 
+    /// All jobs across every project, most recently updated first (Dashboard
+    /// feed). Bounded by `limit` so the IPC payload stays small.
+    pub fn list_recent(&self, limit: u32) -> Result<Vec<Job>, DbError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM jobs ORDER BY updated_at DESC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map(params![limit.max(1)], row_to_job)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Jobs that are `queued` (oldest first) — used to seed the in-memory FIFO
     /// queue at startup so queued work survives an app restart.
     pub fn list_queued(&self) -> Result<Vec<Job>, DbError> {
@@ -475,6 +489,38 @@ mod tests {
         assert!(!repo
             .update(&sample(&project_id, JobType::Render))
             .expect("update"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_recent_returns_all_projects_ordered() {
+        let (db, dir) = repo("r_recent");
+        let conn = db.conn();
+        let repo = JobRepo::new(&conn);
+        let a = seed_project(&conn);
+        let b = seed_project(&conn);
+        let job_a = sample(&a, JobType::Transcribe);
+        let job_b = Job {
+            id: "job_0002".into(),
+            updated_at: "2099-01-01T00:00:00.000Z".into(),
+            ..sample(&b, JobType::Render)
+        };
+        let job_c = Job {
+            id: "job_0003".into(),
+            updated_at: "2098-01-01T00:00:00.000Z".into(),
+            ..sample(&a, JobType::Subtitle)
+        };
+        repo.insert(&job_a).expect("insert a");
+        repo.insert(&job_b).expect("insert b");
+        repo.insert(&job_c).expect("insert c");
+
+        let all = repo.list_recent(10).expect("list recent");
+        assert_eq!(all.len(), 3);
+        let ids: Vec<_> = all.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, ["job_0002", "job_0003", "job_0001"]); // updated_at DESC
+
+        let capped = repo.list_recent(2).expect("capped");
+        assert_eq!(capped.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

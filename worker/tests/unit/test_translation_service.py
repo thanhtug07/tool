@@ -213,3 +213,37 @@ class TestTranslationService:
         entry = svc.tm.get("Good morning", target_language="vi", glossary_ver="g1", model="mock")
         assert entry is not None
         assert entry.translated_text.startswith("[vi]")
+
+    def test_on_progress_reports_block_fraction(self) -> None:
+        provider = _RecordingProvider()
+        svc = self._service(provider)
+        reports: list[float] = []
+        svc.translate_segments(
+            _segments(12, "Hello world"),  # 2 chunks
+            target_language="vi",
+            provider=provider,
+            model="mock",
+            glossary_ver="g1",
+            on_progress=reports.append,
+        )
+        assert reports and reports[-1] == pytest.approx(1.0)
+        assert len(reports) == 2
+        assert reports[0] == pytest.approx(0.5)
+
+    def test_cancelled_between_blocks_raises(self) -> None:
+        from src.core.job import CancelledError, CancellationToken
+
+        provider = _RecordingProvider()
+        svc = self._service(provider)
+        token = CancellationToken()
+        # Cancel before any block runs: the very first check raises.
+        token.cancel()
+        with pytest.raises(CancelledError):
+            svc.translate_segments(
+                _segments(3, "x"),
+                target_language="vi",
+                provider=provider,
+                model="mock",
+                glossary_ver="g1",
+                cancel=token,
+            )

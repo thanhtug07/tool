@@ -88,7 +88,8 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
   const [artifacts, setArtifacts] = useState<ArtifactPaths | null>(null);
   const [name, setName] = useState("");
   const [videoPath, setVideoPath] = useState("");
-  const [provider, setProvider] = useState("mock");
+  // Real provider by default; "mock" is an explicit opt-in (never silent).
+  const [provider, setProvider] = useState("gemini");
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

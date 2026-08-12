@@ -271,6 +271,14 @@ impl JobService {
         JobRepo::new(&conn).list_by_project(&project_id)
     }
 
+    /// All jobs across every project, most recently updated first — the
+    /// Dashboard feed and the single source of truth for "current job".
+    pub fn list_recent(&self, limit: u32) -> Result<Vec<Job>, DbError> {
+        let db = self.db()?;
+        let conn = db.conn();
+        JobRepo::new(&conn).list_recent(limit.clamp(1, 500))
+    }
+
     /// Cancel a job.
     ///
     /// - `queued` → `cancelled` immediately (persisted + emitted).

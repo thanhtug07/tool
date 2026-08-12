@@ -51,10 +51,21 @@ class ProcessSpawnError(Exception):
 
 
 class CancellationToken:
-    """A thread-safe cancellation flag shared between the service and a job."""
+    """A thread-safe cancellation flag shared between the service and a job.
+
+    Besides the cancellation flag it also carries a best-effort ``progress``
+    (0..1 within the current stage) and a ``stage`` label so the Rust
+    orchestrator can poll live stage progress while a long operation runs.
+    Updates are guarded by a lock because the same token is read by the
+    ``/v1/progress`` route and written by the stage's ``on_progress`` callback
+    from different worker threads.
+    """
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._progress = 0.0
+        self._stage = ""
 
     def cancel(self) -> None:
         """Request cancellation. Idempotent."""
@@ -62,6 +73,18 @@ class CancellationToken:
 
     def is_cancelled(self) -> bool:
         return self._event.is_set()
+
+    def set_progress(self, progress: float, stage: str = "") -> None:
+        """Record stage progress (clamped to 0..1) plus an optional stage label."""
+        with self._lock:
+            self._progress = max(0.0, min(1.0, float(progress)))
+            if stage:
+                self._stage = stage
+
+    def get_progress(self) -> tuple[float, str]:
+        """Return ``(progress, stage)`` as last reported."""
+        with self._lock:
+            return self._progress, self._stage
 
 
 def run_process(

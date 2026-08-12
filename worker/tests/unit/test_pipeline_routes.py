@@ -79,6 +79,12 @@ def test_pipeline_routes_require_bearer_token(path: str) -> None:
     assert response.status_code == 401
 
 
+@pytest.mark.parametrize("path", ["/v1/progress/x"])
+def test_progress_route_requires_bearer_token(path: str) -> None:
+    response = client.get(path)
+    assert response.status_code == 401
+
+
 # ---------------------------------------------------------------------------
 # Audio extract
 # ---------------------------------------------------------------------------
@@ -327,3 +333,56 @@ def test_precancelled_stage_returns_409(tmp_path: Path) -> None:
         )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "E_CANCELLED"
+
+
+def test_precancelled_translate_returns_409() -> None:
+    """Translation is worker-cancellable at block granularity."""
+    from src.api.pipeline import _cancel_scope
+
+    with _cancel_scope("job_precancel_translate") as token:
+        token.cancel()
+        response = client.post(
+            "/v1/translate",
+            headers=AUTH,
+            json={
+                "transcript": _transcript("你好", "世界"),
+                "project_id": "proj_0001",
+                "provider": "mock",
+                "target_language": "vi",
+                "job_id": "job_precancel_translate",
+            },
+        )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "E_CANCELLED"
+
+
+# ---------------------------------------------------------------------------
+# Live progress
+# ---------------------------------------------------------------------------
+
+
+def test_progress_endpoint_reports_registered_stage() -> None:
+    from src.api.pipeline import _cancel_scope
+
+    with _cancel_scope("job_progress_live") as token:
+        token.set_progress(0.42, "transcribe")
+        response = client.get("/v1/progress/job_progress_live", headers=AUTH)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["job_id"] == "job_progress_live"
+        assert body["progress"] == pytest.approx(0.42)
+        assert body["stage"] == "transcribe"
+
+    # The scope is gone after completion: progress is null.
+    response = client.get("/v1/progress/job_progress_live", headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["progress"] is None
+
+
+def test_progress_endpoint_unknown_job_returns_null() -> None:
+    response = client.get("/v1/progress/job_never_registered", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == "job_never_registered"
+    assert body["progress"] is None
+    assert body["stage"] is None

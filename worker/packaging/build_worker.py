@@ -51,6 +51,10 @@ PYINSTALLER_ARGS = [
     "--collect-submodules", "fastapi",
     "--collect-submodules", "huggingface_hub",
     "--collect-submodules", "jsonschema",
+    # GeminiProvider imports `google.genai` lazily (ADR §3.3 default
+    # translation provider); PyInstaller's static analysis misses it, so the
+    # bundled worker would otherwise ship without cloud translation.
+    "--collect-all", "google.genai",
     # Exclude heavy dev/analysis packages pulled in transitively (e.g.
     # ``fsspec`` statically imports pandas, whose PyInstaller hook pulls
     # SQLAlchemy and breaks the build). The worker needs none of them.

@@ -225,7 +225,7 @@ def audio_extract(request: AudioExtractRequest) -> JSONResponse:
                 request.video_path,
                 request.output_path,
                 cancel=cancel,
-                on_progress=lambda fraction: logger.info("audio extract %.0f%%", fraction * 100),
+                on_progress=lambda fraction: cancel.set_progress(fraction, "extract-audio"),
             )
     except CancelledError:
         return _error("E_CANCELLED", "Audio extraction was cancelled.", http=status.HTTP_409_CONFLICT)
@@ -260,16 +260,19 @@ def translate(request: TranslateRequest) -> JSONResponse:
     ]
     try:
         service = TranslationService()
-        blocks: list[TranslationBlock] = service.translate_segments(
-            segments,
-            target_language=request.target_language,
-            provider=provider,
-            model=request.model,
-            glossary_ver=request.glossary_ver,
-            glossary=request.glossary,
-            characters=request.characters,
-            rules=request.rules,
-        )
+        with _cancel_scope(request.job_id) as cancel:
+            blocks: list[TranslationBlock] = service.translate_segments(
+                segments,
+                target_language=request.target_language,
+                provider=provider,
+                model=request.model,
+                glossary_ver=request.glossary_ver,
+                glossary=request.glossary,
+                characters=request.characters,
+                rules=request.rules,
+                cancel=cancel,
+                on_progress=lambda fraction: cancel.set_progress(fraction, "translate"),
+            )
     except (ProviderError, QProviderError) as exc:
         return _error(exc.code, exc.message)
     except CancelledError:
@@ -290,12 +293,13 @@ def subtitle(request: SubtitleRequest) -> JSONResponse:
     from src.services.subtitle_service import SubtitleError, SubtitleService  # noqa: PLC0415 - lazy
 
     try:
-        doc = SubtitleService().from_transcript_and_translation(
-            request.transcript,
-            request.translation,
-            language=request.language,
-            output_dir=request.output_dir,
-        )
+        with _cancel_scope(request.job_id) as cancel:
+            doc = SubtitleService().from_transcript_and_translation(
+                request.transcript,
+                request.translation,
+                language=request.language,
+                output_dir=request.output_dir,
+            )
     except SubtitleError as exc:
         return _error(exc.code, exc.message)
     except CancelledError:
@@ -370,9 +374,7 @@ def render(request: RenderRequest) -> JSONResponse:
             result: RenderResult = render_video(
                 config,
                 cancel=cancel,
-                on_progress=lambda p: logger.info(
-                    "render %.0f%% (eta=%s)", p.fraction * 100, p.eta_seconds
-                ),
+                on_progress=lambda p: cancel.set_progress(p.fraction, "render"),
             )
     except CancelledError:
         return _error("E_CANCELLED", "Render was cancelled.", http=status.HTTP_409_CONFLICT)
@@ -398,3 +400,19 @@ def cancel(job_id: str) -> JSONResponse:
     if not existed:
         return JSONResponse({"cancelled": False})
     return JSONResponse({"cancelled": True})
+
+
+@router.get("/v1/progress/{job_id}")
+def job_progress(job_id: str) -> JSONResponse:
+    """Live stage progress for an in-flight ``job_id`` (polled by Rust).
+
+    Returns ``progress: null`` when no stage for this job is currently
+    registered — the caller treats that as "no progress available" and keeps
+    its own stage anchors. Never exposes paths, tokens, or command lines.
+    """
+    with _cancel_lock:
+        token = _cancel_tokens.get(job_id)
+    if token is None:
+        return JSONResponse({"job_id": job_id, "progress": None, "stage": None})
+    progress, stage = token.get_progress()
+    return JSONResponse({"job_id": job_id, "progress": progress, "stage": stage})

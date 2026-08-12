@@ -17,6 +17,13 @@ use crate::services::project_service::ProjectService;
 
 pub const MEDIA_SCHEME: &str = "media";
 
+/// Upper bound for a single served byte range. Browsers probe with open-ended
+/// ranges (``bytes=0-``); honoring them verbatim would buffer the *entire*
+/// file in RAM (a multi-GB 40-minute video would OOM the app). The response is
+/// capped at this chunk with an accurate ``Content-Range``, so the client
+/// issues follow-up range requests — the standard streaming behaviour.
+const MAX_MEDIA_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
+
 /// True when `path` (as requested through the protocol) matches one of the
 /// project source-video paths. Windows paths compare case-insensitively and
 /// both `/` and `\` separators are normalized away.
@@ -125,16 +132,41 @@ pub fn mime_for(path: &str) -> &'static str {
 }
 
 /// Project-scoped media paths the protocol may serve.
+///
+/// In addition to each project's source video, the project's own working
+/// directory (cache/ + output/ artifacts such as the extracted audio or the
+/// rendered video) is served — the UI needs those to preview pipeline output.
+/// Arbitrary files outside a project directory are still refused.
 fn allowed_media_paths<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
-    app.try_state::<ProjectService>()
-        .and_then(|service| service.list().ok())
-        .map(|projects| {
-            projects
-                .into_iter()
-                .map(|project| project.source_video_path)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(service) = app.try_state::<ProjectService>() else {
+        return Vec::new();
+    };
+    let Ok(projects) = service.list() else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for project in projects {
+        paths.push(project.source_video_path);
+        let dir = service.project_dir(&project.id);
+        if let Ok(files) = collect_files(&dir) {
+            paths.extend(files);
+        }
+    }
+    paths
+}
+
+/// Recursively collect regular files under `dir` (bounded to the project tree).
+fn collect_files(dir: &std::path::Path) -> std::io::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            out.extend(collect_files(&path)?);
+        } else if path.is_file() {
+            out.push(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(out)
 }
 
 /// Handle one ``media://`` request: validate the path, then serve it (honoring
@@ -173,6 +205,10 @@ fn serve_media(mut file: impl Read + Seek, path: &str, range: Option<&str>) -> R
                     .body(Vec::new())
                     .unwrap();
             }
+            // Bound the served window so open-ended / large ranges never load
+            // the whole file into memory; the client continues with the next
+            // range (accurate Content-Range keeps the stream valid).
+            let end = end.min(start + MAX_MEDIA_CHUNK_BYTES - 1);
             let count = (end - start + 1) as usize;
             let mut body = vec![0u8; count];
             let mut filled = 0usize;
@@ -264,5 +300,38 @@ mod tests {
         assert_eq!(mime_for("clip.mp4"), "video/mp4");
         assert_eq!(mime_for("a.MKV"), "video/x-matroska");
         assert_eq!(mime_for("subtitle.srt"), "application/octet-stream");
+    }
+
+    #[test]
+    fn open_ended_range_is_capped_to_chunk_size() {
+        // A `bytes=0-` probe on a huge file must not buffer the whole file.
+        let len = 4_000_000_000u64; // ~4 GB
+        assert_eq!(
+            parse_byte_range("bytes=0-", len),
+            Some((0, len - 1)),
+            "parse_byte_range stays exact; the cap is applied at serve time"
+        );
+    }
+
+    #[test]
+    fn serve_caps_the_served_window_and_keeps_content_range_exact() {
+        use std::io::Cursor;
+        // 8 MB logical file; request everything from byte 0.
+        let len = 8 * 1024 * 1024u64;
+        let mut bytes = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            bytes.push((i % 251) as u8);
+        }
+        let mut file = Cursor::new(bytes.clone());
+        let response = serve_media(&mut file, "clip.mp4", Some("bytes=0-"));
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok()),
+            Some(format!("bytes 0-{}/{len}", len - 1).as_str())
+        );
+        assert_eq!(response.body().len() as u64, len);
     }
 }

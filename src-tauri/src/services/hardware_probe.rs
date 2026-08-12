@@ -238,6 +238,38 @@ pub fn probe() -> HardwareProfile {
     profile
 }
 
+/// Lazily-computed hardware snapshot shared across IPC calls (probe once).
+///
+/// The probe shells out to nvidia-smi / PowerShell / ffmpeg (~seconds), so it
+/// must never run per request; the first caller pays the cost and the result
+/// is cached for the lifetime of the app.
+pub struct SystemInfo {
+    profile: std::sync::Mutex<Option<HardwareProfile>>,
+}
+
+impl SystemInfo {
+    pub fn new() -> Self {
+        Self {
+            profile: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn get(&self) -> HardwareProfile {
+        let mut slot = self.profile.lock().unwrap();
+        if slot.is_none() {
+            log::info!("probing hardware (nvidia-smi / WMI / ffmpeg encoders)");
+            *slot = Some(probe());
+        }
+        slot.clone().expect("probe result")
+    }
+}
+
+impl Default for SystemInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -34,6 +34,14 @@ pub fn list(service: State<'_, JobService>, project_id: String) -> Result<Vec<Jo
     service.list(&project_id).map_err(err_to_string)
 }
 
+/// `job.list_all(limit?) → Job[]` across all projects (newest updated first).
+#[tauri::command(rename = "job.list_all")]
+pub fn list_all(service: State<'_, JobService>, limit: Option<u32>) -> Result<Vec<Job>, String> {
+    service
+        .list_recent(limit.unwrap_or(200))
+        .map_err(err_to_string)
+}
+
 /// `job.cancel(id) → void`
 #[tauri::command(rename = "job.cancel")]
 pub fn cancel(service: State<'_, JobService>, id: String) -> Result<(), String> {

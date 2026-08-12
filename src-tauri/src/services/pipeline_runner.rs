@@ -30,7 +30,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -56,6 +58,14 @@ pub const ARTIFACT_SUBTITLE_ASS: &str = "cache/subtitle.ass";
 pub const ARTIFACT_SUBTITLE_SRT: &str = "cache/subtitle.srt";
 
 pub const DEFAULT_RENDER_NAME: &str = "rendered";
+
+/// How long to wait for the worker to abort a stage after cancellation is
+/// requested (the worker kills process trees before answering).
+const CANCEL_WORKER_ABORT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Live-progress poll interval while a stage call is in flight.
+const PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Minimum progress delta before a live update is persisted/emitted.
+const PROGRESS_MIN_DELTA: f64 = 0.01;
 
 /// Canonical per-project artifact locations, derived from the project dir.
 ///
@@ -211,6 +221,79 @@ impl PipelineRunner {
         })
     }
 
+    /// Run one worker stage call while polling cancellation and live progress.
+    ///
+    /// The HTTP call runs on a worker thread (it can take many minutes on real
+    /// media); the calling thread polls ``ctx.is_cancelled()`` and the worker's
+    /// ``/v1/progress/{job_id}`` registry so the job shows moving progress and
+    /// cancellation reaches the worker promptly (the worker then kills any
+    /// FFmpeg process tree / aborts STT / stops between translate blocks).
+    /// ``window`` maps the worker's 0..1 stage progress into the job's own
+    /// progress span for this stage (e.g. extract 2%..15%, transcribe 15%..100%).
+    fn run_stage<T, F>(
+        &self,
+        client: &WorkerClient,
+        job: &Job,
+        ctx: &JobRunContext<'_>,
+        window: (f64, f64),
+        call: F,
+    ) -> Result<T, JobRunError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&WorkerClient) -> Result<T, HttpError> + Send + 'static,
+    {
+        let job_id = job.id.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let call_client = client.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(call(&call_client));
+        });
+
+        let (win_start, win_end) = window;
+        let mut last_reported: Option<f64> = None;
+        loop {
+            if (ctx.is_cancelled)() {
+                // Ask the worker to abort the in-flight stage. A bounded wait
+                // avoids blocking the job forever on a stuck worker — the
+                // stage thread finishes on its own when the worker answers.
+                let _ = client.cancel_job(&job_id);
+                match rx.recv_timeout(CANCEL_WORKER_ABORT_TIMEOUT) {
+                    Ok(_) | Err(RecvTimeoutError::Disconnected) => {}
+                    Err(RecvTimeoutError::Timeout) => {
+                        log::warn!(
+                            "worker stage for job {job_id} did not stop promptly after cancel"
+                        );
+                    }
+                }
+                return Err(JobRunError::Cancelled);
+            }
+            match rx.recv_timeout(PROGRESS_POLL_INTERVAL) {
+                Ok(result) => return result.map_err(Self::map_http),
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(JobRunError::Permanent {
+                        code: "E_WORKER_CALL_FAILED".into(),
+                        message: "the worker stage thread exited without a result".into(),
+                    });
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    // Live progress from the worker's stage registry (best-effort;
+                    // failures mean "no progress available" — keep the anchors).
+                    if let Ok(progress) = client.get_progress(&job_id) {
+                        if let Some(p) = progress.progress {
+                            let mapped = win_start + p.clamp(0.0, 1.0) * (win_end - win_start);
+                            let should_report = last_reported
+                                .is_none_or(|last| (mapped - last).abs() >= PROGRESS_MIN_DELTA);
+                            if should_report {
+                                last_reported = Some(mapped);
+                                (ctx.progress)(mapped, progress.stage.as_deref().unwrap_or(""));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Map a worker HTTP failure onto the job-run error taxonomy.
     fn map_http(err: HttpError) -> JobRunError {
         match err {
@@ -280,33 +363,54 @@ impl PipelineRunner {
         let total_duration = param_f64(p, "total_duration_seconds");
 
         let client = self.client()?;
-        let audio_path = artifact_paths(&project_dir).audio;
+        let audio_path = artifact_paths(&project_dir).audio.display().to_string();
+        let job_id = job.id.clone();
+        let project_id = job.project_id.clone();
 
         (ctx.progress)(0.02, "extract-audio");
-        let extract = client.extract_audio(ExtractAudioRequest {
-            video_path: video_path.clone(),
-            output_path: audio_path.display().to_string(),
-            job_id: Some(job.id.clone()),
-        });
+        let extract = self.run_stage(&client, job, ctx, (0.02, 0.15), {
+            let video_path = video_path.clone();
+            let audio_path = audio_path.clone();
+            let job_id = job_id.clone();
+            move |c| {
+                c.extract_audio(ExtractAudioRequest {
+                    video_path,
+                    output_path: audio_path,
+                    job_id: Some(job_id),
+                })
+            }
+        })?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
-        extract.map_err(Self::map_http)?;
+
+        // The extraction measured the source duration — feed it to STT so its
+        // per-segment progress maps to 0..1 instead of stalling at the anchor.
+        let total_duration = total_duration.or(extract.duration_seconds);
 
         (ctx.progress)(0.15, "transcribe");
-        let transcript = client.transcribe(TranscribeRequest {
-            audio_path: audio_path.display().to_string(),
-            project_id: job.project_id.clone(),
-            model,
-            device,
-            language,
-            total_duration_seconds: total_duration,
-            job_id: Some(job.id.clone()),
-        });
+        let transcript = self.run_stage(&client, job, ctx, (0.15, 1.0), {
+            let audio_path = audio_path.clone();
+            let job_id = job_id.clone();
+            let project_id = project_id.clone();
+            let model = model.clone();
+            let device = device.clone();
+            let language = language.clone();
+            move |c| {
+                c.transcribe(TranscribeRequest {
+                    audio_path,
+                    project_id,
+                    model,
+                    device,
+                    language,
+                    total_duration_seconds: total_duration,
+                    job_id: Some(job_id),
+                })
+            }
+        })?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
-        let transcript = transcript.map_err(Self::map_http)?;
 
         self.write_artifact(&job.project_id, ARTIFACT_TRANSCRIPT, &transcript)?;
         (ctx.progress)(1.0, "done");
@@ -393,29 +497,35 @@ impl PipelineRunner {
             .unwrap_or_else(|| "0".to_string());
 
         let client = self.client()?;
+        let job_id = job.id.clone();
+        let project_id = job.project_id.clone();
+        let characters = param_object(p, "characters");
+        let rules = param_string_array(p, "rules");
+        let provider_config = if provider_config.is_empty() {
+            None
+        } else {
+            Some(provider_config)
+        };
         (ctx.progress)(0.1, "translate");
-        let translation = client.translate(TranslateRequest {
-            transcript,
-            project_id: job.project_id.clone(),
-            provider,
-            target_language,
-            model,
-            glossary_ver: Some(glossary_ver),
-            glossary,
-            characters: param_object(p, "characters"),
-            rules: param_string_array(p, "rules"),
-            api_key,
-            provider_config: if provider_config.is_empty() {
-                None
-            } else {
-                Some(provider_config)
-            },
-            job_id: Some(job.id.clone()),
-        });
+        let translation: Translation = self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
+            c.translate(TranslateRequest {
+                transcript,
+                project_id: project_id.clone(),
+                provider: provider.clone(),
+                target_language: target_language.clone(),
+                model: model.clone(),
+                glossary_ver: Some(glossary_ver.clone()),
+                glossary,
+                characters,
+                rules,
+                api_key,
+                provider_config,
+                job_id: Some(job_id.clone()),
+            })
+        })?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
-        let translation: Translation = translation.map_err(Self::map_http)?;
 
         self.write_artifact(&job.project_id, ARTIFACT_TRANSLATION, &translation)?;
         (ctx.progress)(1.0, "done");
@@ -428,26 +538,33 @@ impl PipelineRunner {
             self.read_json(&job.project_id, ARTIFACT_TRANSCRIPT, "transcribe")?;
         let translation: Translation =
             self.read_json(&job.project_id, ARTIFACT_TRANSLATION, "translate")?;
-        let output_dir = artifact_paths(&project_dir).subtitle_srt;
-        let output_dir = output_dir.parent().expect("cache dir");
+        let output_dir = artifact_paths(&project_dir)
+            .subtitle_srt
+            .parent()
+            .expect("cache dir")
+            .display()
+            .to_string();
         let language = param_str(&job.params, "language")
             .filter(|v| !v.trim().is_empty())
             .or(Some(transcript.language.clone()));
 
         let client = self.client()?;
+        let job_id = job.id.clone();
+        let project_id = job.project_id.clone();
         (ctx.progress)(0.1, "subtitle");
-        let response = client.generate_subtitles(SubtitleRequest {
-            transcript,
-            translation,
-            project_id: job.project_id.clone(),
-            output_dir: output_dir.display().to_string(),
-            language,
-            job_id: Some(job.id.clone()),
-        });
+        let response = self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
+            c.generate_subtitles(SubtitleRequest {
+                transcript,
+                translation,
+                project_id: project_id.clone(),
+                output_dir: output_dir.clone(),
+                language: language.clone(),
+                job_id: Some(job_id.clone()),
+            })
+        })?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
-        let response = response.map_err(Self::map_http)?;
 
         // Sync the generated cues into the editor's project-scoped cue table so
         // the subtitle editor can edit them (TASK-025).
@@ -476,13 +593,23 @@ impl PipelineRunner {
         let project_dir = self.project_dir(&job.project_id)?;
         let video_path = self.source_video(job)?;
         let paths = artifact_paths(&project_dir);
-        let subtitle_path = paths.subtitle_ass;
-        if !subtitle_path.is_file() {
-            return Err(permanent(
-                "E_ARTIFACT_MISSING",
-                "missing `cache/subtitle.ass` — run the subtitle stage before rendering",
-            ));
-        }
+        // Burn subtitles unless the caller explicitly opted out
+        // (`params.burn_subtitles == "false"`); rendering without subtitles
+        // is a legitimate output and must not require the ASS artifact.
+        let burn_subtitles = param_str(p, "burn_subtitles")
+            .map(|v| v == "true")
+            .unwrap_or(true);
+        let subtitle_path = if burn_subtitles {
+            if !paths.subtitle_ass.is_file() {
+                return Err(permanent(
+                    "E_ARTIFACT_MISSING",
+                    "missing `cache/subtitle.ass` — run the subtitle stage before rendering",
+                ));
+            }
+            Some(paths.subtitle_ass.display().to_string())
+        } else {
+            None
+        };
         let name = param_str(p, "output_name")
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_RENDER_NAME.to_string());
@@ -495,23 +622,43 @@ impl PipelineRunner {
             fs::create_dir_all(parent).map_err(map_io)?;
         }
 
+        // Burn-in validation window: the longest displayed cue (the most
+        // reliable subtitle-presence sample). Skipped when subtitles are not
+        // burned or no cues were generated yet.
+        let check_window = if burn_subtitles {
+            let cues = self.subtitles.list(&job.project_id).map_err(map_db)?;
+            cues.iter()
+                .filter(|c| c.end > c.start && !c.text.trim().is_empty())
+                .max_by(|a, b| (a.end - a.start).total_cmp(&(b.end - b.start)))
+                .map(|c| (c.start, c.end))
+        } else {
+            None
+        };
+
         let client = self.client()?;
+        let job_id = job.id.clone();
         (ctx.progress)(0.1, "render");
-        let response = client.render(RenderRequest {
-            video_path,
-            subtitle_path: Some(subtitle_path.display().to_string()),
-            output_path: output_path.display().to_string(),
-            encoder: param_str(p, "encoder"),
-            preset: param_str(p, "preset"),
-            crf: param_u32(p, "crf"),
-            watermark: p.get("watermark").cloned().filter(|v| v.is_object()),
-            check_window: None,
-            job_id: Some(job.id.clone()),
-        });
+        let output_path_str = output_path.display().to_string();
+        let encoder = param_str(p, "encoder");
+        let preset = param_str(p, "preset");
+        let crf = param_u32(p, "crf");
+        let watermark = p.get("watermark").cloned().filter(|v| v.is_object());
+        let _response = self.run_stage(&client, job, ctx, (0.1, 1.0), move |c| {
+            c.render(RenderRequest {
+                video_path,
+                subtitle_path,
+                output_path: output_path_str.clone(),
+                encoder: encoder.clone(),
+                preset: preset.clone(),
+                crf,
+                watermark: watermark.clone(),
+                check_window,
+                job_id: Some(job_id.clone()),
+            })
+        })?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
-        let _response = response.map_err(Self::map_http)?;
         (ctx.progress)(1.0, "done");
         Ok(())
     }
@@ -597,9 +744,12 @@ mod tests {
 
     /// Canned HTTP server: accepts `n` requests, answering each from `routes`
     /// (path → (status, body)). Reads the full request (headers + body) first
-    /// so Windows loopback stays clean.
+    /// so Windows loopback stays clean. ``delay_ms`` stalls every response so
+    /// tests can hold a stage in flight (cancel / live-progress behaviour).
+    #[derive(Default)]
     struct CannedServer {
         routes: &'static [(&'static str, u16, &'static str)],
+        delay_ms: u64,
         seen: Arc<std::sync::Mutex<Vec<String>>>,
     }
 
@@ -609,10 +759,14 @@ mod tests {
                 TcpListener::bind((Ipv4Addr::from(HOST_LOOPBACK), 0)).expect("bind test listener");
             let port = listener.local_addr().expect("local addr").port();
             let routes = self.routes;
+            let delay_ms = self.delay_ms;
             let seen = self.seen.clone();
             thread::spawn(move || {
-                let mut remaining = routes.len();
-                while remaining > 0 {
+                // Accept forever: the runner may poll live progress or send a
+                // cancel request after the canned routes are consumed, and a
+                // client blocked on a dead listener would stall the test. The
+                // thread dies with the test process.
+                loop {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
                             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
@@ -659,9 +813,14 @@ mod tests {
                                     eprintln!("test server: failed to drain request body");
                                 }
                             }
-                            let (status, body) = routes
-                                .iter()
-                                .find(|(p, _, _)| p == &path)
+                            // Progress polls must answer instantly (they have a
+                            // short client read timeout); only stage calls are
+                            // delayed so tests can hold a stage in flight.
+                            if delay_ms > 0 && !path.starts_with("/v1/progress/") {
+                                std::thread::sleep(Duration::from_millis(delay_ms));
+                            }
+                            let matched = routes.iter().find(|(p, _, _)| p == &path);
+                            let (status, body) = matched
                                 .map(|(_, s, b)| (*s, *b))
                                 .unwrap_or((404, r#"{"error":{"code":"E_NOT_FOUND","message":"no route","recoverable":false}}"#));
                             let reason = if status == 200 { "OK" } else { "Error" };
@@ -670,7 +829,8 @@ mod tests {
                                 body.len()
                             );
                             let _ = stream.write_all(response.as_bytes());
-                            remaining -= 1;
+                            // Unknown paths (e.g. live-progress polls) answer 404;
+                            // matched routes respond with their canned body.
                         }
                         Err(e) => {
                             eprintln!("test server accept failed: {e}");
@@ -793,6 +953,7 @@ mod tests {
                 ),
                 ("/v1/stt/transcribe", 200, TRANSCRIPT_BODY),
             ],
+            delay_ms: 0,
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let port = server.spawn();
@@ -830,6 +991,7 @@ mod tests {
 
         let server = CannedServer {
             routes: &[("/v1/translate", 200, TRANSLATION_BODY)],
+            delay_ms: 0,
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let port = server.spawn();
@@ -880,6 +1042,7 @@ mod tests {
 
         let server = CannedServer {
             routes: &[("/v1/subtitle", 200, SUBTITLE_BODY)],
+            delay_ms: 0,
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let port = server.spawn();
@@ -918,6 +1081,7 @@ mod tests {
 
         let server = CannedServer {
             routes: &[("/v1/render", 200, RENDER_BODY)],
+            delay_ms: 0,
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let port = server.spawn();
@@ -968,6 +1132,7 @@ mod tests {
                 422,
                 r#"{"error":{"code":"E_FFMPEG_NOT_FOUND","message":"ffmpeg missing","recoverable":true}}"#,
             )],
+            delay_ms: 0,
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let port = server.spawn();
@@ -1008,6 +1173,113 @@ mod tests {
             JobRunError::Transient { code, .. } => assert_eq!(code, "E_WORKER_NOT_READY"),
             other => panic!("expected E_WORKER_NOT_READY, got {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn cancel_mid_stage_propagates_to_worker_and_returns_cancelled() {
+        let h = harness();
+        let pid = seed_project(&h, "cancel-mid-stage");
+        // The stage holds the connection open well past the poll interval so
+        // the runner observes the cancel flag mid-flight.
+        let server = CannedServer {
+            routes: &[(
+                "/v1/audio/extract",
+                200,
+                r#"{"output_path":"a.wav","duration_seconds":1.2,"file_size_bytes":100}"#,
+            )],
+            delay_ms: 900,
+            seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let port = server.spawn();
+        let runner = runner(&h, port);
+        let j = job(&pid, JobType::Transcribe, serde_json::json!({}));
+
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = {
+            let cancelled = cancelled.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        let progress = |_: f64, _: &str| {};
+        let cancelled_flag = cancelled.clone();
+        let outcome = runner.run(
+            &j,
+            &JobRunContext {
+                progress: &progress,
+                is_cancelled: &|| cancelled_flag.load(std::sync::atomic::Ordering::SeqCst),
+            },
+        );
+        flag.join().expect("flag thread");
+
+        assert!(matches!(outcome, Err(JobRunError::Cancelled)));
+        // Cancellation reached the worker's cancel endpoint (the poll loop
+        // called it while the stage was in flight).
+        let seen = server.seen.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|l| l.contains("/v1/jobs/job_0001/cancel")),
+            "worker cancel endpoint was not called: {seen:?}"
+        );
+        // The next stage never ran.
+        assert!(!h
+            .dir
+            .join("projects")
+            .join(&pid)
+            .join(ARTIFACT_TRANSCRIPT)
+            .exists());
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[test]
+    fn live_stage_progress_maps_into_job_window() {
+        let h = harness();
+        let pid = seed_project(&h, "live-progress");
+        // A delayed stage plus a progress route: the runner polls the worker's
+        // progress registry and maps it into the extract window (2%..15%).
+        let server = CannedServer {
+            routes: &[
+                (
+                    "/v1/audio/extract",
+                    200,
+                    r#"{"output_path":"a.wav","duration_seconds":1.2,"file_size_bytes":100}"#,
+                ),
+                (
+                    "/v1/progress/job_0001",
+                    200,
+                    r#"{"job_id":"job_0001","progress":0.5,"stage":"extract-audio"}"#,
+                ),
+                ("/v1/stt/transcribe", 200, TRANSCRIPT_BODY),
+            ],
+            delay_ms: 900,
+            seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let port = server.spawn();
+        let runner = runner(&h, port);
+        let j = job(&pid, JobType::Transcribe, serde_json::json!({}));
+
+        let reported: Arc<std::sync::Mutex<Vec<(f64, String)>>> = Arc::default();
+        let progress = {
+            let reported = reported.clone();
+            move |p: f64, stage: &str| reported.lock().unwrap().push((p, stage.to_string()))
+        };
+        let outcome = runner.run(
+            &j,
+            &JobRunContext {
+                progress: &progress,
+                is_cancelled: &|| false,
+            },
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        // The worker's 0.5 progress landed inside the extract window (0.02..0.15),
+        // i.e. ~0.085 — proving live progress reached the job.
+        let values = reported.lock().unwrap().clone();
+        let live = values
+            .iter()
+            .any(|(p, stage)| *p > 0.02 && *p < 0.15 && stage == "extract-audio");
+        assert!(live, "live extract progress not mapped: {values:?}");
         let _ = std::fs::remove_dir_all(&h.dir);
     }
 }

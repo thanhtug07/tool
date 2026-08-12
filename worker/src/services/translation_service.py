@@ -23,9 +23,10 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from src.api.schemas import TranslationBlock, TranslationItem
+from src.core.job import CancelledError, CancellationToken
 from src.services.context_service import ContextEngine
 from src.services.providers.base import BlockInput, ProviderError, SourceSegment
 from src.services.quality_service import QualityGate
@@ -191,6 +192,8 @@ class TranslationService:
         glossary: Mapping[str, str] | None = None,
         characters: Mapping[str, str] | None = None,
         rules: Sequence[str] | None = None,
+        cancel: CancellationToken | None = None,
+        on_progress: Callable[[float], None] | None = None,
     ) -> list[TranslationBlock]:
         if not segments:
             return []
@@ -201,8 +204,11 @@ class TranslationService:
             characters=characters,
             rules=rules,
         )
+        total = len(prepared)
         blocks: list[TranslationBlock] = []
-        for p in prepared:
+        for index, p in enumerate(prepared, start=1):
+            if cancel is not None and cancel.is_cancelled():
+                raise CancelledError("translation cancelled")
             block = BlockInput(
                 block_idx=p.block_idx,
                 segments=p.segments,
@@ -220,14 +226,15 @@ class TranslationService:
             ]
             if all(entry is not None for entry in cached):
                 blocks.append(self._assemble(p.segments, cached, p.block_idx))  # type: ignore[arg-type]
-                continue
-
-            report = self.gate.run(provider, block)
-            if not report.passed or report.result is None:
-                raise ProviderError(
-                    E_TRANSLATION,
-                    f"block {p.block_idx} failed after {report.attempts} attempt(s): {report.error}",
-                )
-            self._store(p.segments, report.result, target_language=target_language, glossary_ver=glossary_ver, model=model)
-            blocks.append(report.result)
+            else:
+                report = self.gate.run(provider, block)
+                if not report.passed or report.result is None:
+                    raise ProviderError(
+                        E_TRANSLATION,
+                        f"block {p.block_idx} failed after {report.attempts} attempt(s): {report.error}",
+                    )
+                self._store(p.segments, report.result, target_language=target_language, glossary_ver=glossary_ver, model=model)
+                blocks.append(report.result)
+            if on_progress is not None and total:
+                on_progress(index / total)
         return blocks

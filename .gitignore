@@ -45,9 +45,13 @@ models/*
 !models/manifest.json
 # --- Benchmark fixtures (generated media, not committed) ---
 worker/bench_output/
+# Demo/demo-run output (generated media, never committed).
+output/
 # --- Temporary / local ---
 *.tmp
 tmp/
 golden/voices/
 golden/results/
 .freebuff/
+# Agent skill files owned by the desktop client (not project content).
+.agents/
