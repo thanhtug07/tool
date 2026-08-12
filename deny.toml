@@ -2,6 +2,40 @@
 # Whitelist = licenses verified commercial-safe per MASTER_PLAN.md §21.
 # Re-verify each dependency's actual LICENSE file at release time (MASTER_PLAN §21 rule).
 
+[advisories]
+# All entries below are `unmaintained` advisories only — there are ZERO
+# vulnerability (CVE) advisories in the lockfile (verified 2026-08-12 via
+# `cargo deny check advisories`). Each is a transitive dependency with "no
+# safe upgrade available" (as stated by the advisories themselves), affecting
+# a Linux-only GUI stack or build-time tooling that the Windows-only product
+# never ships or links:
+#   - RUSTSEC-2024-0411..0420: gtk-rs GTK3 bindings, pulled transitively by
+#     tauri's muda/tao/webkit2gtk. Linux-only; product targets Windows only
+#     (MASTER_PLAN §15) and never links GTK.
+#   - RUSTSEC-2024-0370: proc-macro-error, a build-time proc-macro helper.
+#   - RUSTSEC-2025-0075/0080/0081/0098/0100: rust-unic Unicode crates, pulled
+#     by urlpattern (a wry/tauri webview dependency). No runtime impact here.
+# Re-run `cargo deny check advisories` on each toolchain bump and re-evaluate
+# if the app ever targets Linux or the dependency tree changes.
+ignore = [
+    "RUSTSEC-2024-0411",
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0417",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098",
+    "RUSTSEC-2025-0100",
+]
+
 [licenses]
 unused-allowed-license = "warn"
 confidence-threshold = 0.93

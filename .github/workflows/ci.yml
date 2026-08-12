@@ -100,7 +100,8 @@ jobs:
       - name: cargo-deny license audit
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check licenses
+          command: check
+          args: licenses advisories bans sources
 
   security:
     name: Security (gitleaks)

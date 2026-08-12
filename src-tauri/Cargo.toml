@@ -31,6 +31,6 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # Credential Manager) via `keyring` — NEVER the SQLite DB. FIX #8: when the
 # credential service is unavailable the save is blocked with a clear error;
 # there is deliberately NO encrypted-file / custom-crypto fallback.
-keyring = "3"
+keyring = { version = "3", features = ["windows-native"] }
 
 [dev-dependencies]

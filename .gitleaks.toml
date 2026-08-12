@@ -1,0 +1,16 @@
+# gitleaks configuration
+#
+# Allowlist for the one known false positive in the repo:
+#   src/api/settings.test.ts uses the obviously-fake fixture key
+#   `AIzaSy-secret-key-1234` (substring `secret-key-1234`) to unit-test the
+#   settings bridge. It is NOT a real Google API key and never leaves the
+#   test file. The value is verified as a fixture by code review (TASK-030).
+#
+# The `gitleaks:allow` inline annotations in the test file keep the working
+# tree clean; this allowlist also silences the *historical* commit that
+# predates the annotations. Re-verify this entry on every config change.
+[allowlist]
+description = "test fixture API key used only by src/api/settings.test.ts"
+regexes = [
+    "AIzaSy-secret-key-1234",
+]

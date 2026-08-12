@@ -1,0 +1,102 @@
+# RELEASE_PROGRESS.md
+
+Live release-gate log for the beta-readiness push (session started 2026-08-12).
+Each gate records: status (`PASS`/`PARTIAL`/`NOT_RUN`/`NOT_VERIFIED`/`BLOCKED`),
+concrete evidence, next action. Companion docs: `RELEASE_READINESS_AUDIT.md`,
+`docs/AUTONOMOUS_PROGRESS.md`, `RELEASE.md`, `TESTING.md`, `SECURITY.md`.
+
+---
+
+## Gate 1 — Clean-machine install smoke test
+
+**Status: PARTIAL** (verified on the dev machine from the *actual installer*; a true clean VM install remains BLOCKED).
+
+Environment: Dell Precision 5550 (Win11, NVIDIA Quadro T1000 4 GB), no clean VM available.
+
+What was done (all from the packaged artifacts, not `cargo run`):
+
+1. **Packaged worker was stale — rebuilt.** `worker-dist/worker/worker.exe` predated the RELEASE-P1-001 translation fix (350c611). Rebuilt via `py -3.13 worker/packaging/build_worker.py` → `worker-dist/worker/worker.exe` (276 MB onedir; fresh faster-whisper 1.2.1 / ctranslate2 4.8.1 / onnxruntime 1.20.0; no nvidia/CPU-only bundles pulled in).
+2. **Installers rebuilt.** `npx tauri build` (with cargo on PATH) produced fresh:
+   - `target/release/bundle/msi/AI Video Localization Studio_0.1.0_x64_en-US.msi` (184.7 MB)
+   - `target/release/bundle/nsis/AI Video Localization Studio_0.1.0_x64-setup.exe` (133.4 MB)
+   - `target/release/ai-video-localization.exe` (main exe)
+3. **Silent install.** `setup.exe /S /D=<temp>` → exit 0; extracted `ai-video-localization.exe`, `uninstall.exe`, `worker\worker.exe`, `worker\_internal\*`, `ffmpeg\ffmpeg.exe`, `ffmpeg\ffprobe.exe`.
+4. **Launch.** Installed `ai-video-localization.exe` ran and stayed alive (37 MB RSS after 6 s).
+5. **Bundled worker + FFmpeg from install dir.** Spawned the installed `worker\worker.exe` (outside the repo) with `FFMPEG_BIN/FFPROBE_BIN` → install-dir binaries:
+   - READY handshake: PASS (`READY <token>` echoes the stdin `WORKER_AUTH_TOKEN`)
+   - `GET /health` → `{"status":"ok","version":"0.1.0"}`
+   - Real STT on golden audio (`/v1/stt/transcribe`, tiny, cpu): HTTP 200, 1 segment, correct text.
+6. **Golden E2E via installed worker** (`run_golden.py --worker-exe <install>\worker\worker.exe`): **16/16 PASS in 3.6 s** (audio extract → real STT → translate → subtitle → render → export QC).
+
+Findings:
+- Worker startup needs a normal Windows environment (full env inherited). Spawned with a *minimal* env, `asyncio` fails `WinError 10106` (Winsock provider) — a harness artifact, not a product bug; the app/WorkerManager inherits the full env.
+- First-run model download on a *fresh* OS (no HF cache) was **not** testable here (cache already present) — still open.
+
+Next action: run install → launch → pipeline → uninstall on a clean Win10/11 VM (no Python/Node/Rust/FFmpeg/CUDA). Owner: maintainer (hardware access).
+
+---
+
+## Gate 2 — NVIDIA GPU validation
+
+**Status: PASS (CUDA STT inference, CPU-first packaged default) / PARTIAL (NVENC encode fails on this GPU; libx264 fallback verified).**
+
+Evidence (real hardware: **Quadro T1000, 4096 MiB, driver 582.16, CC 7.5**; CUDA Toolkit v11.8 installed, so CUDA-12 runtime libs for ctranslate2 were provisioned via pip `nvidia-cublas-cu12` + `nvidia-cuda-runtime-cu12`):
+
+- `ctranslate2.get_cuda_device_count()` → **1 device** (was reported before as "device count 1 but cublas64_12.dll missing" — now resolved by adding the CUDA-12 runtime).
+- Real faster-whisper inference (`tiny`, `device=cuda`, int8) on golden audio: **0.49 s**, correct text, GPU util sampled during inference **0→6→50 %**, VRAM used **0→10→116→160 MiB**.
+- Golden E2E **`--device cuda`**: **16/16 PASS in 5.8 s** (source worker) and **16/16 PASS in 9.5 s** (fresh packaged worker) — real STT on CUDA, rest CPU.
+- **NVENC encode fails on this machine** (`h264_nvenc`/`hevc_nvenc`: "Function not implemented", code -40) even on synthetic input, both system and vendored FFmpeg 9.0. The render service detects NVENC but the encoder session cannot be opened → **automatic fallback to libx264 works** (golden render 0.7–1.2 s, output valid). NVDEC (`-hwaccel cuda`) decode works. This is a driver/GPU-session limitation of this embedded GPU, not a code path; MASTER_PLAN §9/§14 mandates exactly this NVENC→libx264 fallback.
+- Packaged worker bundles `ctranslate2\cudnn64_9.dll` but **not** `cublas64_12.dll`. Per MASTER_PLAN §32 (CPU-first default; "AI add-on download optional"), the CUDA runtime is intentionally **not** bundled — GPU works when the CUDA-12 runtime is present. Documented, not changed (no scope/architecture change without approval).
+
+Next action: re-run STT + render on a machine with a working NVENC session (desktop NVIDIA GPU) to close the encode gap; record in `worker/perf_report.json`. Owner: maintainer.
+
+---
+
+## Gate 3 — Security verification
+
+**Status: in progress** (see evidence below as it lands).
+
+Scope: gitleaks, cargo-deny, pip-licenses, secret scanning, shell-execution audit, Tauri CSP/capabilities, Credential Manager, logging audit, FFmpeg argument safety, dependency/license audit.
+
+### 3a. Dependencies & tooling (done)
+
+- **cargo-deny 0.20.2** (installed via `cargo install`): `licenses`, `bans`, `sources` all OK. `advisories` failed only on **15 `unmaintained` advisories — zero CVEs**: RUSTSEC-2024-0411..0420 (gtk-rs GTK3 bindings, **Linux-only**, not shipped on Windows), RUSTSEC-2024-0370 (`proc-macro-error`, dev/build-time), RUSTSEC-2025-0075/0080/0081/0098/0100 (`rust-unic`/`unic-*`, transitive of Tauri, no RCE/USB-C tiers). All 15 ignored in `deny.toml` with written justification; full `cargo deny check licenses advisories bans sources` now **PASSES**. (Fixes: `deny.toml` + `.github/workflows/ci.yml` args.)
+- **gitleaks 8.24.3** (installed from GitHub release zip): full `git` history scan (70 commits) → **1 finding**: a fake fixture value `AIzaSy-secret-key-1234` in `src/api/settings.test.ts:42` (commit 7e6fe5f, TASK-030). Confirmed fake (test-only string literal, never sent anywhere). Inline `gitleaks:allow` markers added + `.gitleaks.toml` allowlist regex → re-run **no leaks found**.
+- **pip-licenses 5.5.5**: bundled dist-info set (16 packages: attrs, click, cryptography, ctranslate2, email_validator, faster_whisper, itsdangerous, jsonschema, markupsafe, numpy, pydantic, pyreadline3, tokenizers, tqdm, websockets, werkzeug) all **commercial-safe** (MIT / BSD / Apache-2.0 / MPL-2.0 / Unlicense). NVIDIA proprietary wheels NOT bundled (dev-env only). PyInstaller (GPLv2) is a build-time tool, not shipped runtime.
+- **Static shell-execution audit**: no `shell=True` / `os.system()` anywhere in `worker/`; every subprocess call is an explicit argument array (`worker/src/core/ffmpeg.py:243`, `worker/src/core/whisper_cpp.py:246`, `worker/src/core/job.py`, `worker/src/services/*`). `FFMPEG_BIN` is restricted to an allowlist (`FFMPEG_ALLOWLIST = {"ffmpeg","ffmpeg.exe"}`, `ffmpeg.py:44`) and `validate_input_path()` rejects NUL + shell metacharacters (`ffmpeg.py:113`). `run_ffmpeg(args: list[str])` is string-typed array only.
+- **Tauri CSP (`tauri.conf.json`)**: production CSP is strict — `default-src 'self'`; `script-src 'self'` (no inline/eval in prod); `connect-src ipc: http://ipc.localhost` (**no external network**); `object-src 'none'`; `base-uri 'self'`; `frame-ancestors 'none'`; `form-action 'self'`. Media/fonts limited to `asset:`/`blob:`/`data:`. Dev CSP only relaxes script/style `'unsafe-inline'` + localhost:1420.
+- **Tauri capabilities (`capabilities/default.json`)**: deny-by-default; only `core:default` + `dialog:default` on the main window. **No** shell/process/fs/http broad grants.
+- **Logging audit**: no logger line in Rust (`src-tauri/src/**`) or Python (`worker/src/**`) logs an API key/token/secret. The sidecar auth token appears only in the stdout READY handshake (`worker/src/main.py:74`, echoed to parent process), never in logs or argv. `save_secret` errors include no secret material.
+
+### 3b. Credential Manager (real-vault verification) — ⚠ CRITICAL FINDING + FIX
+
+**Finding:** `Cargo.toml` declared `keyring = "3"` **without the `windows-native` feature**. The keyring crate's compile-time default on Windows is then the **in-memory mock store** (`keyring-3.6.3/src/lib.rs:296-297`). Result: `set` returned `Ok`, `get` returned `Ok(None)`, `delete` "succeeded", and **nothing was ever written to Windows Credential Manager** — API-key saves were silently simulated in-process and lost on restart. This violated FIX #8's "no fallback" intent and meant stored API keys were never actually protected.
+
+**Reproduction:** added `#[ignore]`d integration test `real_vault_roundtrip_windows` (`secret_store.rs`) exercising `KeyringVault` directly through Windows Credential Manager (level-1 evidence). Before fix: FAILED with `get → None`; `cmdkey /list` showed no credential. Cross-check: standalone probe with `keyring = { features=["windows-native"] }` round-trips correctly (SET_OK / GET match / DELETE / NoEntry).
+
+**Fix:** `src-tauri/Cargo.toml:34` → `keyring = { version = "3", features = ["windows-native"] }`. `cargo build` now pulls `windows-sys 0.60.2` and compiles the real backend.
+
+**Verified after fix (this machine, real Windows vault):**
+- Mock suite: 6/6 PASS.
+- Real-vault round-trip `--ignored`: **PASS** — set → get (full secret matches) → delete → get returns `None`; credential appeared in `cmdkey /list` as `LegacyGeneric:target=gemini.ai-video-localization-audit` and was removed after cleanup (no leftovers).
+- FIX #8 behavior preserved: `KeyringVault` maps any non-`NoEntry` keyring error to `SecretStoreError::Unavailable` with "key was not saved" (no silent fallback).
+
+**Impact on release:** this was a real P1 for shipped behavior (API-key persistence). Fixed + verified; the new `#[ignore]`d test is CI-safe (runs only on a real OS vault) and the mock tests keep the contract safe everywhere.
+
+---
+
+## Gate 4 — License decision
+
+**Status: BLOCKED — OWNER DECISION REQUIRED.** Project license is still TBD (`README` "License" TODO, `src-tauri/Cargo.toml` `license` unset). No `LICENSE` file will be added until the owner chooses (MASTER_PLAN §21: never assert an unverified license). See `LICENSING.md`.
+
+---
+
+## Gate 5 — End-user documentation
+
+**Status: pending.** The engineering doc set is complete (RELEASE-P1-002). The audit flags a missing user-facing install/use/troubleshooting guide — to be added if time permits within this session.
+
+---
+
+## Gate 6 — Final regression
+
+**Status: pending.** Full suite: worker pytest, Rust fmt/check/clippy/test, frontend typecheck/lint/format/test/build, golden E2E, translation benchmark, packaging, available security checks.

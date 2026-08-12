@@ -307,4 +307,34 @@ mod tests {
     fn providers_are_allowlisted() {
         assert_eq!(PROVIDERS, &["gemini", "local", "openai"]);
     }
+
+    /// Real OS-credential-vault round-trip (Windows Credential Manager via the
+    /// `keyring` crate). Ignored by default so ordinary `cargo test` runs never
+    /// touch a real vault / CI host; run explicitly on a desktop Windows build
+    /// (`cargo test real_vault_roundtrip_windows -- --ignored`) for the release
+    /// security audit. Uses a dedicated audit service name so the application's
+    /// own `CREDENTIAL_SERVICE` entry is never read or clobbered; the audit
+    /// credential is always deleted in the end.
+    #[test]
+    #[ignore]
+    fn real_vault_roundtrip_windows() {
+        let vault = KeyringVault;
+        let service = "ai-video-localization-audit";
+        let user = "gemini";
+        let key = "AIzaSy-AUDIT-roundtrip-secret-value-0123456789";
+        let result = (|| -> Result<(), SecretStoreError> {
+            vault.set(service, user, key)?;
+            let got = vault.get(service, user)?.expect("credential present");
+            assert_eq!(got, key, "full secret round-trips via Credential Manager");
+            vault.delete(service, user)?;
+            assert!(
+                vault.get(service, user)?.is_none(),
+                "credential removed from the OS vault"
+            );
+            Ok(())
+        })();
+        // Best-effort cleanup if an assertion short-circuited above.
+        let _ = vault.delete(service, user);
+        result.expect("real vault round-trip check");
+    }
 }

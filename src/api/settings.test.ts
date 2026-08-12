@@ -36,10 +36,10 @@ describe("settings bridge (unit — mocked invoke)", () => {
 
   it("stores an API key in the credential vault", async () => {
     mockedInvoke.mockResolvedValue(null);
-    await setApiKey("gemini", "AIzaSy-secret-key-1234");
+    await setApiKey("gemini", "AIzaSy-secret-key-1234"); // gitleaks:allow - test fixture, not a real key
     expect(mockedInvoke).toHaveBeenCalledWith("secrets.set_api_key", {
       provider: "gemini",
-      key: "AIzaSy-secret-key-1234",
+      key: "AIzaSy-secret-key-1234", // gitleaks:allow - test fixture, not a real key
     });
   });
 
