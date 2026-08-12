@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from src import __version__
 from src.api.pipeline import router as pipeline_router
 from src.api.routes import configure_auth_token, router
+from src.core.cuda_libs import ensure_cuda_libraries
 from src.core.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -80,9 +81,12 @@ def _warm_ai_stack() -> None:
     (observed: the first request could hang for minutes inside ``import numpy``
     inside the AnyIO worker thread). Runs concurrently with uvicorn startup;
     the health endpoint stays cheap and the import failure is non-fatal — the
-    route still surfaces ``E_STT_MODEL_UNAVAILABLE`` when faster-whisper is
+    route still surfaces    ``E_STT_MODEL_UNAVAILABLE`` when faster-whisper is
     actually missing.
     """
+    # Register pip-provided CUDA DLL dirs (Windows) before ctranslate2 loads so
+    # CUDA inference can find cuBLAS/cuDNN/cudart; absent libs degrade to CPU.
+    ensure_cuda_libraries()
     try:
         t0 = time.monotonic()
         import faster_whisper  # noqa: PLC0415 - heavy, lazy by design
@@ -145,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging()
     logger.info("starting worker")
+    ensure_cuda_libraries()
     _warm_ai_stack()
     config = uvicorn.Config(app, host=HOST, port=args.port, log_config=None)
     server = uvicorn.Server(config)

@@ -13,11 +13,13 @@ from pathlib import Path
 
 import pytest
 
+import src.services.stt_service as stt_service
 from src.core.job import CancelledError, CancellationToken
 from src.services.stt_service import (
     E_STT_FAILED,
     E_STT_NO_SPEECH,
     STTError,
+    _is_cuda_library_error,
     build_transcript,
     guard_model_tier,
     pick_compute_type,
@@ -292,3 +294,92 @@ class TestTranscribeWithInjectedModel:
         )
         assert ratios == [0.5]
         assert result.transcript["segments"][0]["end"] == 1.5
+
+
+class CudaBrokenModel:
+    """A model whose ``transcribe`` returns a lazy generator that raises on the
+    first iteration — exactly how a missing ``cublas64_12.dll`` surfaces in
+    faster-whisper (inference happens while the segments generator is
+    consumed, not inside ``transcribe()``)."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def transcribe(self, audio, **kwargs):
+        def gen():
+            raise RuntimeError(self.message)
+            yield  # pragma: no cover
+
+        return (gen(), None)
+
+
+class TestCudaLibraryErrorClassifier:
+    def test_missing_cublas_is_a_cuda_library_error(self) -> None:
+        assert _is_cuda_library_error(
+            RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        )
+
+    def test_missing_cudnn_is_a_cuda_library_error(self) -> None:
+        assert _is_cuda_library_error(RuntimeError("cudnn64_9.dll cannot be loaded"))
+
+    def test_unrelated_runtime_error_is_not(self) -> None:
+        assert not _is_cuda_library_error(RuntimeError("boom"))
+
+
+class TestCudaToCpuFallback:
+    def test_cuda_runtime_error_retries_on_cpu(self, tmp_path, monkeypatch) -> None:
+        audio = tmp_path / "a.wav"
+        audio.write_bytes(b"RIFF")
+        broken = CudaBrokenModel(
+            "Library cublas64_12.dll is not found or cannot be loaded"
+        )
+        cpu_model = FakeModel(
+            [FakeSegment(0.0, 0.9, "hello", language="en")],
+            FakeInfo(language="en", duration=1.0),
+        )
+        monkeypatch.setattr(stt_service, "_load_whisper_model", lambda *a, **k: cpu_model)
+
+        result = transcribe(
+            str(audio),
+            project_id="p",
+            model_name="turbo",
+            device="cuda",
+            whisper_model=broken,
+        )
+
+        assert result.device_used == "cpu"
+        assert result.model_used == "turbo"
+        assert result.transcript["segments"][0]["text"] == "hello"
+
+    def test_non_cuda_runtime_error_still_fails(self, tmp_path) -> None:
+        audio = tmp_path / "a.wav"
+        audio.write_bytes(b"RIFF")
+        broken = CudaBrokenModel("boom")
+        with pytest.raises(STTError) as excinfo:
+            transcribe(
+                str(audio),
+                project_id="p",
+                model_name="turbo",
+                device="cuda",
+                whisper_model=broken,
+            )
+        assert excinfo.value.code == E_STT_FAILED
+
+    def test_cpu_fallback_also_failing_raises_clean_error(self, tmp_path, monkeypatch) -> None:
+        audio = tmp_path / "a.wav"
+        audio.write_bytes(b"RIFF")
+        broken = CudaBrokenModel(
+            "Library cublas64_12.dll is not found or cannot be loaded"
+        )
+        also_broken = CudaBrokenModel("cpu also exploded")
+        monkeypatch.setattr(stt_service, "_load_whisper_model", lambda *a, **k: also_broken)
+
+        with pytest.raises(STTError) as excinfo:
+            transcribe(
+                str(audio),
+                project_id="p",
+                model_name="turbo",
+                device="cuda",
+                whisper_model=broken,
+            )
+        assert excinfo.value.code == E_STT_FAILED

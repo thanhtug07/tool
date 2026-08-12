@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from src.core.cuda_libs import ensure_cuda_libraries
 from src.core.job import CancelledError, CancellationToken
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,20 @@ _MODEL_DOWNGRADE_ORDER = ("turbo", "small", "base", "tiny")
 #: Progress callback: ``(fraction 0..1)`` of transcription.
 ProgressCallback = Callable[[float], None]
 
+#: Substrings that identify a CUDA runtime-library failure (missing cuBLAS /
+#: cuDNN / cudart, unsupported driver). These are recoverable by retrying on
+#: CPU — anything else during STT is a genuine failure.
+_CUDA_LIB_ERROR_MARKERS = (
+    "cublas",
+    "cudnn",
+    "cublaslt",
+    "cudart",
+    "is not found",
+    "cannot be loaded",
+    "cuda error",
+    "driver",
+)
+
 _VALID_DEVICES = ("auto", "cuda", "cpu")
 
 
@@ -92,7 +107,12 @@ class TranscribeResult:
 
 
 def resolve_device(requested: str) -> str:
-    """Resolve ``auto`` to ``cuda``/``cpu`` (lazy torch import)."""
+    """Resolve ``auto`` to ``cuda``/``cpu``.
+
+    Prefers torch when installed; without torch, probes CUDA through
+    ctranslate2 directly (the same engine faster-whisper uses). Any probe
+    failure degrades to CPU — never raises.
+    """
     if requested not in _VALID_DEVICES:
         raise STTError(E_STT_FAILED, f"Unsupported device: {requested!r}.")
     if requested != "auto":
@@ -102,6 +122,13 @@ def resolve_device(requested: str) -> str:
 
         return "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
+        pass
+    try:
+        from ctranslate2 import get_cuda_device_count  # noqa: PLC0415
+
+        ensure_cuda_libraries()
+        return "cuda" if get_cuda_device_count() > 0 else "cpu"
+    except Exception:  # noqa: BLE001 - no CUDA runtime libs / driver: CPU
         return "cpu"
 
 
@@ -140,8 +167,24 @@ def guard_model_tier(requested_model: str, available_vram_mb: float | None) -> s
     return "tiny"
 
 
+def _is_cuda_library_error(exc: Exception) -> bool:
+    """True when a runtime exception indicates a missing/broken CUDA library.
+
+    faster-whisper defers all inference to a lazy generator, so a missing
+    ``cublas64_12.dll`` surfaces as a ``RuntimeError`` only when the segments
+    generator is consumed. Such failures are recoverable by retrying on CPU;
+    this classifier lets ``transcribe`` do exactly that instead of failing the
+    job with a 500.
+    """
+    lowered = str(exc).lower()
+    return any(marker in lowered for marker in _CUDA_LIB_ERROR_MARKERS)
+
+
 def _load_whisper_model(model_name: str, device: str, compute_type: str) -> Any:
     """Lazy-import faster-whisper and load ``model_name`` on ``device``."""
+    # Register pip-provided CUDA DLLs (Windows) before ctranslate2 resolves its
+    # dependencies at first encode; harmless elsewhere.
+    ensure_cuda_libraries()
     try:
         from faster_whisper import WhisperModel  # noqa: PLC0415 - lazy, heavy
     except ImportError as exc:
@@ -301,40 +344,63 @@ def transcribe(
             )
         model = _load_whisper_model(effective_model, resolved_device, resolved_compute)
 
-    try:
-        result = model.transcribe(
+    def _run_and_build(mdl: Any) -> dict[str, Any]:
+        """Transcribe + consume the lazy generator + build the transcript.
+
+        All real inference happens here — faster-whisper returns a generator
+        from ``transcribe()`` and encodes lazily as ``build_transcript``
+        iterates it, so CUDA runtime errors surface inside this call.
+        """
+        result = mdl.transcribe(
             audio_path,
             language=language,
             vad_filter=True,
             beam_size=5,
         )
+        segments, info = result if isinstance(result, tuple) else (result, None)
+        detected = getattr(info, "language", None) if info is not None else None
+        duration = total_duration_seconds
+        if duration is None and info is not None:
+            info_duration = getattr(info, "duration", None)
+            if info_duration is not None:
+                duration = float(info_duration)
+        return build_transcript(
+            segments,
+            project_id=project_id,
+            model_name=effective_model,
+            language_override=language,
+            detected_language=detected,
+            total_duration_seconds=duration,
+            cancel=cancel,
+            on_progress=on_progress,
+        )
+
+    try:
+        transcript = _run_and_build(model)
     except CancelledError:
         raise
+    except STTError:
+        raise
+    except RuntimeError as exc:
+        # CUDA runtime library missing/broken (e.g. cublas64_12.dll absent):
+        # retry once on CPU instead of failing the job with a 500.
+        if resolved_device != "cuda" or not _is_cuda_library_error(exc):
+            raise STTError(E_STT_FAILED, "Transcription failed.") from exc
+        logger.warning("CUDA runtime library failure (%s); retrying STT on CPU", exc)
+        ensure_cuda_libraries()
+        try:
+            transcript = _run_and_build(_load_whisper_model(effective_model, "cpu", "int8"))
+        except STTError:
+            raise
+        except Exception as cpu_exc:  # noqa: BLE001 - map CPU fallback failure
+            raise STTError(E_STT_FAILED, "Transcription failed (CPU fallback also failed).") from cpu_exc
+        return TranscribeResult(
+            transcript=transcript,
+            model_used=effective_model,
+            device_used="cpu",
+        )
     except Exception as exc:  # noqa: BLE001 - map every transcription failure
         raise STTError(E_STT_FAILED, "Transcription failed.") from exc
-
-    if isinstance(result, tuple):
-        segments, info = result
-    else:
-        segments, info = result, None
-
-    detected = getattr(info, "language", None) if info is not None else None
-    duration = total_duration_seconds
-    if duration is None and info is not None:
-        info_duration = getattr(info, "duration", None)
-        if info_duration is not None:
-            duration = float(info_duration)
-
-    transcript = build_transcript(
-        segments,
-        project_id=project_id,
-        model_name=effective_model,
-        language_override=language,
-        detected_language=detected,
-        total_duration_seconds=duration,
-        cancel=cancel,
-        on_progress=on_progress,
-    )
     return TranscribeResult(
         transcript=transcript,
         model_used=effective_model,
