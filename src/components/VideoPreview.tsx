@@ -16,6 +16,8 @@ export type VideoPreviewProps = {
   videoHeightPx?: number;
   /** Seed the initial playhead (used by tests / resume). */
   initialTime?: number;
+  /** Real media metadata read from the loaded element (duration/resolution). */
+  onMetadata?: (meta: { duration: number; width: number; height: number }) => void;
 };
 
 export function formatTime(seconds: number): string {
@@ -38,11 +40,15 @@ export default function VideoPreview({
   style = ASS_DEFAULT_STYLE,
   videoHeightPx = 1080,
   initialTime = 0,
+  onMetadata,
 }: VideoPreviewProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(initialTime);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,8 +85,36 @@ export default function VideoPreview({
     setCurrentTime(time);
   }
 
+  function toggleMuted() {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setMuted(video.muted);
+  }
+
+  function changeVolume(next: number) {
+    const video = videoRef.current;
+    if (!video) return;
+    const clamped = Math.min(1, Math.max(0, next));
+    video.volume = clamped;
+    video.muted = clamped === 0;
+    setVolume(clamped);
+    setMuted(clamped === 0);
+  }
+
+  async function toggleFullscreen() {
+    const container = containerRef.current;
+    if (!container) return;
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await container.requestFullscreen();
+    }
+  }
+
   return (
     <div
+      ref={containerRef}
       data-role="video-preview"
       className="relative overflow-hidden rounded border border-border bg-black"
     >
@@ -90,7 +124,15 @@ export default function VideoPreview({
         src={videoUrl}
         className="block w-full"
         aria-label="Video preview"
-        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+        onLoadedMetadata={(event) => {
+          const el = event.currentTarget;
+          setDuration(el.duration || 0);
+          onMetadata?.({
+            duration: el.duration || 0,
+            width: el.videoWidth,
+            height: el.videoHeight,
+          });
+        }}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onWaiting={() => setLoading(true)}
@@ -135,6 +177,26 @@ export default function VideoPreview({
         >
           {playing ? "Pause" : "Play"}
         </button>
+        <button
+          type="button"
+          data-role="volume-toggle"
+          onClick={toggleMuted}
+          aria-label={muted ? "Unmute" : "Mute"}
+          className="rounded bg-white/10 px-2 py-1 text-xs text-white"
+        >
+          {muted ? "Muted" : "Vol"}
+        </button>
+        <input
+          type="range"
+          data-role="volume"
+          aria-label="Volume"
+          min={0}
+          max={1}
+          step={0.05}
+          value={muted ? 0 : volume}
+          onChange={(event) => changeVolume(Number(event.target.value))}
+          className="w-16"
+        />
         <input
           type="range"
           data-role="scrub"
@@ -149,6 +211,15 @@ export default function VideoPreview({
         <span className="shrink-0 text-xs tabular-nums text-white/80">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
+        <button
+          type="button"
+          data-role="fullscreen"
+          onClick={() => void toggleFullscreen()}
+          aria-label="Fullscreen"
+          className="rounded bg-white/10 px-2 py-1 text-xs text-white"
+        >
+          ⛶
+        </button>
       </div>
     </div>
   );

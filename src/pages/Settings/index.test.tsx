@@ -25,24 +25,26 @@ function renderPage() {
 }
 
 describe("SettingsPage (unit — mocked bridge, no Tauri IPC)", () => {
-  it("renders the About section and an idle connection state", () => {
+  it("renders the Connection section and an idle connection state", () => {
     const html = renderPage();
 
     expect(html).toContain("Settings");
-    expect(html).toContain("About");
+    expect(html).toContain("Connection");
     expect(html).toContain("Test connection");
     expect(html).toContain("Not tested yet.");
   });
 
-  it("renders AI, GPU, API, Cache and Privacy sections", () => {
+  it("renders the General, Providers, Processing, Storage and Privacy sections", () => {
     const html = renderPage();
-    expect(html).toContain("AI");
-    expect(html).toContain("GPU");
-    expect(html).toContain("API");
-    expect(html).toContain("Cache");
+    expect(html).toContain("General");
+    expect(html).toContain("AI providers");
+    expect(html).toContain("Processing");
+    expect(html).toContain("Storage");
     expect(html).toContain("Privacy");
     expect(html).toContain("STT model");
-    expect(html).toContain("Acceleration");
+    expect(html).toContain("GPU override");
+    expect(html).toContain("Restart worker");
+    expect(html).toContain("Coming soon");
   });
 
   it("explains that keys live in the credential vault, not the DB", () => {

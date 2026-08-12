@@ -1,33 +1,57 @@
 import { useState } from "react";
 
+import type { Project } from "@/api/project";
 import JobFailBanner from "@/components/JobFailBanner";
 import Sidebar, { type NavKey } from "@/components/layout/Sidebar";
-import ProjectsPage from "@/pages/Projects";
-import DictionaryPage from "@/pages/Dictionary";
-import SubtitleEditorView from "@/pages/Project";
-import PreviewView from "@/pages/Project/PreviewView";
+import DashboardPage from "@/pages/Dashboard";
+import AutomationPage from "@/pages/Automation";
+import ToolsPage, { type ToolRequest } from "@/pages/Tools";
 import SettingsPage from "@/pages/Settings";
-import AboutPage from "@/pages/About";
-import type { Project } from "@/api/project";
+import { JobsProvider } from "@/stores/jobs";
 
 export default function App() {
-  const [active, setActive] = useState<NavKey>("projects");
+  const [active, setActive] = useState<NavKey>("dashboard");
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [toolRequest, setToolRequest] = useState<ToolRequest | null>(null);
+
+  function openTool(tool: ToolRequest["tool"], projectId?: string) {
+    setToolRequest({ tool, projectId });
+    setActive("tools");
+  }
+
+  function openProject(project: Project) {
+    setActiveProject(project);
+    setActive("automation");
+  }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar active={active} onNavigate={setActive} />
-      <main className="flex-1 overflow-y-auto p-6">
-        {active === "projects" && <ProjectsPage onOpenProject={setActiveProject} />}
-        {active === "dictionary" && <DictionaryPage />}
-        {active === "subtitles" && <SubtitleEditorView projectId={activeProject?.id} />}
-        {active === "preview" && (
-          <PreviewView projectId={activeProject?.id} videoPath={activeProject?.source_video_path} />
-        )}
-        {active === "settings" && <SettingsPage />}
-        {active === "about" && <AboutPage />}
-      </main>
-      <JobFailBanner />
-    </div>
+    <JobsProvider>
+      <div className="flex h-screen overflow-hidden">
+        <Sidebar active={active} onNavigate={setActive} />
+        <main className="flex-1 overflow-y-auto p-6">
+          {active === "dashboard" && (
+            <DashboardPage onNavigate={setActive} onOpenProject={openProject} />
+          )}
+          {active === "automation" && (
+            <AutomationPage
+              project={activeProject}
+              onProjectChange={setActiveProject}
+              onNavigate={setActive}
+              onOpenTool={openTool}
+            />
+          )}
+          {active === "tools" && (
+            <ToolsPage
+              request={toolRequest}
+              onConsumeRequest={() => setToolRequest(null)}
+              project={activeProject}
+              onNavigate={setActive}
+            />
+          )}
+          {active === "settings" && <SettingsPage />}
+        </main>
+        <JobFailBanner />
+      </div>
+    </JobsProvider>
   );
 }

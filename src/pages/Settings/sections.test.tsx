@@ -2,13 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SettingsSnapshot } from "@/api/settings";
-import {
-  AiSettingsSection,
-  ApiSettingsSection,
-  CacheSettingsSection,
-  GpuSettingsSection,
-  PrivacySettingsSection,
-} from "./sections";
+import { PrivacySection, ProcessingSection, ProvidersSection, StorageSection } from "./sections";
 
 const SETTINGS: SettingsSnapshot = {
   "ai.model": "large-v3",
@@ -23,28 +17,33 @@ const SETTINGS: SettingsSnapshot = {
   "privacy.telemetry": false,
 };
 
-describe("AiSettingsSection", () => {
-  it("renders model/device/preset controls with current values", () => {
-    const html = renderToStaticMarkup(<AiSettingsSection settings={SETTINGS} onSave={() => {}} />);
+describe("ProcessingSection", () => {
+  it("renders model/device/preset/GPU controls with current values", () => {
+    const html = renderToStaticMarkup(
+      <ProcessingSection
+        settings={SETTINGS}
+        worker={null}
+        onSaveModel={() => {}}
+        onSaveDevice={() => {}}
+        onSavePreset={() => {}}
+        onSaveGpu={() => {}}
+        onRestartWorker={() => {}}
+        restarting={false}
+      />,
+    );
     expect(html).toContain("STT model");
     expect(html).toContain('data-role="ai-model"');
     expect(html).toContain('data-role="ai-device"');
     expect(html).toContain('data-role="ai-preset"');
-  });
-});
-
-describe("GpuSettingsSection", () => {
-  it("renders the acceleration override select", () => {
-    const html = renderToStaticMarkup(<GpuSettingsSection settings={SETTINGS} onSave={() => {}} />);
-    expect(html).toContain("Acceleration");
     expect(html).toContain('data-role="gpu-override"');
+    expect(html).toContain('data-role="worker-restart"');
   });
 });
 
-describe("ApiSettingsSection", () => {
+describe("ProvidersSection", () => {
   it("shows a masked stored key and never the full secret", () => {
     const html = renderToStaticMarkup(
-      <ApiSettingsSection
+      <ProvidersSection
         provider="gemini"
         maskedKey="AIz****wxyz"
         baseUrl=""
@@ -67,7 +66,7 @@ describe("ApiSettingsSection", () => {
 
   it("disables save when the key draft is empty", () => {
     const html = renderToStaticMarkup(
-      <ApiSettingsSection
+      <ProvidersSection
         provider="gemini"
         maskedKey={null}
         baseUrl=""
@@ -87,7 +86,7 @@ describe("ApiSettingsSection", () => {
 
   it("offers the MVP providers", () => {
     const html = renderToStaticMarkup(
-      <ApiSettingsSection
+      <ProvidersSection
         provider="gemini"
         maskedKey={null}
         baseUrl=""
@@ -101,30 +100,27 @@ describe("ApiSettingsSection", () => {
         onDeleteKey={() => {}}
       />,
     );
-    expect(html).toContain(">Gemini</option>");
-    expect(html).toContain(">Local LLM</option>");
-    expect(html).toContain(">OpenAI (post-MVP)</option>");
+    expect(html).toContain("Gemini (translation, MVP)");
+    expect(html).toContain("Local LLM");
+    expect(html).toContain("OpenAI (post-MVP)");
   });
 });
 
-describe("CacheSettingsSection", () => {
-  it("renders the quota in GB derived from bytes", () => {
+describe("StorageSection", () => {
+  it("renders the quota control", () => {
     const html = renderToStaticMarkup(
-      <CacheSettingsSection quotaBytes={5368709120} onSave={() => {}} />,
+      <StorageSection quotaBytes={5368709120} onSaveQuota={() => {}} />,
     );
-    expect(html).toContain("Storage quota (GB)");
+    expect(html).toContain("Cache quota");
     expect(html).toContain('data-role="cache-quota"');
+    expect(html).toContain('data-role="cache-quota-save"');
   });
 });
 
-describe("PrivacySettingsSection", () => {
+describe("PrivacySection", () => {
   it("renders mode and telemetry controls with current values", () => {
     const html = renderToStaticMarkup(
-      <PrivacySettingsSection
-        settings={SETTINGS}
-        onSaveMode={() => {}}
-        onSaveTelemetry={() => {}}
-      />,
+      <PrivacySection settings={SETTINGS} onSaveMode={() => {}} onSaveTelemetry={() => {}} />,
     );
     expect(html).toContain("Processing mode");
     expect(html).toContain('data-role="privacy-mode"');

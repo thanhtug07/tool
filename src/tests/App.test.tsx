@@ -3,11 +3,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import App from "../App";
 
 describe("App", () => {
-  it("renders the desktop shell with sidebar navigation", () => {
+  it("renders the desktop shell with the 4 navigation areas", () => {
     const html = renderToStaticMarkup(<App />);
-    expect(html).toContain("AI Video Localization");
-    expect(html).toContain("Projects");
+    expect(html).toContain("AutoTranslate");
+    expect(html).toContain("Dashboard");
+    expect(html).toContain("Automation");
+    expect(html).toContain("Tools");
     expect(html).toContain("Settings");
-    expect(html).toContain("About");
+  });
+
+  it("opens on the Dashboard with the workspace at a glance", () => {
+    const html = renderToStaticMarkup(<App />);
+    expect(html).toContain("Your workspace at a glance.");
+    expect(html).toContain("Real-time processing status");
   });
 });

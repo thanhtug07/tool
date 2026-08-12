@@ -1,111 +1,113 @@
-import type { ApiProvider, SettingsSnapshot } from "@/api/settings";
+import type { ReactNode } from "react";
 
-/** Shared labeled select option row. */
-function SelectRow({
+import type { ApiProvider, SettingsSnapshot } from "@/api/settings";
+import type { WorkerStateInfo } from "@/api/worker";
+import { workerStateLabel } from "@/components/layout/Sidebar";
+
+/** Top-level group shell (General / AI providers / Audio & video / Storage / Advanced). */
+export function SettingsGroup({
   id,
-  label,
-  value,
-  options,
-  onSave,
-  dataRole,
+  title,
+  description,
+  children,
 }: {
   id: string;
-  label: string;
-  value: string;
-  options: readonly string[];
-  onSave: (value: string) => void;
-  dataRole: string;
+  title: string;
+  description?: string;
+  children: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <label htmlFor={id} className="w-40 text-sm">
-        {label}
-      </label>
-      <select
-        id={id}
-        data-role={dataRole}
-        className="rounded border border-border bg-background px-2 py-1 text-sm"
-        value={value}
-        onChange={(event) => onSave(event.target.value)}
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+    <section aria-labelledby={id} className="space-y-3">
+      <div>
+        <h2 id={id} className="text-base font-semibold tracking-tight">
+          {title}
+        </h2>
+        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
+      </div>
+      <div className="space-y-3">{children}</div>
+    </section>
+  );
+}
+
+/** Section shell with a title and optional description. */
+export function SettingsSection({
+  id,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id} className="space-y-3 rounded-lg border border-border bg-card p-4">
+      <div>
+        <h2 id={id} className="text-sm font-semibold">
+          {title}
+        </h2>
+        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
+      </div>
+      <div className="space-y-2.5">{children}</div>
+    </section>
+  );
+}
+
+/** Read-only label/value row (honest info — no fake controls). */
+export function InfoRow({ label, value, title }: { label: string; value: string; title?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="truncate text-right" title={title ?? value}>
+        {value}
+      </span>
     </div>
   );
 }
 
-/** AI section: STT/translation model, compute device, quality preset. */
-export function AiSettingsSection({
-  settings,
-  onSave,
-}: {
-  settings: SettingsSnapshot;
-  onSave: (key: "ai.model" | "ai.device" | "ai.preset", value: string) => void;
-}) {
+/** Row with a label + a real control. */
+export function ControlRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <section aria-labelledby="ai-subheading" className="space-y-2">
-      <h2 id="ai-subheading" className="text-sm font-medium">
-        AI
-      </h2>
-      <SelectRow
-        id="ai-model"
-        label="STT model"
-        value={settings["ai.model"]}
-        options={["large-v3", "turbo", "small"]}
-        onSave={(v) => onSave("ai.model", v)}
-        dataRole="ai-model"
-      />
-      <SelectRow
-        id="ai-device"
-        label="Compute device"
-        value={settings["ai.device"]}
-        options={["auto", "cuda", "cpu"]}
-        onSave={(v) => onSave("ai.device", v)}
-        dataRole="ai-device"
-      />
-      <SelectRow
-        id="ai-preset"
-        label="Quality preset"
-        value={settings["ai.preset"]}
-        options={["fast", "balanced", "high"]}
-        onSave={(v) => onSave("ai.preset", v)}
-        dataRole="ai-preset"
-      />
-    </section>
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="w-44 shrink-0 text-muted-foreground">{label}</span>
+      {children}
+    </div>
   );
 }
 
-/** GPU section: auto / forced backend override. */
-export function GpuSettingsSection({
-  settings,
-  onSave,
-}: {
-  settings: SettingsSnapshot;
-  onSave: (value: string) => void;
-}) {
+/** Disabled "Coming soon" block — the backend has no such capability yet. */
+export function ComingSoon({ label, note }: { label: string; note: string }) {
   return (
-    <section aria-labelledby="gpu-subheading" className="space-y-2">
-      <h2 id="gpu-subheading" className="text-sm font-medium">
-        GPU
-      </h2>
-      <SelectRow
-        id="gpu-override"
-        label="Acceleration"
-        value={settings["gpu.override"]}
-        options={["auto", "cuda", "cpu"]}
-        onSave={onSave}
-        dataRole="gpu-override"
-      />
-    </section>
+    <div className="space-y-1 rounded-md border border-dashed border-border bg-muted/20 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+        </p>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Coming soon
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">{note}</p>
+    </div>
   );
 }
 
-/** API section: provider + base URL + credential-vault key (masked only). */
-export function ApiSettingsSection({
+// ---- GENERAL ---------------------------------------------------------------
+
+export function GeneralSection() {
+  return (
+    <SettingsSection id="general-subheading" title="General">
+      <InfoRow label="Interface language" value="English (fixed in this build)" />
+      <InfoRow label="Theme" value="Dark (default)" />
+      <InfoRow label="Startup behavior" value="Open on Dashboard" />
+    </SettingsSection>
+  );
+}
+
+// ---- AI PROVIDERS ----------------------------------------------------------
+
+export function ProvidersSection({
   provider,
   maskedKey,
   baseUrl,
@@ -131,56 +133,28 @@ export function ApiSettingsSection({
   onDeleteKey: () => void;
 }) {
   return (
-    <section aria-labelledby="api-subheading" className="space-y-2">
-      <h2 id="api-subheading" className="text-sm font-medium">
-        API
-      </h2>
-      <div className="flex items-center gap-2">
-        <label htmlFor="api-provider" className="w-40 text-sm">
-          Provider
-        </label>
+    <SettingsSection
+      id="providers-subheading"
+      title="AI providers"
+      description="API keys are stored in the Windows Credential Manager — never in the database."
+    >
+      <ControlRow label="Provider">
         <select
-          id="api-provider"
           data-role="api-provider"
-          className="rounded border border-border bg-background px-2 py-1 text-sm"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
           value={provider}
           onChange={(event) => onProviderChange(event.target.value as ApiProvider)}
         >
-          <option value="gemini">Gemini</option>
-          <option value="local">Local LLM</option>
+          <option value="gemini">Gemini (translation, MVP)</option>
+          <option value="local">Local LLM (llama.cpp / OpenAI-compatible)</option>
           <option value="openai">OpenAI (post-MVP)</option>
         </select>
-      </div>
-      <div className="flex items-center gap-2">
-        <label htmlFor="api-base-url" className="w-40 text-sm">
-          Base URL
-        </label>
+      </ControlRow>
+      <ControlRow label="API key">
         <input
-          id="api-base-url"
-          data-role="api-base-url"
-          className="w-72 rounded border border-border bg-background px-2 py-1 text-sm"
-          placeholder="(provider default)"
-          value={baseUrl}
-          onChange={(event) => onBaseUrlChange(event.target.value)}
-        />
-        <button
-          type="button"
-          data-role="api-base-url-save"
-          className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground"
-          onClick={onSaveBaseUrl}
-        >
-          Save
-        </button>
-      </div>
-      <div className="flex items-center gap-2">
-        <label htmlFor="api-key" className="w-40 text-sm">
-          API key
-        </label>
-        <input
-          id="api-key"
           data-role="api-key-input"
           type="password"
-          className="w-72 rounded border border-border bg-background px-2 py-1 text-sm"
+          className="w-72 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
           placeholder={maskedKey ? `${maskedKey} (stored)` : "Paste key…"}
           value={keyDraft}
           onChange={(event) => onKeyDraftChange(event.target.value)}
@@ -188,7 +162,7 @@ export function ApiSettingsSection({
         <button
           type="button"
           data-role="api-key-save"
-          className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground disabled:opacity-50"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
           disabled={saving || keyDraft.trim().length === 0}
           onClick={onSaveKey}
         >
@@ -198,68 +172,223 @@ export function ApiSettingsSection({
           <button
             type="button"
             data-role="api-key-delete"
-            className="rounded border border-border px-3 py-1 text-sm"
+            className="rounded-md border border-border px-3 py-1.5 text-sm"
             onClick={onDeleteKey}
           >
             Remove
           </button>
         )}
-      </div>
-      <p data-role="api-key-status" className="text-xs text-muted-foreground">
-        {maskedKey
-          ? `Key stored in Windows Credential Manager (${maskedKey}).`
-          : "No key stored. Keys are saved to the OS credential vault, never to the database."}
-      </p>
-    </section>
+      </ControlRow>
+      {maskedKey ? (
+        <InfoRow label="Connection" value={`Key stored (${maskedKey})`} />
+      ) : (
+        <InfoRow label="Connection" value="No key stored — provider unavailable" />
+      )}
+      <ControlRow label="Base URL">
+        <input
+          data-role="api-base-url"
+          className="w-72 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          placeholder="(provider default)"
+          value={baseUrl}
+          onChange={(event) => onBaseUrlChange(event.target.value)}
+        />
+        <button
+          type="button"
+          data-role="api-base-url-save"
+          className="rounded-md border border-border px-3 py-1.5 text-sm"
+          onClick={onSaveBaseUrl}
+        >
+          Save
+        </button>
+      </ControlRow>
+      <InfoRow label="STT provider" value="faster-whisper (local — no key required)" />
+      <InfoRow label="TTS provider" value="Not available in this build" />
+    </SettingsSection>
   );
 }
 
-/** Cache section: LRU quota in GB. */
-export function CacheSettingsSection({
+// ---- VOICE / SUBTITLE / VIDEO (backend-fixed) ------------------------------
+
+export function VoiceSection() {
+  return (
+    <SettingsSection id="voice-subheading" title="Voice">
+      <ComingSoon
+        label="Voice selection"
+        note="Default voice and dubbing options require the TTS pipeline — not available in this build."
+      />
+    </SettingsSection>
+  );
+}
+
+export function VideoSection() {
+  return (
+    <SettingsSection id="video-subheading" title="Video">
+      <InfoRow label="Default output format" value="MP4 (H.264)" />
+      <InfoRow label="Resolution" value="Preserves source" />
+      <InfoRow label="FPS" value="Preserves source" />
+    </SettingsSection>
+  );
+}
+
+export function SubtitleSection() {
+  return (
+    <SettingsSection id="subtitle-subheading" title="Subtitle">
+      <InfoRow label="Style" value="Per-language defaults (e.g. Arial 44px, bottom center)" />
+      <InfoRow label="Burn-in" value="Toggled per run in Automation" />
+      <InfoRow label="Custom styling" value="Not available in this build" />
+    </SettingsSection>
+  );
+}
+
+// ---- PROCESSING ------------------------------------------------------------
+
+export function ProcessingSection({
+  settings,
+  worker,
+  onSaveModel,
+  onSaveDevice,
+  onSavePreset,
+  onSaveGpu,
+  onRestartWorker,
+  restarting,
+}: {
+  settings: SettingsSnapshot;
+  worker: WorkerStateInfo | null;
+  onSaveModel: (value: string) => void;
+  onSaveDevice: (value: string) => void;
+  onSavePreset: (value: string) => void;
+  onSaveGpu: (value: string) => void;
+  onRestartWorker: () => void;
+  restarting: boolean;
+}) {
+  const status = workerStateLabel(worker?.state ?? "stopped");
+  return (
+    <SettingsSection
+      id="processing-subheading"
+      title="Processing"
+      description="Applies to new jobs; the worker runs one heavy job at a time."
+    >
+      <ControlRow label="Worker">
+        <span className="text-sm font-medium">{status.label}</span>
+        {worker?.pid != null && (
+          <span className="text-xs text-muted-foreground">PID {worker.pid}</span>
+        )}
+        <button
+          type="button"
+          data-role="worker-restart"
+          className="rounded-md border border-border px-3 py-1.5 text-sm"
+          disabled={restarting}
+          onClick={onRestartWorker}
+        >
+          {restarting ? "Restarting…" : "Restart worker"}
+        </button>
+      </ControlRow>
+      <ControlRow label="STT model">
+        <select
+          data-role="ai-model"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={settings["ai.model"]}
+          onChange={(event) => onSaveModel(event.target.value)}
+        >
+          {["large-v3", "turbo", "small"].map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </ControlRow>
+      <ControlRow label="Compute device">
+        <select
+          data-role="ai-device"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={settings["ai.device"]}
+          onChange={(event) => onSaveDevice(event.target.value)}
+        >
+          {["auto", "cuda", "cpu"].map((device) => (
+            <option key={device} value={device}>
+              {device}
+            </option>
+          ))}
+        </select>
+      </ControlRow>
+      <ControlRow label="GPU override">
+        <select
+          data-role="gpu-override"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={settings["gpu.override"]}
+          onChange={(event) => onSaveGpu(event.target.value)}
+        >
+          {["auto", "cuda", "cpu"].map((device) => (
+            <option key={device} value={device}>
+              {device}
+            </option>
+          ))}
+        </select>
+      </ControlRow>
+      <ControlRow label="Quality preset">
+        <select
+          data-role="ai-preset"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={settings["ai.preset"]}
+          onChange={(event) => onSavePreset(event.target.value)}
+        >
+          {["fast", "balanced", "high"].map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}
+            </option>
+          ))}
+        </select>
+      </ControlRow>
+      <InfoRow label="Parallel jobs" value="1 at a time (single worker, FIFO)" />
+    </SettingsSection>
+  );
+}
+
+// ---- STORAGE ---------------------------------------------------------------
+
+export function StorageSection({
   quotaBytes,
-  onSave,
+  onSaveQuota,
 }: {
   quotaBytes: number;
-  onSave: (value: string) => void;
+  onSaveQuota: (value: string) => void;
 }) {
   const quotaGb = quotaBytes / (1024 * 1024 * 1024);
   return (
-    <section aria-labelledby="cache-subheading" className="space-y-2">
-      <h2 id="cache-subheading" className="text-sm font-medium">
-        Cache
-      </h2>
-      <div className="flex items-center gap-2">
-        <label htmlFor="cache-quota" className="w-40 text-sm">
-          Storage quota (GB)
-        </label>
+    <SettingsSection id="storage-subheading" title="Storage">
+      <ControlRow label="Cache quota">
         <input
           id="cache-quota"
           data-role="cache-quota"
           type="number"
           min={1}
-          className="w-32 rounded border border-border bg-background px-2 py-1 text-sm"
+          className="w-32 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
           defaultValue={Math.max(1, Math.round(quotaGb))}
         />
+        <span className="text-xs text-muted-foreground">GB</span>
         <button
           type="button"
           data-role="cache-quota-save"
-          className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground"
+          className="rounded-md border border-border px-3 py-1.5 text-sm"
           onClick={() => {
             const input = document.getElementById("cache-quota") as HTMLInputElement | null;
             if (input?.value) {
-              onSave(String(Math.round(Number(input.value) * 1024 * 1024 * 1024)));
+              onSaveQuota(String(Math.round(Number(input.value) * 1024 * 1024 * 1024)));
             }
           }}
         >
           Apply
         </button>
-      </div>
-    </section>
+      </ControlRow>
+      <InfoRow label="Output directory" value="Per project: {data}/projects/{id}/output" />
+      <InfoRow label="Models" value="Downloaded on first use into the app data directory" />
+    </SettingsSection>
   );
 }
 
-/** Privacy section: processing mode + telemetry. */
-export function PrivacySettingsSection({
+// ---- PRIVACY ---------------------------------------------------------------
+
+export function PrivacySection({
   settings,
   onSaveMode,
   onSaveTelemetry,
@@ -269,30 +398,42 @@ export function PrivacySettingsSection({
   onSaveTelemetry: (value: boolean) => void;
 }) {
   return (
-    <section aria-labelledby="privacy-subheading" className="space-y-2">
-      <h2 id="privacy-subheading" className="text-sm font-medium">
-        Privacy
-      </h2>
-      <SelectRow
-        id="privacy-mode"
-        label="Processing mode"
-        value={settings["privacy.mode"]}
-        options={["local", "cloud"]}
-        onSave={onSaveMode}
-        dataRole="privacy-mode"
-      />
-      <div className="flex items-center gap-2">
-        <label htmlFor="privacy-telemetry" className="w-40 text-sm">
-          Telemetry
-        </label>
+    <SettingsSection
+      id="privacy-subheading"
+      title="Privacy"
+      description="STT and rendering always run locally. Translation uses the selected provider."
+    >
+      <ControlRow label="Processing mode">
+        <select
+          data-role="privacy-mode"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={settings["privacy.mode"]}
+          onChange={(event) => onSaveMode(event.target.value)}
+        >
+          <option value="local">Local</option>
+          <option value="cloud">Cloud</option>
+        </select>
+      </ControlRow>
+      <ControlRow label="Telemetry">
         <input
-          id="privacy-telemetry"
           data-role="privacy-telemetry"
           type="checkbox"
           checked={settings["privacy.telemetry"]}
           onChange={(event) => onSaveTelemetry(event.target.checked)}
         />
-      </div>
-    </section>
+      </ControlRow>
+    </SettingsSection>
+  );
+}
+
+// ---- SECURITY --------------------------------------------------------------
+
+export function SecuritySection() {
+  return (
+    <SettingsSection id="security-subheading" title="Security">
+      <InfoRow label="API keys" value="Windows Credential Manager (OS vault)" />
+      <InfoRow label="Logging" value="Secrets are never logged" />
+      <InfoRow label="Media access" value="Scoped media:// protocol — project files only" />
+    </SettingsSection>
   );
 }

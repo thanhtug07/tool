@@ -13,12 +13,19 @@ import {
 } from "@/api/settings";
 import { useToast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
+import { isTauri } from "@/lib/env";
+import { useWorker, restartWorker as restartWorkerStore } from "@/stores/worker";
 import {
-  AiSettingsSection,
-  ApiSettingsSection,
-  CacheSettingsSection,
-  GpuSettingsSection,
-  PrivacySettingsSection,
+  GeneralSection,
+  PrivacySection,
+  ProcessingSection,
+  ProvidersSection,
+  SecuritySection,
+  SettingsGroup,
+  StorageSection,
+  SubtitleSection,
+  VideoSection,
+  VoiceSection,
 } from "./sections";
 
 type ConnectionState =
@@ -45,6 +52,8 @@ const FALLBACK_SETTINGS: SettingsSnapshot = {
 
 export default function SettingsPage() {
   const toast = useToast();
+  const { info: workerInfo } = useWorker();
+  const [restarting, setRestarting] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>({ status: "idle" });
   const [settings, setSettings] = useState<SettingsSnapshot>(FALLBACK_SETTINGS);
   const [provider, setProvider] = useState<ApiProvider>("gemini");
@@ -56,6 +65,7 @@ export default function SettingsPage() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      if (!isTauri()) return;
       try {
         const snapshot = await getSettings();
         if (!cancelled) {
@@ -75,6 +85,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!isTauri()) return;
     void getApiKeyMasked(provider)
       .then((masked) => {
         if (!cancelled) {
@@ -139,23 +150,44 @@ export default function SettingsPage() {
     }
   }, []);
 
-  return (
-    <section aria-labelledby="settings-heading" className="space-y-6">
-      <h1 id="settings-heading" className="text-lg font-semibold">
-        Settings
-      </h1>
-      <p className="text-sm text-muted-foreground">
-        Configuration applies to new jobs. API keys are stored in the Windows Credential Manager —
-        never in the database.
-      </p>
+  const handleRestartWorker = useCallback(async () => {
+    setRestarting(true);
+    try {
+      await restartWorkerStore();
+      toast.push("Worker restarted", "success");
+    } catch (error) {
+      toast.push(String(error), "error");
+    } finally {
+      setRestarting(false);
+    }
+  }, [toast]);
 
-      <div className="space-y-6">
-        <AiSettingsSection settings={settings} onSave={saveSetting} />
-        <GpuSettingsSection
+  return (
+    <section aria-labelledby="settings-heading" className="mx-auto max-w-3xl space-y-6">
+      <div>
+        <h1 id="settings-heading" className="text-2xl font-semibold tracking-tight">
+          Settings
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Configuration applies to new jobs. Sections without backend support are marked clearly.
+        </p>
+      </div>
+
+      <SettingsGroup id="group-general" title="General" description="App-wide preferences.">
+        <GeneralSection />
+        <PrivacySection
           settings={settings}
-          onSave={(v) => void saveSetting("gpu.override", v)}
+          onSaveMode={(v) => void saveSetting("privacy.mode", v)}
+          onSaveTelemetry={(v) => void saveSetting("privacy.telemetry", String(v))}
         />
-        <ApiSettingsSection
+      </SettingsGroup>
+
+      <SettingsGroup
+        id="group-providers"
+        title="AI providers"
+        description="Translation backends and their credentials."
+      >
+        <ProvidersSection
           provider={provider}
           maskedKey={maskedKey}
           baseUrl={baseUrl}
@@ -179,20 +211,53 @@ export default function SettingsPage() {
           onSaveKey={() => void handleSaveKey()}
           onDeleteKey={() => void handleDeleteKey()}
         />
-        <CacheSettingsSection
-          quotaBytes={settings["cache.quota_bytes"]}
-          onSave={(v) => void saveSetting("cache.quota_bytes", v)}
-        />
-        <PrivacySettingsSection
-          settings={settings}
-          onSaveMode={(v) => void saveSetting("privacy.mode", v)}
-          onSaveTelemetry={(v) => void saveSetting("privacy.telemetry", String(v))}
-        />
+      </SettingsGroup>
 
-        <section aria-labelledby="about-subheading" className="space-y-2">
-          <h2 id="about-subheading" className="text-sm font-medium">
-            About
-          </h2>
+      <SettingsGroup
+        id="group-media"
+        title="Audio & video"
+        description="Defaults for dubbing, video and subtitle output."
+      >
+        <VoiceSection />
+        <VideoSection />
+        <SubtitleSection />
+      </SettingsGroup>
+
+      <SettingsGroup id="group-storage" title="Storage" description="Cache and model storage.">
+        <StorageSection
+          quotaBytes={settings["cache.quota_bytes"]}
+          onSaveQuota={(v) => void saveSetting("cache.quota_bytes", v)}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup
+        id="group-advanced"
+        title="Advanced"
+        description="Worker, compute and security — for technical users."
+      >
+        <ProcessingSection
+          settings={settings}
+          worker={workerInfo}
+          onSaveModel={(v) => void saveSetting("ai.model", v)}
+          onSaveDevice={(v) => void saveSetting("ai.device", v)}
+          onSavePreset={(v) => void saveSetting("ai.preset", v)}
+          onSaveGpu={(v) => void saveSetting("gpu.override", v)}
+          onRestartWorker={() => void handleRestartWorker()}
+          restarting={restarting}
+        />
+        <SecuritySection />
+        <section
+          aria-labelledby="about-subheading"
+          className="space-y-3 rounded-lg border border-border bg-card p-4"
+        >
+          <div>
+            <h2 id="about-subheading" className="text-sm font-semibold">
+              Connection
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Round-trip to the Rust core (not the AI worker).
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             <Button
               type="button"
@@ -204,7 +269,7 @@ export default function SettingsPage() {
             <ConnectionStatus state={connection} />
           </div>
         </section>
-      </div>
+      </SettingsGroup>
     </section>
   );
 }
@@ -213,11 +278,9 @@ export function ConnectionStatus({ state }: { state: ConnectionState }) {
   if (state.status === "idle") {
     return <p className="text-sm text-muted-foreground">Not tested yet.</p>;
   }
-
   if (state.status === "testing") {
     return <p className="text-sm text-muted-foreground">Testing connection…</p>;
   }
-
   if (state.status === "success") {
     return (
       <p className="text-sm text-emerald-400">
@@ -225,6 +288,5 @@ export function ConnectionStatus({ state }: { state: ConnectionState }) {
       </p>
     );
   }
-
   return <p className="text-sm text-destructive">{state.error.message}</p>;
 }

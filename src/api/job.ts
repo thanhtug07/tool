@@ -44,6 +44,14 @@ export function listJobs(projectId: string): Promise<Job[]> {
   return invoke("job.list", { projectId });
 }
 
+/**
+ * All jobs across every project, most recently updated first — the Dashboard
+ * feed and the single source of truth for "current job".
+ */
+export function listAllJobs(limit?: number): Promise<Job[]> {
+  return invoke("job.list_all", { limit: limit ?? null });
+}
+
 /** Cancel a queued or running job. */
 export function cancelJob(id: string): Promise<void> {
   return invoke("job.cancel", { id });
