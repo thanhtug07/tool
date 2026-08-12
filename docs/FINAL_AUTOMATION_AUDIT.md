@@ -223,3 +223,84 @@ provider defaults to **FREE** (Settings → Providers → Set Default). FREE is 
 local/free provider — for translation it needs a local LLM server configured
 (or pick **Gemini** and add its API key in Settings → Providers). STT +
 rendering always run locally.
+
+---
+
+# Addendum — Session 2 (final acceptance, 2026-08-12)
+
+Follow-up audit driven by the user's real 48-minute video
+(`耗时2个月将聊斋尸变喷水焦螟三篇故事改编成悬疑动画一口气看完_哔哩哔哩_bilibili.mp4`,
+2918.3 s, 852×480 h264 30 fps + AAC stereo) run through the full automation
+pipeline and exported to `D:\Downloads\New`.
+
+## New bug found + fixed
+
+### Bug 11 (P0): CUDA STT crashed with HTTP 500 on GPU machines
+
+- **Symptom**: `POST /v1/stt/transcribe` with `device=cuda` returned
+  `HTTP 500 Internal Server Error` — the route only maps `STTError` (422) /
+  `CancelledError` (409), but faster-whisper defers all inference to a lazy
+  generator, and a missing CUDA library surfaces as a raw `RuntimeError:
+  Library cublas64_12.dll is not found or cannot be loaded` while the segments
+  generator is consumed (`stt_service.build_transcript`), escaping the route's
+  exception mapping.
+- **Root cause**: `ctranslate2` bundles cuDNN but not cuBLAS; the pip packages
+  (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, `nvidia-cuda-runtime-cu12`) ship
+  the DLLs under `site-packages/nvidia/*/bin`, which the Windows DLL loader
+  never searches. `os.add_dll_directory` alone was insufficient — the DLLs are
+  only found once those directories are on `PATH`.
+- **Fix** (all in `worker/`):
+  - `src/core/cuda_libs.py` (new) — `ensure_cuda_libraries()` registers the
+    pip-provided CUDA DLL dirs + the `ctranslate2` package dir via
+    `os.add_dll_directory` **and** prepends them to `PATH`.
+  - `src/services/stt_service.py` — `transcribe()` now catches
+    `RuntimeError` during transcript building; if it is a CUDA runtime-library
+    failure (`_is_cuda_library_error`) it **retries once on CPU** (device_used
+    reported as `cpu`) instead of failing the job. Non-CUDA runtime errors and
+    a failing CPU retry still raise a clean `STTError` (422, never 500).
+  - `resolve_device("auto")` probes CUDA through `ctranslate2`
+    (`get_cuda_device_count`) when torch is absent, so the default device now
+    uses the GPU on this machine.
+  - `src/main.py` — `ensure_cuda_libraries()` at startup + during AI-stack
+    warmup.
+  - `pyproject.toml` — new `[project.optional-dependencies] cuda` extra
+    (nvidia-cublas/cudnn/cuda-runtime/cuda-nvrtc), optional by design.
+  - Tests: `worker/tests/unit/test_stt_service.py` +6 (error classifier,
+    CUDA→CPU retry, non-CUDA failure, failing-CPU-fallback) — 25/25 pass.
+- **Verification**: 60 s clip via the real worker on `cuda`: HTTP 200,
+  ~15 s incl. model load (~6× realtime on the Quadro T1000), no fallback
+  warning.
+
+## Real 48-minute run — 15/15 PASS in 14.0 min
+
+Driven by `golden/scripts/run_real_video.py` (reuses the golden harness; mock
+translation — no Gemini key on this machine; model `turbo` on `cuda`):
+
+| Stage | Result |
+|-------|--------|
+| Audio extract | 93.4 MB WAV, 2918.3 s ≈ source (exact) |
+| STT (faster-whisper turbo, CUDA) | 1142 segments in 526 s (8.8 min), real Chinese transcript |
+| Translate (mock, zh→vi route) | 1142/1142 items |
+| Subtitle | 959 cues, all start < end, non-empty; SRT + ASS written |
+| Render (libass burn-in) | libx264 in 306 s; video:h264 + audio:aac (original preserved); 2918.3 s ≈ source; 267 MB |
+| Export + QC | `D:\Downloads\New\聊斋动画_越南语字幕.mp4`, QC passed, 0 issues |
+
+Output validated with ffprobe (duration 2918.27 s, 852×480 30 fps, h264 +
+aac) and a 2-minute full-decode check (no errors). The pipeline is genuinely
+long-video capable: no duration/segment/cue caps were hit, artifacts are
+file-based (no whole-video RAM load), and the worker survived 14 min of
+continuous load.
+
+## Honest limitations (not blockers for personal use)
+
+- **TTS / dubbed voice**: NOT IMPLEMENTED in this build — the Automation voice
+  section is disabled. The output preserves the original audio; there is no
+  synthesized voice track.
+- **Translation content**: this run used the deterministic `mock` provider
+  (offline, `[vi]`-prefixed source text). The route is exercised end-to-end;
+  real translation requires configuring Gemini (Settings → Providers → key) or
+  a local LLM server for the FREE provider.
+- **Logo removal**: NOT IMPLEMENTED (OCR + inpainting). Watermark *insertion*
+  exists in the render route but is disabled in the Automation UI.
+- **GPU encode**: render fell back to libx264 (hardware encoders unavailable in
+  this FFmpeg build); 306 s for 48 min is acceptable.

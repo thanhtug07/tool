@@ -199,3 +199,28 @@ Implemented `feat: add dynamic provider management`:
 - Tests: worker **601 passed** (12 new provider tests), Rust **178 passed**
   (9 new provider/migration/runner tests), frontend **156 passed**
   (4 new store tests), golden E2E **16/16**, production build **PASS**.
+
+## Gate 8 — FINAL ACCEPTANCE (real ~48-minute video) — PASS 2026-08-12
+
+- **Real-video acceptance**: the user's 48.6-min video (2918.3 s, 852×480,
+  Chinese narration) ran the full automation — extract → real STT
+  (faster-whisper turbo on CUDA, 1142 segments) → translate route (mock,
+  offline) → 959-cue subtitle burn-in → render (original audio preserved) →
+  export → **15/15 PASS in 14.0 min** → `D:\Downloads\New\聊斋动画_越南语字幕.mp4`
+  (267 MB, ffprobe-validated, QC 0 issues).
+- **P0 fixed (Bug 11)**: CUDA STT returned HTTP 500 on GPU machines
+  (`cublas64_12.dll` not found). Fix: `worker/src/core/cuda_libs.py` registers
+  pip-provided CUDA DLL dirs (PATH + `add_dll_directory`); `stt_service`
+  retries once on CPU for CUDA runtime-library failures (no more 500);
+  `resolve_device("auto")` probes CUDA via ctranslate2 without torch;
+  `pyproject.toml` gains a `cuda` extra; +6 unit tests.
+- **UX fixes (previous session)**: safeInvoke + dialog-picker wrappers so the
+  app degrades gracefully outside the Tauri window; `scripts/tauri.cjs`
+  (cargo PATH) + `scripts/dev.cmd` launchers.
+- Tests: worker **607 passed** (1 deselected — live Gemini), Rust **178
+  passed**, frontend **156 passed** + typecheck + lint clean, golden E2E
+  **16/16**, real 48-min video **15/15**, production build **PASS**.
+- Verdict: **READY FOR PERSONAL USE** (see `docs/FINAL_ACCEPTANCE_REPORT.md`).
+  Remaining non-blockers: real AI translation needs a Gemini key / local LLM
+  server (this run used offline mock); TTS + logo removal not in this build;
+  packaged worker does not bundle CUDA libs (source worker used for GPU STT).
