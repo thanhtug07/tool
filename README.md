@@ -131,8 +131,14 @@ Workflow: `.github/workflows/ci.yml` — chạy trên mọi **Pull Request** và
 - [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) — lộ trình
 - [TASKS.md](TASKS.md) — task chi tiết + AI agent policy
 - [QUALITY_BENCHMARK.md](QUALITY_BENCHMARK.md), [GOLDEN_VIDEO_TEST.md](GOLDEN_VIDEO_TEST.md)
-
-Các docs `DEVELOPMENT.md`, `API.md`, `SECURITY.md`, `TESTING.md`, `RELEASE.md`, `LICENSING.md` (theo `MASTER_PLAN.md §22`) sẽ được tạo ở các task sau trong Sprint 0/1.
+- [DEVELOPMENT.md](DEVELOPMENT.md) — hướng dẫn phát triển (setup, test, build)
+- [API.md](API.md) — Tauri IPC + worker HTTP API
+- [DATABASE.md](DATABASE.md) — schema SQLite + migrations
+- [SECURITY.md](SECURITY.md) — mô hình bảo mật
+- [AI_PIPELINE.md](AI_PIPELINE.md), [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md), [AUDIO_PIPELINE.md](AUDIO_PIPELINE.md) — pipeline AI / video / audio
+- [TESTING.md](TESTING.md) — chiến lược test + lệnh chạy
+- [RELEASE.md](RELEASE.md) — build/packaging/release gates
+- [LICENSING.md](LICENSING.md) — bảng license + checklist
 
 ## Trạng thái / Roadmap
 
@@ -140,4 +146,4 @@ Xem [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) và [TASKS.md](TASKS.
 
 ## License
 
-**TODO — CHƯA QUYẾT ĐỊNH.** Sẽ xác nhận trước release; xem [LICENSING.md](docs/LICENSING.md) khi có.
+**TODO — CHƯA QUYẾT ĐỊNH.** Sẽ xác nhận trước release; xem [LICENSING.md](LICENSING.md) khi có.
