@@ -198,6 +198,9 @@ class RenderConfig:
     check_window: tuple[float, float] | None = None
     allow_fallback: bool = True
     watermark: WatermarkConfig | None = None
+    #: Optional full-duration voice track (``/v1/tts/synthesize`` output) to
+    #: mix over the original audio (original ducked to ~45%).
+    voice_track_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -270,6 +273,7 @@ def build_render_args(
     preset: str = DEFAULT_RENDER_PRESET,
     crf: int = DEFAULT_RENDER_CRF,
     audio_codec: str = DEFAULT_AUDIO_CODEC,
+    audio_path: str | None = None,
 ) -> list[str]:
     """Argument array for a burn-in render.
 
@@ -284,6 +288,9 @@ def build_render_args(
     validate_input_path(input_path)
     validate_input_path(output_path)
     args = ["-y", "-nostdin", "-i", input_path]
+    if audio_path:
+        validate_input_path(audio_path)
+        args += ["-i", audio_path]
     if filter_graph is not None:
         if filter_graph.extra_input:
             validate_input_path(filter_graph.extra_input)
@@ -297,13 +304,76 @@ def build_render_args(
         args += ["-vf", subtitle_arg, "-map", "0:v:0"]
     else:
         args += ["-map", "0:v:0"]
-    args += ["-map", "0:a?"]
+    if audio_path:
+        # The last ``-i`` is the provided audio track; map it directly.
+        args += ["-map", f"{args.count('-i') - 1}:a"]
+    else:
+        args += ["-map", "0:a?"]
     args += ["-c:v", encoder]
     if encoder in _SOFTWARE_VIDEO_ENCODERS:
         args += ["-preset", preset, "-crf", str(crf)]
     args += ["-c:a", audio_codec, "-progress", "pipe:1", "-nostats", "-loglevel", "error"]
     args.append(output_path)
     return args
+
+
+def _probe_audio_format(path: str) -> tuple[int, int]:
+    """Return ``(channels, sample_rate)`` of the first audio stream.
+
+    Falls back to stereo 44.1 kHz when the probe fails or the file has no
+    audio — matching the pre-existing mix default.
+    """
+    try:
+        meta = probe(path)
+        if meta.audio_streams:
+            a = meta.audio_streams[0]
+            return (a.channels or 2, a.sample_rate or 44100)
+    except MediaProbeError:
+        pass
+    return 2, 44100
+
+
+def _mix_voice_track(input_path: str, voice_track_path: str, out_wav: str, source_has_audio: bool) -> None:
+    """Mix the TTS voice track over the original audio (original ducked ~45%).
+
+    ``out_wav`` receives a PCM track in the *source's* channel layout and
+    sample rate (so render QC's format-preservation checks still pass): voice
+    at full volume over the ducked original (background/music preserved
+    underneath). When the source has no audio, the voice track becomes the
+    whole mix in the voice track's own format.
+    """
+    if source_has_audio:
+        channels, sample_rate = _probe_audio_format(input_path)
+        args = [
+            "ffmpeg", "-y", "-nostdin",
+            "-i", input_path,
+            "-i", voice_track_path,
+            "-filter_complex",
+            "[0:a]volume=0.45[orig];[1:a]volume=1.0[voice];"
+            "[orig][voice]amix=inputs=2:duration=first:normalize=0[aout]",
+            "-map", "[aout]",
+            "-ac", str(channels), "-ar", str(sample_rate),
+            "-c:a", "pcm_s16le",
+            out_wav,
+        ]
+    else:
+        channels, sample_rate = _probe_audio_format(voice_track_path)
+        args = [
+            "ffmpeg", "-y", "-nostdin",
+            "-i", voice_track_path,
+            "-ac", str(channels), "-ar", str(sample_rate),
+            "-c:a", "pcm_s16le",
+            out_wav,
+        ]
+    try:
+        proc = subprocess.run(args, check=False, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RenderError(E_RENDER_FAILED, "ffmpeg not found while mixing the voice track.") from exc
+    if proc.returncode != 0:
+        raise RenderError(
+            E_RENDER_FAILED,
+            f"voice-track mix failed: {(proc.stderr or '').strip()[-400:]}",
+        )
 
 
 def subtitle_filter_arg(subtitle_path: str) -> str:
@@ -857,6 +927,20 @@ def render(
             shutil.copy(subtitle_path, workdir / Path(subtitle_path).name)
             subtitle_arg = subtitle_filter_arg(subtitle_path)
 
+        audio_path = None
+        if config.voice_track_path:
+            voice_track = os.path.abspath(validate_input_path(config.voice_track_path))
+            if not os.path.isfile(voice_track):
+                raise RenderError(E_RENDER_INVALID, "Voice track does not exist.")
+            mixed = workdir / "mixed_audio.wav"
+            _mix_voice_track(
+                input_path,
+                voice_track,
+                str(mixed),
+                bool(source_meta.audio_streams),
+            )
+            audio_path = str(mixed)
+
         textfile, fontfile, image_input = prepare_watermark(workdir, config.watermark)
         filter_graph = build_filter_graph(
             subtitle_arg=subtitle_arg,
@@ -875,6 +959,7 @@ def render(
             preset=config.video_preset,
             crf=config.video_crf,
             audio_codec=config.audio_codec,
+            audio_path=audio_path,
         )
 
         try:
@@ -890,6 +975,7 @@ def render(
                     preset=config.video_preset,
                     crf=config.video_crf,
                     audio_codec=config.audio_codec,
+                    audio_path=audio_path,
                 )
                 _run_encode(args, workdir=workdir, cancel=cancel, source_duration=source_meta.duration, on_progress=on_progress)
                 encoder = "libx264"

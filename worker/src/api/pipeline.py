@@ -181,6 +181,9 @@ class RenderRequest(BaseModel):
     preset: str = "medium"
     crf: int = Field(default=18, ge=0, le=51)
     watermark: WatermarkRequest | None = None
+    #: Optional full-duration voice track (``/v1/tts/synthesize`` output) to
+    #: mix over the original audio (original ducked to ~45%).
+    voice_track_path: str | None = None
     check_window: tuple[float, float] | None = None
     job_id: str | None = None
 
@@ -442,6 +445,69 @@ def subtitle(request: SubtitleRequest) -> JSONResponse:
     )
 
 
+class TTSCueRequest(BaseModel):
+    """One cue to speak: seconds + translated text (mirrors subtitle cues)."""
+
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+    text: str = Field(min_length=1)
+
+
+class TTSRequest(BaseModel):
+    """Request body for ``POST /v1/tts/synthesize`` (dubbing voice track)."""
+
+    cues: list[TTSCueRequest] = Field(min_length=1)
+    voice: str | None = None
+    engine: str = "edge"  # ``edge`` (cloud, default) or ``piper`` (local)
+    language: str | None = None
+    duration_seconds: float = Field(gt=0.0)
+    output_dir: str = Field(min_length=1)
+    job_id: str | None = None
+
+
+@router.post("/v1/tts/synthesize")
+def tts_synthesize(request: TTSRequest) -> JSONResponse:
+    """Synthesize the translated cues into a full-duration voice track.
+
+    The output ``voice_track.wav`` (16-bit mono 44.1 kHz) is mixed over the
+    original audio by the render stage when ``voice_track_path`` is passed to
+    ``POST /v1/render``. Engines: ``edge`` (Microsoft neural voices, default)
+    and ``piper`` (local).
+    """
+    from src.services.tts_service import (  # noqa: PLC0415 - lazy
+        TTSError,
+        TTSCue,
+        synthesize_cues,
+    )
+
+    cues = [TTSCue(start=c.start, end=c.end, text=c.text) for c in request.cues]
+    try:
+        with _cancel_scope(request.job_id) as cancel:
+            result = synthesize_cues(
+                cues,
+                voice=request.voice,
+                engine=request.engine,
+                language=request.language,
+                duration_seconds=request.duration_seconds,
+                output_dir=request.output_dir,
+                cancel=cancel,
+                on_progress=lambda fraction: cancel.set_progress(fraction, "tts"),
+            )
+    except CancelledError:
+        return _error("E_CANCELLED", "TTS was cancelled.", http=status.HTTP_409_CONFLICT)
+    except TTSError as exc:
+        return _error(exc.code, exc.message)
+    return JSONResponse(
+        {
+            "voice_track_path": result.voice_track_path,
+            "meta_path": result.meta_path,
+            "cue_count": len(cues),
+            "engine_used": result.engine_used,
+            "voice_used": result.voice_used,
+        }
+    )
+
+
 @router.post("/v1/render")
 def render(request: RenderRequest) -> JSONResponse:
     """Burn subtitles into ``video_path`` with libass and validate the output."""
@@ -495,6 +561,7 @@ def render(request: RenderRequest) -> JSONResponse:
         video_preset=request.preset,
         video_crf=request.crf,
         watermark=watermark,
+        voice_track_path=request.voice_track_path,
         check_window=request.check_window,
     )
     try:

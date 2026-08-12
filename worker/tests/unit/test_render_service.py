@@ -46,6 +46,46 @@ from src.services.render_service import (
 )
 
 
+def test_mix_voice_track_preserves_source_audio_format(monkeypatch) -> None:
+    """Regression: the voice mix must keep the source channels/sample-rate
+    so render QC's format-preservation checks pass (dubbing a mono 22.05 kHz
+    source must not emit a stereo 44.1 kHz track)."""
+    import subprocess as _subprocess
+
+    import src.services.render_service as rs
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_probe(_path: str) -> MediaMetadata:
+        return _metadata(audio=(1, 22050))
+
+    def fake_run(args, check=False, capture_output=True, text=True):
+        captured["args"] = args
+        return _subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(rs, "probe", fake_probe)
+    monkeypatch.setattr(rs.subprocess, "run", fake_run)
+
+    rs._mix_voice_track("src.mp4", "voice.wav", "out.wav", source_has_audio=True)
+    args = captured["args"]
+    assert args[args.index("-ac") + 1] == "1"
+    assert args[args.index("-ar") + 1] == "22050"
+    fc = args[args.index("-filter_complex") + 1]
+    assert "volume=0.45" in fc and "amix" in fc
+
+    # No-source case: format follows the voice track itself.
+    captured.clear()
+
+    def fake_probe_voice(_path: str) -> MediaMetadata:
+        return _metadata(audio=(2, 44100))
+
+    monkeypatch.setattr(rs, "probe", fake_probe_voice)
+    rs._mix_voice_track("src.mp4", "voice.wav", "out.wav", source_has_audio=False)
+    args = captured["args"]
+    assert args[args.index("-ac") + 1] == "2"
+    assert args[args.index("-ar") + 1] == "44100"
+
+
 def _metadata(
     *,
     width: int = 320,
