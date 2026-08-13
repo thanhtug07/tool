@@ -7,9 +7,11 @@ user's real ~48-minute video (Chinese narration, Bilibili export):
     (mock, deterministic offline) → subtitle (ASS/SRT) → render (libass
     burn-in, NVENC → libx264 fallback) → export to D:\\Downloads\\New + QC.
 
-Deliberately does NOT run TTS: the TTS stage is not implemented in this build
-(voice selection UI is disabled). The original audio is preserved through the
-render (-map 0:a?) and QC verifies no track is dropped.
+TTS is deliberately not part of this run: dubbing is opt-in (Settings →
+Automation → dub), and the golden dub E2E (`run_golden_dub.py`) proves the
+TTS → voice-track → render-mix path separately with real synthesis. Here the
+original audio is preserved through the render and QC verifies no track is
+dropped.
 
 Usage:
     py -3.13 golden/scripts/run_real_video.py

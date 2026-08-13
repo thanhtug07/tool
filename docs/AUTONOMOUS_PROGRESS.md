@@ -98,13 +98,13 @@ last_updated: "2026-08-12"
 
 
 
-release_phase: ACTIVE (release gate execution, completed 2026-08-12)
-release_current_task: null (security, GPU validation, license audits, end-user docs, final regression all executed)
-release_status: PASS (engineering-side gates green at 401dc16; remaining items are owner/external)
-release_last_completed_task: release-gate execution (Gates 1-6)
-release_next_task: owner/external only - clean-VM installer test, code signing, LICENSE decision, NVENC-on-desktop-GPU, real Gemini call
-release_last_commit: "401dc16"
-release_docs_status: complete - USER_GUIDE.md (end-user); gate log archived at 401dc16 - status remains NOT BETA READY (clean-machine smoke test, signing, LICENSE decision, NVENC, real Gemini)
+release_phase: READY (release-candidate pipeline re-verified RELEASE-P2-001..008 on real video, 2026-08-13)
+release_current_task: null (RELEASE-P2 series complete - full real-video E2E 15/15 PASS)
+release_status: READY (engineering-side) - real 48.6-min video: real STT 1142 segs, subtitle 959 cues, render libx264, export QC clean, 15/15 in 12.9 min; only external/owner items remain (clean-VM, signing, LICENSE, NVENC-on-desktop-GPU, one real Gemini call, real 40-min GUI AUTOMATION playback)
+release_last_completed_task: RELEASE-P2-008 final-validation (real-video E2E 15/15)
+release_next_task: owner/external only - clean-VM installer test, code signing, LICENSE decision, NVENC-on-desktop-GPU, real Gemini call, user's real ~40-min GUI AUTOMATION playback
+release_last_commit: "353002b"
+release_docs_status: complete - USER_GUIDE.md (end-user); PROGRESS.md is single source of truth; status remains NOT BETA READY (same owner/external items as before)
 
 release_completed_tasks:
   - id: RELEASE-P0-001
@@ -179,6 +179,47 @@ release_completed_tasks:
     status: PASS
     commit: (recorded during release-gate execution)
     evidence: worker 589 pass (1 ai-marker deselected); Rust 169 pass + fmt/clippy clean; frontend typecheck clean + 152 pass; golden E2E 16/16 (source + packaged worker); packaged-worker Gemini SDK probe PASS; ffprobe output validation PASS (h264 640x360 25fps + aac, 6.44s); production build PASS. Fixed: cancel reaches worker mid-stage + live stage progress (250ms poll) + STT duration baseline; export timeout 3s->1h; translate/subtitle cancellable + per-block progress; render burn-in check_window from cues; CompletionView real source language; media serving capped 32MiB chunks (OOM fix); google-genai bundled in worker.exe; provider UI default mock->gemini (mock stays explicit opt-in). Cleanup: removed output/ (747MB) + stray logs; .gitignore covers output/ + .agents/
+
+  - id: RELEASE-P2-001
+    goal: provider-system verified - registry FREE default, no-mock-by-default, dynamic kinds
+    status: PASS
+    commit: 353002b (this release series)
+    evidence: Rust provider_service 7/7 (free_is_immutable, fresh_registry_seeds_free_as_default, deleting_default_falls_back_to_free); worker provider tests 58 pass; frontend providers store 4/4 (defaults translation/stt/tts -> free); worker factory maps free->LocalLLMProvider with explicit E_PROVIDER_UNAVAILABLE (no silent mock), mock is explicit opt-in only; Automation page has zero mock references (AUTOMATION_MOCK_HITS=0); frontend src/ has zero mock refs in non-test code (SRC_MOCK_HITS=0)
+  - id: RELEASE-P2-002
+    goal: job-system verified - JobService FIFO/retry/cancel/resume
+    status: PASS
+    commit: 353002b (this release series)
+    evidence: Rust job_service 18/18 (transient_failure_retries_then_succeeds, resume_does_not_requeue_terminal_jobs, successful_run_goes_succeeded_with_full_progress); worker job/ffmpeg/sidecar 48 pass; cancellation propagates to worker mid-stage (pipeline_runner test cancel_mid_stage_propagates_to_worker_and_returns_cancelled PASS)
+  - id: RELEASE-P2-003
+    goal: stt verified - real faster-whisper, no mock
+    status: PASS
+    commit: 353002b (this release series)
+    evidence: worker stt unit/route 56 pass; golden E2E real STT tiny/cpu 1.6s; real-video E2E real STT turbo/CUDA on the 48.6-min Chinese video: 1142 segments, sample text verified Chinese narration, 491.9s
+  - id: RELEASE-P2-004
+    goal: translation verified - provider path real; TM/context/quality
+    status: PASS (orchestration) / NOT_RUN (real cloud call)
+    commit: 353002b (this release series)
+    evidence: worker translation/context/quality 59 pass; translation covered every segment in both golden and real-video E2E (1142 items == 1142 segments); real provider call (gemini/local) NOT_RUN - no GEMINI_API_KEY, no local llama.cpp server (blocked: external); mock used only as the documented deterministic fixture in the E2E harness, never in the product path
+  - id: RELEASE-P2-005
+    goal: tts verified - real synthesis + audio mix, dub wiring
+    status: PASS
+    commit: 353002b (this release series)
+    evidence: golden dub E2E 14/14 - real piper TTS (offline, vi_VN-vais1000-medium) produced 569454-byte voice track, full duration, audible (-15.2 dB), live progress detail messages seen, render mixed voice in (relative RMS diff 1.02), export QC clean; worker tts/render/export/subtitle/media unit 197 pass
+  - id: RELEASE-P2-006
+    goal: export verified - render/export/subtitle real output
+    status: PASS
+    commit: 353002b (this release series)
+    evidence: golden E2E render libx264 -> h264+aac, duration match, export QC 0 issues; real-video render 267MB libx264 (NVENC embedded-GPU fallback), streams video:h264+audio:aac, original audio preserved, duration exact 2918.3s, export QC 0 issues; worker render integration (ffmpeg burn-in/watermark/fallback) + export routes unit 56 pass
+  - id: RELEASE-P2-007
+    goal: automation UI orchestrates real jobs with live progress/log (Provider System + Job System end-to-end)
+    status: PASS
+    commit: 353002b (recorded in this release series)
+    evidence: frontend typecheck/lint/format clean + 178 test pass (26 files); LiveLog emits real stage detail lines (probe in dub E2E saw "segment 1/4"); Automation submits through JobService (pipeline_runner) which resolves provider from registry (never hardcoded); tts stage appears only when dub enabled (verification test asserts [transcribe,translate,subtitle,render] without dub vs +tts with dub)
+  - id: RELEASE-P2-008
+    goal: final validation - real-video E2E on the user's real 48.6-min video + STATUS report
+    status: PASS
+    commit: 353002b (this release series)
+    evidence: real-video E2E 15/15 in 12.9 min - extract (93.4MB wav, exact 2918.3s) -> real STT faster-whisper turbo/CUDA 1142 segments in 491.9s -> translate (mock fixture; real provider needs key/server -> NOT_RUN) -> subtitle 959 cues -> render libx264 (NVENC embedded-GPU fallback) 267MB -> export + QC 0 issues; audio preserved. Overrides run_real_video.py stale "TTS not implemented" docstring (dub E2E proves real piper TTS separately, 14/14). STATUS: READY (engineering-side, per-item PASS/FAIL/NOT_RUN in session report); NOT BETA READY until owner/external items close.
 
 release_known_blockers:
   - clean-machine installer validation (needs Windows VM or dedicated test machine)
