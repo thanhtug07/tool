@@ -64,7 +64,6 @@ export const PIPELINE_CHECKLIST: {
 /** Stages the current build cannot run — shown honestly as "later". */
 export const FUTURE_STAGES = [{ key: "logo", label: "Logo removal" }] as const;
 
-
 /** Options captured when AUTOMATE is clicked. */
 export type AutomationOptions = {
   videoPath: string;

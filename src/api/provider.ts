@@ -61,10 +61,7 @@ export function getProvider(id: string): Promise<ProviderView> {
   return safeInvoke("providers.get", { id });
 }
 
-export function createProvider(
-  input: ProviderInput,
-  test?: boolean,
-): Promise<ProviderView> {
+export function createProvider(input: ProviderInput, test?: boolean): Promise<ProviderView> {
   return safeInvoke("providers.create", { input, test });
 }
 

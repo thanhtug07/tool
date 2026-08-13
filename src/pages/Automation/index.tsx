@@ -129,7 +129,9 @@ export default function AutomationPage({
     if (providerOptions.length === 0) return;
     if (providerOptions.some((p) => p.id === provider)) return;
     const def = defaultFor("translation");
-    setProvider(def && providerOptions.some((p) => p.id === def.id) ? def.id : providerOptions[0].id);
+    setProvider(
+      def && providerOptions.some((p) => p.id === def.id) ? def.id : providerOptions[0].id,
+    );
   }, [providerOptions, provider, defaultFor]);
 
   // Follow the active project: fetch artifact paths + original video URL.
@@ -1036,7 +1038,9 @@ function SettingsPanel({
               onChange={(e) => onDubAudioChange(e.target.checked)}
             />
             Dub audio (voice over the original audio)
-            <span className="text-xs text-muted-foreground">({ttsEngine === "edge" ? "edge-tts, online" : "piper, offline"})</span>
+            <span className="text-xs text-muted-foreground">
+              ({ttsEngine === "edge" ? "edge-tts, online" : "piper, offline"})
+            </span>
           </label>
           {dubAudio && (
             <div className="grid grid-cols-2 gap-2 pt-1">
@@ -1081,7 +1085,8 @@ function SettingsPanel({
             </label>
           ))}
           <p className="text-xs text-muted-foreground">
-            Voice dubbing is live (edge-tts online or piper offline); logo removal needs OCR + inpainting (not in this build).
+            Voice dubbing is live (edge-tts online or piper offline); logo removal needs OCR +
+            inpainting (not in this build).
           </p>
         </div>
 
@@ -1097,9 +1102,7 @@ function SettingsPanel({
                 const sel = providerOptions.find((p) => p.id === provider);
                 if (!sel) return undefined;
                 if (!sel.needs_key) {
-                  return sel.provider_kind === "free"
-                    ? "Local / free — no API key"
-                    : undefined;
+                  return sel.provider_kind === "free" ? "Local / free — no API key" : undefined;
                 }
                 return sel.api_key_configured
                   ? "API key configured"

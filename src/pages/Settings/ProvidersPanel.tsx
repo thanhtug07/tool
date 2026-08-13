@@ -29,8 +29,7 @@ const KIND_LABELS: Record<ProviderKind, string> = {
   mock: "Mock (offline test)",
 };
 
-const INPUT_CLS =
-  "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm";
+const INPUT_CLS = "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm";
 const LABEL_CLS = "text-xs font-medium text-muted-foreground";
 
 function capLabel(cap: string): string {
@@ -133,16 +132,10 @@ export function ProvidersPanel() {
       try {
         if (editing) {
           await updateProvider(editing.id, input, runTest);
-          toast.push(
-            runTest ? "Provider updated and test passed" : "Provider updated",
-            "success",
-          );
+          toast.push(runTest ? "Provider updated and test passed" : "Provider updated", "success");
         } else {
           await createProvider(input, runTest);
-          toast.push(
-            runTest ? "Provider created and test passed" : "Provider created",
-            "success",
-          );
+          toast.push(runTest ? "Provider created and test passed" : "Provider created", "success");
         }
         setForm(null);
         setEditing(null);
@@ -345,11 +338,7 @@ export function ProvidersPanel() {
                     {testingId === p.id ? "Testing…" : "Test"}
                   </Button>
                   {!isFree && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void handleToggle(p)}
-                    >
+                    <Button size="sm" variant="outline" onClick={() => void handleToggle(p)}>
                       {p.enabled ? "Disable" : "Enable"}
                     </Button>
                   )}
@@ -497,7 +486,9 @@ export function ProvidersPanel() {
                     id="provider-base-url"
                     data-role="provider-base-url"
                     className={INPUT_CLS}
-                    placeholder={form.provider_kind === "gemini" ? "(Gemini default)" : "http://127.0.0.1:8080"}
+                    placeholder={
+                      form.provider_kind === "gemini" ? "(Gemini default)" : "http://127.0.0.1:8080"
+                    }
                     value={form.base_url}
                     onChange={(e) => setForm({ ...form, base_url: e.target.value })}
                   />

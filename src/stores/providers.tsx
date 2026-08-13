@@ -8,11 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
-import {
-  listProviders,
-  type ProviderCapability,
-  type ProviderView,
-} from "@/api/provider";
+import { listProviders, type ProviderCapability, type ProviderView } from "@/api/provider";
 import { isTauri } from "@/lib/env";
 
 export type ProvidersContextValue = {

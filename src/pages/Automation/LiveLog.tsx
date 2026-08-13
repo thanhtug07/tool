@@ -169,7 +169,10 @@ export default function LiveLog({
       const startY = e.clientY;
       const startH = height;
       const onMove = (ev: PointerEvent) => {
-        const next = Math.min(MAX_HEIGHT_PX, Math.max(MIN_HEIGHT_PX, startH + (startY - ev.clientY)));
+        const next = Math.min(
+          MAX_HEIGHT_PX,
+          Math.max(MIN_HEIGHT_PX, startH + (startY - ev.clientY)),
+        );
         setHeight(next);
       };
       const onUp = () => {
@@ -187,28 +190,28 @@ export default function LiveLog({
     try {
       localStorage.setItem(HEIGHT_KEY, String(height));
     } catch {
-        // no-op outside the browser shell
+      // no-op outside the browser shell
     }
   }, [height]);
   useEffect(() => {
     try {
       localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
     } catch {
-        // no-op outside the browser shell
+      // no-op outside the browser shell
     }
   }, [collapsed]);
   useEffect(() => {
     try {
       localStorage.setItem(AUTO_SCROLL_KEY, autoScroll ? "1" : "0");
     } catch {
-        // no-op outside the browser shell
+      // no-op outside the browser shell
     }
   }, [autoScroll]);
   useEffect(() => {
     try {
       localStorage.setItem(MAX_LOGS_KEY, String(maxLogs));
     } catch {
-        // no-op outside the browser shell
+      // no-op outside the browser shell
     }
   }, [maxLogs]);
 
@@ -354,7 +357,10 @@ export function LiveLogView({
             <ChevronDown className="size-4" aria-hidden="true" />
           )}
           <span className="flex items-center gap-1.5">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
+              aria-hidden="true"
+            />
             Automation Live Log
           </span>
         </button>
@@ -429,7 +435,10 @@ export function LiveLogView({
                 <>
                   <p className="mt-1 text-sm font-semibold">{currentLabel ?? runningStage.stage}</p>
                   {lastMessage && (
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground" title={lastMessage}>
+                    <p
+                      className="mt-0.5 truncate text-xs text-muted-foreground"
+                      title={lastMessage}
+                    >
                       {lastMessage}
                     </p>
                   )}

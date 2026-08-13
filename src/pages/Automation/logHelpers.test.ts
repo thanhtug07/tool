@@ -32,7 +32,11 @@ describe("appendLogEntry", () => {
   it("caps at the maximum and keeps the newest lines", () => {
     let entries: LogEntry[] = [];
     for (let i = 0; i < DEFAULT_MAX_LOG_ENTRIES + 50; i++) {
-      entries = appendLogEntry(entries, { id: i, time: i, level: "info", message: `m${i}` }, DEFAULT_MAX_LOG_ENTRIES);
+      entries = appendLogEntry(
+        entries,
+        { id: i, time: i, level: "info", message: `m${i}` },
+        DEFAULT_MAX_LOG_ENTRIES,
+      );
     }
     expect(entries).toHaveLength(DEFAULT_MAX_LOG_ENTRIES);
     expect(entries[0].message).toBe("m50");

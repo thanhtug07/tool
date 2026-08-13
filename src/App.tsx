@@ -29,29 +29,29 @@ export default function App() {
     <JobsProvider>
       <ProvidersProvider>
         <div className="flex h-screen overflow-hidden">
-        <Sidebar active={active} onNavigate={setActive} />
-        <main className="flex-1 overflow-y-auto p-6">
-          {active === "dashboard" && (
-            <DashboardPage onNavigate={setActive} onOpenProject={openProject} />
-          )}
-          {active === "automation" && (
-            <AutomationPage
-              project={activeProject}
-              onProjectChange={setActiveProject}
-              onNavigate={setActive}
-              onOpenTool={openTool}
-            />
-          )}
-          {active === "tools" && (
-            <ToolsPage
-              request={toolRequest}
-              onConsumeRequest={() => setToolRequest(null)}
-              project={activeProject}
-              onNavigate={setActive}
-            />
-          )}
-          {active === "settings" && <SettingsPage />}
-        </main>
+          <Sidebar active={active} onNavigate={setActive} />
+          <main className="flex-1 overflow-y-auto p-6">
+            {active === "dashboard" && (
+              <DashboardPage onNavigate={setActive} onOpenProject={openProject} />
+            )}
+            {active === "automation" && (
+              <AutomationPage
+                project={activeProject}
+                onProjectChange={setActiveProject}
+                onNavigate={setActive}
+                onOpenTool={openTool}
+              />
+            )}
+            {active === "tools" && (
+              <ToolsPage
+                request={toolRequest}
+                onConsumeRequest={() => setToolRequest(null)}
+                project={activeProject}
+                onNavigate={setActive}
+              />
+            )}
+            {active === "settings" && <SettingsPage />}
+          </main>
           <JobFailBanner />
         </div>
       </ProvidersProvider>

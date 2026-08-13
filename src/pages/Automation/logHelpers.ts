@@ -68,7 +68,11 @@ export function stageLabel(key: StageKey): string {
  * the raw per-segment lines are ephemeral, but stage-level history is restored
  * from the database). Returns entries already ordered oldest → newest.
  */
-export function backfillFromJobs(planStages: { key: StageKey; jobId: string | null }[], jobs: Job[], now: number): LogEntry[] {
+export function backfillFromJobs(
+  planStages: { key: StageKey; jobId: string | null }[],
+  jobs: Job[],
+  now: number,
+): LogEntry[] {
   const byId = new Map(jobs.map((j) => [j.id, j]));
   const entries: LogEntry[] = [];
   let id = 0;
@@ -79,7 +83,12 @@ export function backfillFromJobs(planStages: { key: StageKey; jobId: string | nu
     const finishedAt = job.finished_at ? Date.parse(job.finished_at) : NaN;
     const startedAt = job.started_at ? Date.parse(job.started_at) : NaN;
     if (!Number.isNaN(startedAt)) {
-      entries.push({ id: id++, time: startedAt, level: "info", message: `${stageLabel(stage.key)} started` });
+      entries.push({
+        id: id++,
+        time: startedAt,
+        level: "info",
+        message: `${stageLabel(stage.key)} started`,
+      });
     }
     if (!Number.isNaN(finishedAt)) {
       const level: LogLevel =
@@ -90,9 +99,19 @@ export function backfillFromJobs(planStages: { key: StageKey; jobId: string | nu
           : job.status === "cancelled"
             ? " — cancelled"
             : " — complete";
-      entries.push({ id: id++, time: finishedAt, level, message: `${stageLabel(stage.key)}${suffix}` });
+      entries.push({
+        id: id++,
+        time: finishedAt,
+        level,
+        message: `${stageLabel(stage.key)}${suffix}`,
+      });
     } else if (job.status === "running") {
-      entries.push({ id: id++, time: now, level: "info", message: `${stageLabel(stage.key)} is running…` });
+      entries.push({
+        id: id++,
+        time: now,
+        level: "info",
+        message: `${stageLabel(stage.key)} is running…`,
+      });
     }
   }
   return entries;

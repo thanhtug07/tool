@@ -98,10 +98,7 @@ export default function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { providersFor, defaultFor, providers } = useProviders();
-  const providerOptions = useMemo(
-    () => providersFor("translation"),
-    [providersFor, providers],
-  );
+  const providerOptions = useMemo(() => providersFor("translation"), [providersFor, providers]);
 
   // First selection: follow the configured default once the registry loads.
   useEffect(() => {

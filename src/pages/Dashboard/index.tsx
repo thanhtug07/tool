@@ -84,7 +84,8 @@ export default function DashboardPage({ onNavigate, onOpenProject }: DashboardPa
     if (def.needs_key && !def.api_key_configured) {
       return { label: `${def.name} — key missing`, tone: "error" as StatusTone };
     }
-    const extra = translationProviders.length > 1 ? ` +${translationProviders.length - 1} more` : "";
+    const extra =
+      translationProviders.length > 1 ? ` +${translationProviders.length - 1} more` : "";
     return { label: `${def.name}${extra}`, tone: "ok" as StatusTone };
   }, [providers, defaultFor]);
 

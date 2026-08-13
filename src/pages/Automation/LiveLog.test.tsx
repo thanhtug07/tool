@@ -23,7 +23,10 @@ const JOB = (over: Partial<Job> = {}): Job => ({
   ...over,
 });
 
-const STAGE = (key: DerivedStageRun["key"], status: DerivedStageRun["status"]): DerivedStageRun => ({
+const STAGE = (
+  key: DerivedStageRun["key"],
+  status: DerivedStageRun["status"],
+): DerivedStageRun => ({
   key,
   jobId: "job_1",
   status,
@@ -81,11 +84,11 @@ describe("LiveLogView", () => {
         { id: 1, time: 1, level: "info", message: "segment 81/127" },
       ],
     });
-    expect(html).toContain("data-role=\"live-log-status\"");
+    expect(html).toContain('data-role="live-log-status"');
     expect(html).toContain("Running");
-    expect(html).toContain("data-role=\"overall-pct\"");
+    expect(html).toContain('data-role="overall-pct"');
     expect(html).toContain("63%");
-    expect(html).toContain("data-role=\"cancel-automation\"");
+    expect(html).toContain('data-role="cancel-automation"');
     expect(html).toContain("segment 81/127");
   });
 
@@ -112,12 +115,12 @@ describe("LiveLogView", () => {
       jobs: [JOB({ type: "render" })],
       artifacts: { renderedVideo: "C:\\out\\final.mp4", projectDir: "C:\\proj" } as never,
     });
-    expect(html).toContain("data-role=\"completed-summary\"");
+    expect(html).toContain('data-role="completed-summary"');
     expect(html).toContain("Automation completed");
-    expect(html).toContain("data-role=\"output-path\"");
+    expect(html).toContain('data-role="output-path"');
     expect(html).toContain("final.mp4");
-    expect(html).toContain("data-role=\"open-output\"");
-    expect(html).toContain("data-role=\"open-folder\"");
+    expect(html).toContain('data-role="open-output"');
+    expect(html).toContain('data-role="open-folder"');
   });
 
   it("shows the failed summary with stage and error", () => {
@@ -128,29 +131,33 @@ describe("LiveLogView", () => {
         { ...STAGE("tts", "failed"), errorCode: "E_TTS_FAILED", errorMessage: "ffmpeg failed" },
       ],
     });
-    expect(html).toContain("data-role=\"failed-summary\"");
+    expect(html).toContain('data-role="failed-summary"');
     expect(html).toContain("Automation failed");
     expect(html).toContain("Voice generation");
     expect(html).toContain("E_TTS_FAILED");
-    expect(html).toContain("data-role=\"retry-stage\"");
+    expect(html).toContain('data-role="retry-stage"');
   });
 
   it("shows the cancelled state without a failed summary", () => {
     const html = render({ phase: "cancelled", stages: [STAGE("transcribe", "cancelled")] });
     expect(html).toContain("Cancelled");
-    expect(html).not.toContain("data-role=\"failed-summary\"");
+    expect(html).not.toContain('data-role="failed-summary"');
     expect(html).toContain("The pipeline was cancelled.");
   });
 
   it("hides the body when collapsed", () => {
-    const html = render({ collapsed: true, phase: "running", entries: [{ id: 0, time: 0, level: "info", message: "x" }] });
-    expect(html).toContain("data-role=\"live-log-toggle\"");
-    expect(html).not.toContain("data-role=\"console\"");
+    const html = render({
+      collapsed: true,
+      phase: "running",
+      entries: [{ id: 0, time: 0, level: "info", message: "x" }],
+    });
+    expect(html).toContain('data-role="live-log-toggle"');
+    expect(html).not.toContain('data-role="console"');
   });
 
   it("surfaces the 'New logs' pill when the user scrolled up", () => {
     const html = render({ showNewLogs: true, phase: "running" });
-    expect(html).toContain("data-role=\"new-logs\"");
+    expect(html).toContain('data-role="new-logs"');
     expect(html).toContain("New logs");
   });
 });

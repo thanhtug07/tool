@@ -141,7 +141,12 @@ describe("pipeline plan + derivation", () => {
   });
 
   it("startPipeline captures the run options", () => {
-    const plan = startPipeline({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini", dubAudio: false });
+    const plan = startPipeline({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      provider: "gemini",
+      dubAudio: false,
+    });
     expect(plan.options).toEqual({
       sourceLanguage: "zh",
       targetLanguage: "vi",
@@ -151,12 +156,28 @@ describe("pipeline plan + derivation", () => {
     expect(plan.startedAt).toBeNull();
     expect(plan.stages.every((s) => s.jobId === null)).toBe(true);
     // Without dubbing the tts stage is skipped entirely.
-    expect(plan.stages.map((s) => s.key)).toEqual(["transcribe", "translate", "subtitle", "render"]);
+    expect(plan.stages.map((s) => s.key)).toEqual([
+      "transcribe",
+      "translate",
+      "subtitle",
+      "render",
+    ]);
   });
 
   it("startPipeline includes the tts stage when dubbing is enabled", () => {
-    const plan = startPipeline({ sourceLanguage: "zh", targetLanguage: "vi", provider: "gemini", dubAudio: true });
-    expect(plan.stages.map((s) => s.key)).toEqual(["transcribe", "translate", "subtitle", "tts", "render"]);
+    const plan = startPipeline({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      provider: "gemini",
+      dubAudio: true,
+    });
+    expect(plan.stages.map((s) => s.key)).toEqual([
+      "transcribe",
+      "translate",
+      "subtitle",
+      "tts",
+      "render",
+    ]);
   });
 
   it("tts stage params carry voice, engine and target language", () => {
@@ -165,7 +186,14 @@ describe("pipeline plan + derivation", () => {
       engine: "edge",
       voice: "vi-VN-HoaiMyNeural",
     });
-    expect(buildStageParams("tts", { ...OPTIONS, dubAudio: true, voice: "vi-VN-NamMinhNeural", ttsEngine: "piper" })).toEqual({
+    expect(
+      buildStageParams("tts", {
+        ...OPTIONS,
+        dubAudio: true,
+        voice: "vi-VN-NamMinhNeural",
+        ttsEngine: "piper",
+      }),
+    ).toEqual({
       target_language: "vi",
       engine: "piper",
       voice: "vi-VN-NamMinhNeural",
@@ -173,7 +201,9 @@ describe("pipeline plan + derivation", () => {
   });
 
   it("render requests the voice track when dubbing is on", () => {
-    expect(buildStageParams("render", { ...OPTIONS, dubAudio: true })).toEqual({ voice_track: "true" });
+    expect(buildStageParams("render", { ...OPTIONS, dubAudio: true })).toEqual({
+      voice_track: "true",
+    });
   });
 
   it("marks a submitted stage and derives running from the job snapshot", () => {

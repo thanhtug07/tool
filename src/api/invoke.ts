@@ -14,10 +14,7 @@ import { isTauri } from "@/lib/env";
  * Inside Tauri the behavior is identical to `invoke()` — errors pass through
  * untouched.
  */
-export async function safeInvoke<T>(
-  cmd: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+export async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await (args === undefined ? invoke<T>(cmd) : invoke<T>(cmd, args));
   } catch (error) {
