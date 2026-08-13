@@ -1,2 +1,0 @@
--r base.txt
-# GPU dependencies (CUDA torch/faster-whisper) are added in a later task.

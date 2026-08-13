@@ -1,8 +1,8 @@
 """Safe whisper.cpp runner (TASK-015) — CPU/AMD/Intel fallback engine.
 
-whisper-cli is a standalone process (never bundled in the repo; built via
-``worker/scripts/build_whisper_cpp.ps1`` and placed under ``vendor/``), so this
-module mirrors the FFmpeg discipline of TASK-012:
+whisper-cli is a standalone process (never bundled in the repo; built
+separately and placed under ``vendor/``), so this module mirrors the FFmpeg
+discipline of TASK-012:
 
 - **Argument-array only** — the binary is launched with a list of args, never a
   shell string.

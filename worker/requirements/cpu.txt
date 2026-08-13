@@ -1,2 +1,0 @@
--r base.txt
-# CPU-only dependencies (torch/faster-whisper CPU wheels) are added in a later task.

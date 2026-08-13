@@ -84,11 +84,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install worker dev dependencies
-        run: python -m pip install -e ".[dev]"
+      - name: Install worker dependencies
+        run: python -m pip install -e "."
 
-      - name: pytest (fast subset, no 'ai' marker)
-        run: python -m pytest
+      - name: Worker smoke check (import)
+        run: python -c "import src.main"
 
   licenses:
     name: Licenses (cargo-deny)

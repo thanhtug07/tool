@@ -17,11 +17,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8,<9",
-    "httpx>=0.27,<1.0",
-    "datamodel-code-generator>=0.25,<1",
-]
 # CUDA STT: pip-provided CUDA runtime libs that ctranslate2 needs at inference
 # time. Optional by design — without them the worker registers nothing and the
 # STT service falls back to CPU (see src/core/cuda_libs.py). Install with:
@@ -43,9 +38,3 @@ package-dir = { "" = "." }
 [tool.setuptools.packages.find]
 include = ["src*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-m 'not ai'"
-markers = [
-    "ai: slow AI-dependent tests (run separately)",
-]

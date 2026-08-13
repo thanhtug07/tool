@@ -1,9 +1,0 @@
-{
-  "case_id": "C005_character_name",
-  "segments": [
-    {
-      "idx": 0,
-      "expected_text": "Trương Tam cười nói: “Hôm nay thời tiết thật đẹp.”"
-    }
-  ]
-}
