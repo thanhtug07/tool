@@ -35,7 +35,7 @@ A local-first desktop tool whose only network ingress is loopback HTTP and only 
 
 ## Privacy mode
 
-Default: STT/FFmpeg/subtitle/render run fully local — nothing is uploaded. Cloud translation is used only when the user explicitly enables it; if a local model is configured it is preferred. No telemetry unless the user opts in. (Note: enforcement is wired through the settings record; it becomes load-bearing once the pipeline executes — see `RELEASE_READINESS_AUDIT.md`.)
+Default: STT/FFmpeg/subtitle/render run fully local — nothing is uploaded. Cloud translation is used only when the user explicitly enables it; if a local model is configured it is preferred. No telemetry unless the user opts in.
 
 ## Data & logging
 
@@ -44,7 +44,7 @@ Default: STT/FFmpeg/subtitle/render run fully local — nothing is uploaded. Clo
 
 ## Secret scanning
 
-- `gitleaks detect` is configured as a CI security job; `.gitignore` blocks `.env`, `*.key`, `*.pfx`, `*.pem`, `*.p12`. (A local `gitleaks` run is pending — tool not installed on the dev machine; see `RELEASE_READINESS_AUDIT.md`.)
+- `gitleaks detect` is configured as a CI security job; `.gitignore` blocks `.env`, `*.key`, `*.pfx`, `*.pem`, `*.p12`.
 
 ## Verified vs pending
 

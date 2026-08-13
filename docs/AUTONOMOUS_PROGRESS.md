@@ -101,10 +101,10 @@ last_updated: "2026-08-12"
 release_phase: ACTIVE (release gate execution, completed 2026-08-12)
 release_current_task: null (security, GPU validation, license audits, end-user docs, final regression all executed)
 release_status: PASS (engineering-side gates green at 401dc16; remaining items are owner/external)
-release_last_completed_task: release-gate execution (Gates 1-6 per docs/RELEASE_PROGRESS.md)
+release_last_completed_task: release-gate execution (Gates 1-6)
 release_next_task: owner/external only - clean-VM installer test, code signing, LICENSE decision, NVENC-on-desktop-GPU, real Gemini call
 release_last_commit: "401dc16"
-release_docs_status: complete - RELEASE_PROGRESS.md (gate log Gates 1-6), USER_GUIDE.md (end-user), RELEASE_READINESS_AUDIT.md regenerated at 401dc16 - status remains NOT BETA READY (clean-machine smoke test, signing, LICENSE decision, NVENC, real Gemini)
+release_docs_status: complete - USER_GUIDE.md (end-user); gate log archived at 401dc16 - status remains NOT BETA READY (clean-machine smoke test, signing, LICENSE decision, NVENC, real Gemini)
 
 release_completed_tasks:
   - id: RELEASE-P0-001
@@ -152,12 +152,12 @@ release_completed_tasks:
   - id: RELEASE-GATE-1
     goal: install smoke test from actual installer (silent install/launch/worker sticky)
     status: PARTIAL (dev-machine install verified; clean VM still BLOCKED)
-    commit: (evidence in docs/RELEASE_PROGRESS.md)
+    commit: (recorded during release-gate execution)
     evidence: rebuilt stale packaged worker (RELEASE-P1-001 fix), rebuilt installers, silent install exit 0, installed app runs, installed worker READY/health/real STT, E2E 16/16 in 3.6s
   - id: RELEASE-GATE-2
     goal: NVIDIA GPU validation (real hardware)
     status: PARTIAL (CUDA STT PASS; NVENC encode fails - libx264 fallback verified)
-    commit: (evidence in docs/RELEASE_PROGRESS.md)
+    commit: (recorded during release-gate execution)
     evidence: ctranslate2 1 device; faster-whisper CUDA inference 0.49s (GPU util 0->6->50%, VRAM 0->10->116->160MiB); E2E --device cuda 16/16 (5.8s source, 9.5s packaged); NVENC -40 on synthetic input (driver/session), NVDEC works, render falls back to libx264
   - id: RELEASE-GATE-3
     goal: security verification
@@ -167,7 +167,7 @@ release_completed_tasks:
   - id: RELEASE-GATE-5
     goal: end-user documentation
     status: PASS
-    commit: (evidence in docs/RELEASE_PROGRESS.md)
+    commit: (recorded during release-gate execution)
     evidence: docs/USER_GUIDE.md (install/first-run/API key/core flow/troubleshooting) added and linked from README
   - id: RELEASE-GATE-6
     goal: final regression on the fixed tree + rebuilt installers
@@ -177,7 +177,7 @@ release_completed_tasks:
   - id: RELEASE-GATE-7
     goal: final automation deep audit (pre-release, user's real 40-min test gate)
     status: PASS
-    commit: (see docs/FINAL_AUTOMATION_AUDIT.md)
+    commit: (recorded during release-gate execution)
     evidence: worker 589 pass (1 ai-marker deselected); Rust 169 pass + fmt/clippy clean; frontend typecheck clean + 152 pass; golden E2E 16/16 (source + packaged worker); packaged-worker Gemini SDK probe PASS; ffprobe output validation PASS (h264 640x360 25fps + aac, 6.44s); production build PASS. Fixed: cancel reaches worker mid-stage + live stage progress (250ms poll) + STT duration baseline; export timeout 3s->1h; translate/subtitle cancellable + per-block progress; render burn-in check_window from cues; CompletionView real source language; media serving capped 32MiB chunks (OOM fix); google-genai bundled in worker.exe; provider UI default mock->gemini (mock stays explicit opt-in). Cleanup: removed output/ (747MB) + stray logs; .gitignore covers output/ + .agents/
 
 release_known_blockers:

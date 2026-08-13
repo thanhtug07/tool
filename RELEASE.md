@@ -1,6 +1,6 @@
 # RELEASE.md
 
-Release process and status for **AI Video Localization Studio** (Tauri 2 desktop app). Required doc per `MASTER_PLAN.md §22/§44`; maps to `MASTER_PLAN` Phase 13/14, `TASKS.md §6`, and the release audit in `docs/RELEASE_READINESS_AUDIT.md`.
+Release process and status for **AI Video Localization Studio** (Tauri 2 desktop app). Required doc per `MASTER_PLAN.md §22/§44`; maps to `MASTER_PLAN` Phase 13/14 and `TASKS.md §6`.
 
 ## Build & packaging
 
@@ -22,7 +22,7 @@ Artifacts: release `.exe`, `.msi`, and `.exe` NSIS setup, all bundling the worke
 - `WorkerManager` differs by build: **release** spawns the bundled `worker.exe` from the Tauri resource dir; **dev** spawns `python -m src.main` (`src-tauri/src/services/worker_manager.rs`).
 - Lifecycle: read auth token per-session over stdin → `READY <token>` handshake → authenticated `/health` → job dispatch over the loopback HTTP API. Portable self-contained run PASSES from outside the repo (RELEASE-P0-008).
 
-## Release gates (status from `docs/RELEASE_READINESS_AUDIT.md` + `docs/RELEASE_PROGRESS.md` + `docs/AUTONOMOUS_PROGRESS.md`)
+## Release gates (status from `docs/AUTONOMOUS_PROGRESS.md`)
 
 | Gate                                           | Status             | Evidence                                                                                  |
 | ---------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------- |
@@ -41,7 +41,7 @@ Artifacts: release `.exe`, `.msi`, and `.exe` NSIS setup, all bundling the worke
 
 ## Beta readiness
 
-**NOT BETA READY** (see `docs/RELEASE_READINESS_AUDIT.md`): every engineering-side gate now passes at commit `401dc16` — MVP vertical slice executes end-to-end (import → STT → translate → subtitle → render → export), security + license audits PASS (incl. a **critical fix where API keys were silently stored in an in-memory mock store and never persisted to Windows Credential Manager**), real NVIDIA CUDA STT validated, installers rebuilt on the fixed tree and silently installed/launched/uninstalled on the dev machine. Beta distribution still requires owner/external actions: clean-machine installer validation, code signing (or a decision to ship unsigned), the project **LICENSE** decision, NVENC validation on a desktop GPU, and a real Gemini key.
+**NOT BETA READY** (gate log in `docs/AUTONOMOUS_PROGRESS.md`): every engineering-side gate now passes at commit `401dc16` — MVP vertical slice executes end-to-end (import → STT → translate → subtitle → render → export), security + license audits PASS (incl. a **critical fix where API keys were silently stored in an in-memory mock store and never persisted to Windows Credential Manager**), real NVIDIA CUDA STT validated, installers rebuilt on the fixed tree and silently installed/launched/uninstalled on the dev machine. Beta distribution still requires owner/external actions: clean-machine installer validation, code signing (or a decision to ship unsigned), the project **LICENSE** decision, NVENC validation on a desktop GPU, and a real Gemini key.
 
 ## Uninstall
 

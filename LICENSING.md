@@ -50,4 +50,4 @@ Verified research status (2026) per `MASTER_PLAN §21` — re-verify each `LICEN
 - [ ] `cargo-deny license audit` run and recorded (whitelist in `deny.toml`; CI job exists).
 - [ ] `pip-licenses` audit of the bundled Python runtime recorded.
 
-**Status:** table above reflects the frozen `MASTER_PLAN §21` research; the runtime audits (`cargo-deny`, `pip-licenses`) have **not** been executed on this machine (tools unavailable) and are recorded as NOT RUN in `RELEASE_READINESS_AUDIT.md`. They must run before release.
+**Status:** table above reflects the frozen `MASTER_PLAN §21` research; runtime audit results (`cargo-deny`, `pip-licenses`) are tracked in `docs/AUTONOMOUS_PROGRESS.md`.

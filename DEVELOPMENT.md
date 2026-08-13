@@ -101,7 +101,7 @@ cd worker
 py scripts/benchmark_performance.py --minutes 1 10 30 60 --model tiny --device cpu
 ```
 
-Writes `worker/perf_report.json` (see `RELEASE_READINESS_AUDIT.md` / `docs/AUTONOMOUS_PROGRESS.md` for the latest results).
+Writes `worker/perf_report.json` (see `docs/AUTONOMOUS_PROGRESS.md` for the latest results).
 
 ## Contribution notes
 

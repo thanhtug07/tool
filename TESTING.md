@@ -41,7 +41,7 @@ Jobs cover frontend (typecheck/lint/test), Rust (fmt/check/clippy/test), worker 
 
 Per `AGENTS.md`: `npm run typecheck` + `npm run lint` + `npm run format` + relevant layer tests (`npm run test`, `cargo test`, `py -m pytest tests -q -p no:cacheprovider`). Latest full-suite results are recorded in `docs/AUTONOMOUS_PROGRESS.md`.
 
-## Known gaps (see `RELEASE_READINESS_AUDIT.md`)
+## Known gaps (see `docs/AUTONOMOUS_PROGRESS.md`)
 
 - No E2E test framework wired into CI (golden runner is manual).
 - 1/10/30/60-min performance benchmarks exist; GPU runs are blocked by missing CUDA toolkit libs locally.
