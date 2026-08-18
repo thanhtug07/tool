@@ -179,17 +179,17 @@ def parse_progress_line(line: str) -> dict[str, str] | None:
 
 
 def out_time_seconds(parsed: dict[str, str]) -> float | None:
-    """Duration processed so far (seconds) from a parsed progress dict."""
+    """Duration processed so far (seconds) from a parsed progress dict.
+
+    Only ``out_time_us`` is trusted: the bundled ffmpeg 9.0 build reports the
+    microsecond value (e.g. 30000000 for a 30s file) under ``out_time_ms``
+    instead of the real millisecond value, so a ``/1000`` fallback would inflate
+    the duration a thousandfold.
+    """
     raw = parsed.get("out_time_us")
     if raw is not None:
         try:
             return int(raw) / 1_000_000
-        except (TypeError, ValueError):
-            return None
-    raw = parsed.get("out_time_ms")
-    if raw is not None:
-        try:
-            return int(raw) / 1_000
         except (TypeError, ValueError):
             return None
     return None
@@ -268,6 +268,21 @@ def run_ffmpeg(
     reaper = threading.Thread(target=_reaper, daemon=True)
     reaper.start()
 
+    # Drain stderr on a background thread so a chatty ffmpeg (large logvolume
+    # writes) can never block on a full stderr pipe while we read stdout —
+    # otherwise the process wedges and `stdout.readline` never returns.
+    stderr_chunks: list[bytes] = []
+    stderr_lock = threading.Lock()
+
+    def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        for chunk in iter(proc.stderr.readline, b""):
+            with stderr_lock:
+                stderr_chunks.append(chunk)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
     out_time_us = 0
     assert proc.stdout is not None
     for raw in iter(proc.stdout.readline, b""):
@@ -282,13 +297,13 @@ def run_ffmpeg(
 
     proc.wait(timeout=30)
     reaper.join(timeout=30)
+    stderr_thread.join(timeout=30)
 
-    stderr = b""
-    if proc.stderr is not None:
-        stderr = proc.stderr.read()
+    with stderr_lock:
+        stderr_bytes = b"".join(stderr_chunks)
     result = FFmpegResult(
         returncode=proc.returncode or 0,
-        stderr=stderr.decode("utf-8", errors="replace"),
+        stderr=stderr_bytes.decode("utf-8", errors="replace"),
         out_time_us=out_time_us,
     )
 

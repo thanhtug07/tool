@@ -80,9 +80,9 @@ export default function LiveLog({
   const [entries, setEntries] = useState<LogEntry[]>(() =>
     backfillFromJobs(plan.stages, jobs, Date.now()),
   );
-  const [collapsed, setCollapsed] = useState(() =>
-    phase === "running" ? false : loadBool(COLLAPSED_KEY, true),
-  );
+  // Always start collapsed — expand only when the user asks. Keeps video +
+  // primary controls visible on 1366×768 without drowning in log lines.
+  const [collapsed, setCollapsed] = useState(() => loadBool(COLLAPSED_KEY, true));
   const [autoScroll, setAutoScroll] = useState(() => loadBool(AUTO_SCROLL_KEY, true));
   const [maxLogs, setMaxLogs] = useState(() => loadNumber(MAX_LOGS_KEY, DEFAULT_MAX_LOG_ENTRIES));
   const [height, setHeight] = useState(() => loadNumber(HEIGHT_KEY, 320));
@@ -326,71 +326,67 @@ export function LiveLogView({
   const failed = stages.find((s) => s.status === "failed");
   const activeRunning = phase === "running";
 
+  const pct = Math.round(overallProgress * 100);
+  const statusLabel =
+    phase === "running"
+      ? "Processing"
+      : phase === "succeeded"
+        ? "Completed"
+        : phase === "failed"
+          ? "Failed"
+          : phase === "cancelled"
+            ? "Cancelled"
+            : "Waiting";
+
   return (
     <section
       data-role="live-log"
       aria-label="Automation live log"
-      className="rounded-lg border border-border bg-card"
+      className="shrink-0 border-t border-border bg-panel"
       style={dragging ? { userSelect: "none" } : undefined}
     >
-      {/* Drag resize handle */}
-      <div
-        data-role="live-log-resize"
-        onPointerDown={onResizeStart}
-        className="group flex h-2 cursor-row-resize items-center justify-center"
-        title="Drag to resize"
-      >
-        <div className="h-0.5 w-16 rounded-full bg-border transition-colors group-hover:bg-primary/50" />
-      </div>
-
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 px-4 pb-2">
-        <button
-          data-role="live-log-toggle"
-          type="button"
-          onClick={onToggleCollapsed}
-          className="flex items-center gap-2 text-sm font-semibold"
+      {!collapsed && (
+        <div
+          data-role="live-log-resize"
+          onPointerDown={onResizeStart}
+          className="group flex h-1.5 cursor-row-resize items-center justify-center"
+          title="Drag to resize"
         >
-          {collapsed ? (
-            <ChevronRight className="size-4" aria-hidden="true" />
+          <div className="h-0.5 w-12 rounded-full bg-border transition-colors group-hover:bg-primary/50" />
+        </div>
+      )}
+
+      {/* Compact status bar — always visible */}
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <span
+          data-role="live-log-status"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          {activeRunning ? (
+            <Loader2 className="size-3 animate-spin text-sky-400" aria-hidden="true" />
+          ) : phase === "succeeded" ? (
+            <Check className="size-3 text-emerald-400" aria-hidden="true" />
+          ) : phase === "failed" ? (
+            <X className="size-3 text-red-400" aria-hidden="true" />
           ) : (
-            <ChevronDown className="size-4" aria-hidden="true" />
+            <Circle className="size-2.5 text-muted-foreground" aria-hidden="true" />
           )}
-          <span className="flex items-center gap-1.5">
-            <span
-              className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
-              aria-hidden="true"
-            />
-            Automation Live Log
-          </span>
-        </button>
-        <div className="flex items-center gap-1">
-          {activeRunning && (
-            <span
-              data-role="live-log-status"
-              className="inline-flex items-center gap-1 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400"
-            >
-              <Loader2 className="size-3 animate-spin" aria-hidden="true" /> Running
+          <span className="text-foreground">{statusLabel}</span>
+          {(activeRunning || phase === "succeeded") && (
+            <span className="tabular-nums" data-role="overall-pct">
+              {pct}%
             </span>
           )}
-          {phase === "succeeded" && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-              <Check className="size-3" aria-hidden="true" /> Completed
+          {currentLabel && activeRunning && (
+            <span className="hidden truncate text-muted-foreground sm:inline">
+              · {currentLabel}
             </span>
           )}
-          {phase === "failed" && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-400">
-              <X className="size-3" aria-hidden="true" /> Failed
-            </span>
-          )}
-          {phase === "cancelled" && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-              <X className="size-3" aria-hidden="true" /> Cancelled
-            </span>
-          )}
+        </span>
+        <div className="ml-auto flex items-center gap-1">
           {!collapsed && (
             <>
-              <label className="ml-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+              <label className="mr-1 hidden items-center gap-1 text-[11px] text-muted-foreground sm:flex">
                 <input
                   type="checkbox"
                   data-role="auto-scroll"
@@ -403,7 +399,7 @@ export function LiveLogView({
                 data-role="max-logs"
                 value={maxLogs}
                 onChange={(e) => onSetMaxLogs(Number(e.target.value))}
-                className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
+                className="hidden rounded border border-border bg-background px-1 py-0.5 text-[11px] sm:block"
                 title="Maximum visible log lines"
               >
                 {MAX_LOG_ENTRIES_OPTIONS.map((n) => (
@@ -417,23 +413,36 @@ export function LiveLogView({
               </Button>
             </>
           )}
+          <Button
+            data-role="live-log-toggle"
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onToggleCollapsed}
+          >
+            {collapsed ? (
+              <>
+                Expand <ChevronRight className="size-3.5" aria-hidden="true" />
+              </>
+            ) : (
+              <>
+                Collapse <ChevronDown className="size-3.5" aria-hidden="true" />
+              </>
+            )}
+          </Button>
         </div>
       </div>
 
       {!collapsed && (
-        <div className="border-t border-border px-4 py-3">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            {/* CURRENT TASK panel */}
-            <div
-              data-role="current-task"
-              className="rounded-md border border-border bg-muted/20 p-3"
-            >
+        <div className="border-t border-border px-3 py-2">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div data-role="current-task" className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 Current task
               </p>
               {activeRunning && runningStage ? (
                 <>
-                  <p className="mt-1 text-sm font-semibold">{currentLabel ?? runningStage.stage}</p>
+                  <p className="mt-1 text-sm font-medium">{currentLabel ?? runningStage.stage}</p>
                   {lastMessage && (
                     <p
                       className="mt-0.5 truncate text-xs text-muted-foreground"
@@ -442,20 +451,14 @@ export function LiveLogView({
                       {lastMessage}
                     </p>
                   )}
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
                     <div
                       data-role="current-progress"
                       className="h-full rounded-full bg-primary transition-[width] duration-300"
-                      style={{ width: `${Math.round(overallProgress * 100)}%` }}
+                      style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    <span>
-                      Overall progress{" "}
-                      <span className="font-medium text-foreground" data-role="overall-pct">
-                        {Math.round(overallProgress * 100)}%
-                      </span>
-                    </span>
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                     <span>
                       Elapsed{" "}
                       <span className="tabular-nums">{formatProcessingTime(elapsedMs)}</span>
@@ -480,45 +483,36 @@ export function LiveLogView({
               )}
             </div>
 
-            {/* TIMELINE */}
-            <div data-role="timeline" className="rounded-md border border-border bg-muted/20 p-3">
+            <div data-role="timeline" className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 Stages
               </p>
-              <ol className="mt-2 space-y-1">
+              <ol className="mt-1.5 space-y-0.5">
                 {timeline.map((item) => (
                   <li key={item.key} className="flex items-center gap-2 text-xs">
+                    {item.status === "succeeded" ? (
+                      <Check className="size-3 shrink-0 text-emerald-400" aria-hidden="true" />
+                    ) : item.status === "running" ? (
+                      <Loader2
+                        className="size-3 shrink-0 animate-spin text-sky-400"
+                        aria-hidden="true"
+                      />
+                    ) : item.status === "failed" ? (
+                      <X className="size-3 shrink-0 text-red-400" aria-hidden="true" />
+                    ) : (
+                      <Circle
+                        className="size-2.5 shrink-0 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                    )}
                     <span
                       className={cn(
-                        "grid size-4 shrink-0 place-items-center rounded-full",
-                        item.status === "succeeded" && "bg-emerald-400/20 text-emerald-400",
-                        item.status === "running" && "bg-primary/20 text-primary",
-                        item.status === "failed" && "bg-red-500/20 text-red-400",
-                        item.status === "pending" && "bg-muted text-muted-foreground",
-                        item.status === "cancelled" && "bg-muted text-muted-foreground",
-                      )}
-                    >
-                      {item.status === "succeeded" ? (
-                        <Check className="size-3" aria-hidden="true" />
-                      ) : item.status === "running" ? (
-                        <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-                      ) : (
-                        <Circle className="size-2" aria-hidden="true" />
-                      )}
-                    </span>
-                    <span
-                      className={cn(
-                        item.status === "running" && "font-semibold text-foreground",
+                        item.status === "running" && "font-medium text-foreground",
                         item.status === "pending" && "text-muted-foreground",
                       )}
                     >
                       {item.label}
                     </span>
-                    {item.message && (
-                      <span className="truncate text-muted-foreground" title={item.message}>
-                        — {item.message}
-                      </span>
-                    )}
                     {item.finishedAt && item.startedAt && (
                       <span className="ml-auto tabular-nums text-muted-foreground">
                         {formatProcessingTime(item.finishedAt - item.startedAt)}
@@ -530,13 +524,12 @@ export function LiveLogView({
             </div>
           </div>
 
-          {/* CONSOLE */}
-          <div className="relative mt-3">
+          <div className="relative mt-2">
             <div
               data-role="console"
               onScroll={onConsoleScroll}
-              className="overflow-y-auto rounded-md border border-border bg-background p-2 font-mono text-[11px] leading-relaxed"
-              style={{ height }}
+              className="overflow-y-auto rounded border border-border bg-background p-2 font-mono text-[11px] leading-relaxed"
+              style={{ height: Math.min(height, 200) }}
             >
               {entries.length === 0 ? (
                 <p className="text-muted-foreground">Waiting for the first job event…</p>
@@ -574,11 +567,10 @@ export function LiveLogView({
             )}
           </div>
 
-          {/* FOOTER ACTIONS */}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             {activeRunning && (
               <Button size="sm" variant="outline" onClick={onCancel} data-role="cancel-automation">
-                <X className="size-3.5 text-red-400" aria-hidden="true" /> Cancel Automation
+                <X className="size-3.5" aria-hidden="true" /> Cancel
               </Button>
             )}
             {phase === "failed" && failed && (
@@ -598,56 +590,29 @@ export function LiveLogView({
             )}
           </div>
 
-          {/* COMPLETED summary */}
           {phase === "succeeded" && plan.startedAt && (
-            <div
-              data-role="completed-summary"
-              className="mt-3 rounded-md border border-emerald-400/20 bg-emerald-400/5 p-3"
-            >
-              <p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-400">
-                <Check className="size-4" aria-hidden="true" /> Automation completed
+            <div data-role="completed-summary" className="mt-2 text-xs text-muted-foreground">
+              <p className="font-medium text-emerald-400">Automation completed</p>
+              <p className="mt-0.5">
+                Total {formatProcessingTime(elapsedMs)}
+                {artifacts?.renderedVideo ? (
+                  <>
+                    {" · "}
+                    <span data-role="output-path">{artifacts.renderedVideo}</span>
+                  </>
+                ) : null}
               </p>
-              <div className="mt-1 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                <span>
-                  Total time:{" "}
-                  <span className="font-medium text-foreground">
-                    {formatProcessingTime(elapsedMs)}
-                  </span>
-                </span>
-                <span>
-                  Output:{" "}
-                  <span className="font-medium text-foreground" data-role="output-path">
-                    {artifacts?.renderedVideo ?? "not available"}
-                  </span>
-                </span>
-              </div>
             </div>
           )}
 
-          {/* FAILED summary */}
           {phase === "failed" && failed && (
-            <div
-              data-role="failed-summary"
-              className="mt-3 rounded-md border border-red-500/20 bg-red-500/5 p-3"
-            >
-              <p className="flex items-center gap-1.5 text-sm font-semibold text-red-400">
-                <X className="size-4" aria-hidden="true" /> Automation failed
+            <div data-role="failed-summary" className="mt-2 text-xs text-muted-foreground">
+              <p className="font-medium text-red-400">Automation failed</p>
+              <p className="mt-0.5">
+                Stage: <span className="text-foreground">{stageLabelOf(failed.key)}</span>
+                {failed.errorMessage ? ` — ${failed.errorMessage}` : ""}
+                {failed.errorCode ? ` (${failed.errorCode})` : ""}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Stage:{" "}
-                <span className="font-medium text-foreground">{stageLabelOf(failed.key)}</span>
-              </p>
-              {(failed.errorCode || failed.errorMessage) && (
-                <details className="mt-1 text-xs">
-                  <summary className="cursor-pointer text-muted-foreground">
-                    {failed.errorMessage ?? failed.errorCode}
-                  </summary>
-                  <p className="mt-1 break-words rounded bg-muted/40 p-2 text-muted-foreground">
-                    Code: {failed.errorCode ?? "unknown"}
-                    {failed.errorMessage ? ` — ${failed.errorMessage}` : ""}
-                  </p>
-                </details>
-              )}
             </div>
           )}
         </div>

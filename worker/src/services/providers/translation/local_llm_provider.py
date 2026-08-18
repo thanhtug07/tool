@@ -40,7 +40,6 @@ from src.services.providers.base import (
     BlockInput,
     CostEstimate,
     ProviderError,
-    TranslationProvider,
 )
 from src.services.providers.translation.gemini_provider import (
     _RETRYABLE_CODES,
@@ -112,6 +111,52 @@ def _health_ok(base_url: str) -> bool:
         return False
 
 
+def _local_lang_name(code: str) -> str:
+    """Map a language code to a full name small local models understand."""
+    return {
+        "vi": "Vietnamese",
+        "zh": "Chinese",
+        "zh-cn": "Chinese",
+        "en": "English",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "th": "Thai",
+        "id": "Indonesian",
+        "ms": "Malay",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "ru": "Russian",
+    }.get(str(code).lower(), str(code))
+
+
+def _build_local_prompt(block: BlockInput) -> str:
+    """Gemini prompt + a JSON example sized like the block (all segments, one
+    item each) so small local models emit the full structure in one shot."""
+    prompt = build_prompt(block).replace(
+        "into {target}.".format(target=block.target_language),
+        "into {name} ({code}).".format(
+            name=_local_lang_name(block.target_language), code=block.target_language
+        ),
+    )
+    items = ",".join(
+        '{"idx": %d, "segment_id": "%s", "source_text": "<keep verbatim>", '
+        '"translated_text": "<translated to %s>", "confidence": 0.95}'
+        % (seg.idx, seg.segment_id, _local_lang_name(block.target_language))
+        for seg in block.segments
+    )
+    example = '{"block_idx": %d, "translations": [%s]}' % (block.block_idx, items)
+    lines = [
+        "Output ONLY raw JSON (no markdown fences, no commentary), one "
+        "translations[] item for EACH of the segments above (exactly %d items), "
+        "preserving each idx/segment_id/source_text verbatim and filling "
+        "translated_text in the target language:"
+        % len(block.segments),
+        example,
+    ]
+    return prompt + "\n\n" + "\n".join(lines)
+
+
 class LlamaServerController:
     """Starts/stops a local llama-server and exposes its base URL."""
 
@@ -166,7 +211,6 @@ class LlamaServerController:
         if self.server_url:
             self.ready = True
             return
-        executable = self.executable
         if not self.model_path or not os.path.isfile(self.model_path):
             raise ProviderError(E_LOCAL_LLM_START, f"Model file missing: {self.model_path}")
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -208,8 +252,6 @@ class LlamaServerController:
                     stderr=subprocess.DEVNULL,
                 )
             else:
-                import signal
-
                 proc.terminate()
             proc.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
@@ -311,7 +353,7 @@ class LocalLLMProvider:
         attempt = 0
         while True:
             try:
-                content = self._chat(build_prompt(block))
+                content = self._chat(_build_local_prompt(block))
                 return _parse_and_validate(block, content)
             except ProviderError as exc:
                 if exc.code != E_API_ERROR or attempt >= MAX_HTTP_RETRIES:

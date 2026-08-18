@@ -59,6 +59,9 @@ export function stageLabel(key: StageKey): string {
     subtitle: "Subtitle generation",
     tts: "Voice generation",
     render: "Final rendering",
+    audio: "Audio processing",
+    logo: "Logo removal",
+    chunk: "Chunked pipeline",
   };
   return labels[key] ?? key;
 }

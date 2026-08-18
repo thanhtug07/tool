@@ -36,6 +36,13 @@ pub const SETTINGS_KEYS: &[&str] = &[
     "cache.quota_bytes",
     "privacy.mode",
     "privacy.telemetry",
+    "tts.engine",
+    "tts.voice",
+    "automation.chunked",
+    "automation.chunk_duration",
+    "automation.chunk_overlap",
+    "automation.chunk_concurrency",
+    "automation.chunk_retries",
 ];
 
 /// Built-in defaults for keys that have never been written.
@@ -46,11 +53,18 @@ fn defaults() -> BTreeMap<&'static str, String> {
     map.insert("ai.preset", "balanced".to_string());
     map.insert("gpu.override", "auto".to_string());
     map.insert("api.gemini.base_url", String::new());
-    map.insert("api.gemini.model", "gemini-2.5-flash-lite".to_string());
+    map.insert("api.gemini.model", "gemini-flash-lite-latest".to_string());
     map.insert("api.local.base_url", "http://127.0.0.1:8080".to_string());
     map.insert("cache.quota_bytes", DEFAULT_CACHE_QUOTA_BYTES.to_string());
     map.insert("privacy.mode", "local".to_string());
     map.insert("privacy.telemetry", "false".to_string());
+    map.insert("tts.engine", "edge".to_string());
+    map.insert("tts.voice", "vi-VN-HoaiMyNeural".to_string());
+    map.insert("automation.chunked", "false".to_string());
+    map.insert("automation.chunk_duration", "30".to_string());
+    map.insert("automation.chunk_overlap", "2".to_string());
+    map.insert("automation.chunk_concurrency", "4".to_string());
+    map.insert("automation.chunk_retries", "2".to_string());
     map
 }
 
@@ -79,8 +93,64 @@ pub fn validate_setting(key: &str, value: &str) -> Result<String, DbError> {
         }
         "privacy.telemetry" => {
             if !matches!(value, "true" | "false") {
+                return Err(DbError::InvalidInput(format!(
+                    "{key} must be true or false"
+                )));
+            }
+        }
+        "tts.engine" => {
+            if !matches!(value, "edge" | "piper") {
                 return Err(DbError::InvalidInput(
-                    "privacy.telemetry must be true or false".into(),
+                    "tts.engine must be one of edge/piper".to_string(),
+                ));
+            }
+        }
+        "tts.voice" => {
+            if value.is_empty() {
+                return Err(DbError::InvalidInput("tts.voice must not be empty".into()));
+            }
+        }
+        "automation.chunked" => {
+            if !matches!(value, "true" | "false") {
+                return Err(DbError::InvalidInput(
+                    "automation.chunked must be true or false".into(),
+                ));
+            }
+        }
+        "automation.chunk_duration" => {
+            if !matches!(value, "20" | "30" | "45" | "60") {
+                return Err(DbError::InvalidInput(
+                    "automation.chunk_duration must be one of 20/30/45/60".into(),
+                ));
+            }
+        }
+        "automation.chunk_overlap" => {
+            let v: f64 = value.parse().map_err(|_| {
+                DbError::InvalidInput("automation.chunk_overlap must be a number".into())
+            })?;
+            if !(0.0..=10.0).contains(&v) {
+                return Err(DbError::InvalidInput(
+                    "automation.chunk_overlap must be between 0 and 10".into(),
+                ));
+            }
+        }
+        "automation.chunk_concurrency" => {
+            let v: u32 = value.parse().map_err(|_| {
+                DbError::InvalidInput("automation.chunk_concurrency must be an integer".into())
+            })?;
+            if !(1..=8).contains(&v) {
+                return Err(DbError::InvalidInput(
+                    "automation.chunk_concurrency must be between 1 and 8".into(),
+                ));
+            }
+        }
+        "automation.chunk_retries" => {
+            let v: u32 = value.parse().map_err(|_| {
+                DbError::InvalidInput("automation.chunk_retries must be an integer".into())
+            })?;
+            if v > 5 {
+                return Err(DbError::InvalidInput(
+                    "automation.chunk_retries must be between 0 and 5".into(),
                 ));
             }
         }

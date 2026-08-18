@@ -26,11 +26,18 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// long videos plus their translations can exceed 1 MiB).
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// I/O timeout for pipeline stage calls (extract/transcribe/translate/
-/// subtitle/render) and export calls. These run for minutes on real media; the
-/// short ``READ_TIMEOUT`` is only for the health probe and progress polling.
-/// 2 hours comfortably bounds a 40-minute video even at RTF ~2.5 on a slow
-/// CPU; a genuinely hung worker is caught by the supervisor instead.
-const PIPELINE_IO_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+/// subtitle/render/tts) and export calls. These run for minutes on real media;
+/// the short ``READ_TIMEOUT`` is only for the health probe and progress
+/// polling.
+///
+/// 4 hours bounds a single stage even for long media on slow hardware — e.g.
+/// a 2-hour video rendering at RTF ~2.5 takes ~5h of wall time on a slow CPU,
+/// and a 40-min film transcodes at RTF 3 in ~2h; the previous 2h cap could
+/// kill render/TTS mid-flight on exactly the long videos this studio targets.
+/// The stage-level retry in `PipelineRunner` re-arms the budget per attempt,
+/// and a genuinely hung worker is caught by the supervisor instead of the
+/// socket.
+const PIPELINE_IO_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 /// I/O timeout for the live-progress poll: the worker answers instantly, so a
 /// stalled poll must fail fast and be treated as "no progress available".
 const PROGRESS_READ_TIMEOUT: Duration = Duration::from_secs(1);
@@ -165,6 +172,100 @@ pub struct ProviderTestResult {
     pub ok: bool,
     pub latency_ms: u64,
     pub detail: String,
+}
+
+/// One downloadable translation model (`GET /v1/models/catalog`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelCatalogEntry {
+    pub id: String,
+    pub name: String,
+    pub repo_id: String,
+    pub filename: String,
+    pub size_bytes: u64,
+    pub vram_hint_mb: u64,
+}
+
+/// Response of `GET /v1/models/catalog`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelCatalogResponse {
+    pub models: Vec<ModelCatalogEntry>,
+}
+
+/// One TTS engine with its voices (`GET /v1/tts/voices`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsEngineVoices {
+    pub id: String,
+    pub label: String,
+    /// Whether the engine package is installed on this machine.
+    #[serde(default)]
+    pub available: bool,
+    pub voices: Vec<TtsVoiceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsVoiceEntry {
+    pub id: String,
+    pub label: String,
+    /// Voice Library metadata — the worker is the source of truth (never
+    /// hard-coded in the UI); empty/"Not specified" when the provider does
+    /// not expose the field.
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub gender: String,
+    #[serde(default)]
+    pub age: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub preview_text: String,
+}
+
+/// Response of `GET /v1/tts/voices`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsVoicesResponse {
+    pub engines: Vec<TtsEngineVoices>,
+    pub defaults: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Request body for `POST /v1/tts/preview` (Voice Library preview).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsPreviewRequest {
+    pub engine: String,
+    pub voice: String,
+    pub text: String,
+    /// Cache dir (app-data `voice-previews` — asset-scoped so the webview can
+    /// play the generated wav); None = worker system temp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+}
+
+/// Response of `POST /v1/tts/preview`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtsPreviewResponse {
+    pub path: String,
+    pub duration_seconds: f64,
+    pub cached: bool,
+}
+
+/// Request body for `POST /v1/models/download`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelDownloadRequest {
+    pub repo_id: String,
+    pub filename: String,
+    pub local_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/models/download`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelDownloadResponse {
+    pub path: String,
+    pub size_bytes: u64,
+    pub cached: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +459,30 @@ pub struct WatermarkImage {
     pub opacity: Option<f64>,
 }
 
+/// One edited subtitle cue for the render-time ASS (worker `RenderSubtitleCue`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenderSubtitleCue {
+    pub cue_number: i64,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+/// Subtitle position override from the preview (worker `RenderSubtitleStyle`).
+///
+/// ``custom_x``/``custom_y`` are fractions (0..1) of the video frame with the
+/// text center as the anchor — matching the drag interaction in the preview.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenderSubtitleStyle {
+    pub position: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
 /// One cue to speak (worker `TTSCueRequest`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TtsCue {
@@ -409,10 +534,66 @@ pub struct RenderRequest {
     pub watermark: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice_track_path: Option<String>,
+    /// Optional pre-processed audio track (``/v1/audio/process`` output) that
+    /// replaces the video's original audio in the render.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_track_path: Option<String>,
+    /// Edited cues + position override: when present the worker rebuilds the
+    /// render-time ASS from them (text edits / deletions / dragged position).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle_cues: Option<Vec<RenderSubtitleCue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle_style: Option<RenderSubtitleStyle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check_window: Option<(f64, f64)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
+}
+
+/// Marked logo rectangle for ``POST /v1/logo/remove`` (source-pixel coords).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LogoRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_start: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_end: Option<f64>,
+}
+
+/// Request body for `POST /v1/logo/remove` (custom workflow step).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LogoRemoveRequest {
+    pub video_path: String,
+    pub output_path: String,
+    pub region: LogoRegion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/logo/remove`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct LogoRemoveResponse {
+    pub output_path: String,
+}
+
+/// Request body for `POST /v1/audio/process` (custom workflow step).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AudioProcessRequest {
+    pub video_path: String,
+    pub output_path: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+}
+
+/// Response of `POST /v1/audio/process`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AudioProcessResponse {
+    pub output_path: String,
+    pub mode: String,
 }
 
 /// Response of `POST /v1/render`.
@@ -427,6 +608,87 @@ pub struct RenderResponse {
     #[serde(default)]
     pub fps: Vec<u32>,
     pub audio_streams: u32,
+}
+
+/// Request body for `POST /v1/automation/chunked` (chunked parallel pipeline).
+///
+/// Mirrors the worker's `ChunkedAutomationRequest`: one call runs the whole
+/// video in fixed-length chunks under bounded concurrency and writes the
+/// merged cache artifacts (transcript/translation/subtitles/voice track).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChunkedAutomationRequest {
+    pub job_id: String,
+    pub project_id: String,
+    pub project_dir: String,
+    pub source_video: String,
+    pub source_audio: String,
+    pub target_language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_language: Option<String>,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_config: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Never logged; only sent over loopback in the request body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    pub model: String,
+    pub glossary_ver: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glossary: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characters: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<String>>,
+    pub dub: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    pub tts_engine: String,
+    pub stt_model: String,
+    pub stt_device: String,
+    pub chunk_duration: f64,
+    pub overlap: f64,
+    pub max_concurrency: u32,
+    pub max_retries: u32,
+    pub duration_tolerance: f64,
+}
+
+/// Manifest returned by `POST /v1/automation/chunked` (subset used by Rust;
+/// the full JSON also carries per-chunk state and artifact paths).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ChunkedAutomationResponse {
+    pub job_id: String,
+    pub source_video: String,
+    pub chunk_duration: f64,
+    pub overlap: f64,
+    pub total_chunks: u32,
+    pub completed_chunks: u32,
+    #[serde(default)]
+    pub failed_chunks: Vec<u32>,
+    /// Relative artifact paths (transcript/translation/subtitle/voice_track).
+    #[serde(default)]
+    pub artifacts: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub total_duration: f64,
+}
+
+/// Request body for `POST /v1/automation/finalize` (Phases 13–16).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChunkedFinalizeRequest {
+    pub job_id: String,
+    pub project_dir: String,
+    pub output_path: String,
+    pub source_duration: f64,
+    pub duration_tolerance: f64,
+}
+
+/// Response of `POST /v1/automation/finalize`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ChunkedFinalizeResponse {
+    pub validation: String,
+    pub verification: String,
+    pub cleanup: String,
+    #[serde(default)]
+    pub issues: Vec<String>,
 }
 
 /// Response of `POST /v1/jobs/{job_id}/cancel`.
@@ -561,6 +823,39 @@ impl WorkerClient {
         parse_json_response(status, body)
     }
 
+    /// Run the chunked parallel pipeline (`POST /v1/automation/chunked`).
+    pub fn automation_chunked(
+        &self,
+        request: ChunkedAutomationRequest,
+    ) -> Result<ChunkedAutomationResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/automation/chunked", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Final validation + output verification + cleanup (`POST /v1/automation/finalize`).
+    pub fn automation_finalize(
+        &self,
+        request: ChunkedFinalizeRequest,
+    ) -> Result<ChunkedFinalizeResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/automation/finalize", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Remove a marked logo region (`POST /v1/logo/remove`).
+    pub fn remove_logo(&self, request: LogoRemoveRequest) -> Result<LogoRemoveResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/logo/remove", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Process the video's audio into a track the render maps (`POST /v1/audio/process`).
+    pub fn process_audio(
+        &self,
+        request: AudioProcessRequest,
+    ) -> Result<AudioProcessResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/audio/process", &request)?;
+        parse_json_response(status, body)
+    }
+
     /// Request cancellation of an in-flight stage for ``job_id`` (idempotent).
     pub fn cancel_job(&self, job_id: &str) -> Result<CancelResponse, HttpError> {
         let path = format!("/v1/jobs/{job_id}/cancel");
@@ -602,6 +897,50 @@ impl WorkerClient {
             api_key: api_key.map(str::to_string),
         };
         let (status, body) = self.post_json("/v1/providers/test", &request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Fetch the downloadable translation-model catalog (`GET /v1/models/catalog`).
+    pub fn model_catalog(&self) -> Result<ModelCatalogResponse, HttpError> {
+        let (status, body) = http_get(
+            self.addr(),
+            "/v1/models/catalog",
+            &[("Authorization", format!("Bearer {}", self.token))],
+            READ_TIMEOUT,
+        )?;
+        parse_json_response(status, body)
+    }
+
+    /// Fetch available TTS voices per engine (`GET /v1/tts/voices`).
+    pub fn tts_voices(&self) -> Result<TtsVoicesResponse, HttpError> {
+        let (status, body) = http_get(
+            self.addr(),
+            "/v1/tts/voices",
+            &[("Authorization", format!("Bearer {}", self.token))],
+            READ_TIMEOUT,
+        )?;
+        parse_json_response(status, body)
+    }
+
+    /// Synthesize a short voice preview (`POST /v1/tts/preview`).
+    pub fn tts_preview(
+        &self,
+        request: &TtsPreviewRequest,
+    ) -> Result<TtsPreviewResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/tts/preview", request)?;
+        parse_json_response(status, body)
+    }
+
+    /// Download a translation GGUF into ``local_dir`` (`POST /v1/models/download`).
+    ///
+    /// Runs under the pipeline timeout (downloads take minutes for ~2 GB
+    /// models); live progress is polled via ``get_progress`` on ``job_id`` by
+    /// the command layer while this call is in flight.
+    pub fn download_model(
+        &self,
+        request: ModelDownloadRequest,
+    ) -> Result<ModelDownloadResponse, HttpError> {
+        let (status, body) = self.post_json("/v1/models/download", &request)?;
         parse_json_response(status, body)
     }
 
@@ -1104,7 +1443,7 @@ mod tests {
     #[test]
     fn translate_sends_provider_and_parses_translation() {
         let port = serve(|stream| {
-            let body = r#"{"schema_version":1,"target_language":"zh","model":"gemini-2.5-flash-lite","blocks":[{"block_idx":0,"translations":[{"idx":0,"segment_id":"seg_0","source_text":"Xin chào","translated_text":"你好","confidence":0.99}]}]}"#;
+            let body = r#"{"schema_version":1,"target_language":"zh","model":"gemini-flash-lite-latest","blocks":[{"block_idx":0,"translations":[{"idx":0,"segment_id":"seg_0","source_text":"Xin chào","translated_text":"你好","confidence":0.99}]}]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
@@ -1117,7 +1456,7 @@ mod tests {
                 project_id: "proj-1".into(),
                 provider: "gemini".into(),
                 target_language: "zh".into(),
-                model: "gemini-2.5-flash-lite".into(),
+                model: "gemini-flash-lite-latest".into(),
                 glossary_ver: None,
                 glossary: None,
                 characters: None,
@@ -1147,7 +1486,7 @@ mod tests {
                 translation: Translation {
                     schema_version: 1,
                     target_language: "zh".into(),
-                    model: "gemini-2.5-flash-lite".into(),
+                    model: "gemini-flash-lite-latest".into(),
                     blocks: vec![],
                 },
                 project_id: "proj-1".into(),
@@ -1181,6 +1520,9 @@ mod tests {
                 crf: None,
                 watermark: None,
                 voice_track_path: None,
+                audio_track_path: None,
+                subtitle_cues: None,
+                subtitle_style: None,
                 check_window: None,
                 job_id: Some("job-1".into()),
             })

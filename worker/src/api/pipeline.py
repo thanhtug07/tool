@@ -27,8 +27,12 @@ never embed stack traces, tokens, or full command lines.
 from __future__ import annotations
 
 import logging
+import re
 import threading
+import wave
 from contextlib import contextmanager
+from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
@@ -111,7 +115,7 @@ class TranslateRequest(BaseModel):
     project_id: str = Field(min_length=1)
     provider: str = "mock"
     target_language: str = Field(min_length=2, max_length=8)
-    model: str = Field(default="gemini-2.5-flash-lite", min_length=1)
+    model: str = Field(default="gemini-flash-lite-latest", min_length=1)
     glossary_ver: str = "0"
     glossary: dict[str, str] | None = None
     characters: dict[str, str] | None = None
@@ -144,6 +148,39 @@ class ProviderTestRequest(BaseModel):
     api_key: str | None = None
 
 
+class ModelCatalogEntryModel(BaseModel):
+    """One downloadable translation model (Settings → Providers).
+
+    ``repo_id``/``filename`` identify the Hugging Face GGUF; ``size_bytes`` is
+    the pinned upstream size (used for progress anchoring and resume). The
+    catalog is the single source of truth — Rust/frontend never hard-code it.
+    """
+
+    id: str
+    name: str
+    repo_id: str
+    filename: str
+    size_bytes: int
+    vram_hint_mb: int
+
+
+class ModelDownloadRequest(BaseModel):
+    """``POST /v1/models/download`` — download a translation GGUF on demand.
+
+    ``repo_id`` + ``filename`` are forwarded from the catalog; ``local_dir``
+    is the directory (created if missing) the model downloads into; the final
+    file is ``local_dir/<filename>`` with resume via ``<filename>.part``.
+    ``mirror_url`` optionally overrides the CDN base (China mirror) — always
+    validated against the fixed repo layout before use.
+    """
+
+    repo_id: str = Field(min_length=1)
+    filename: str = Field(min_length=1)
+    local_dir: str = Field(min_length=1)
+    mirror: str | None = None
+    job_id: str | None = None
+
+
 class WatermarkTextRequest(BaseModel):
     text: str = Field(min_length=1)
     position: str = "bottom-right"
@@ -173,6 +210,30 @@ class WatermarkRequest(BaseModel):
     image: WatermarkImageRequest | None = None
 
 
+class RenderSubtitleCue(BaseModel):
+    """One edited cue used to rebuild the render-time ASS."""
+
+    cue_number: int = Field(ge=1)
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+    text: str = Field(min_length=1)
+
+
+class RenderSubtitleStyle(BaseModel):
+    """Subtitle position override from the preview (dragged custom position).
+
+    ``custom_x``/``custom_y`` are fractions (0..1) of the video frame with the
+    text center as the anchor — matching the drag interaction in the preview.
+    """
+
+    position: Literal["bottom_center", "top_center", "custom"] = "bottom_center"
+    custom_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    custom_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: Detected source language — picks the per-language ASS default style
+    #: (font/size), so the render-time ASS matches the subtitle stage's output.
+    language: str | None = None
+
+
 class RenderRequest(BaseModel):
     video_path: str = Field(min_length=1)
     subtitle_path: str | None = None
@@ -184,8 +245,110 @@ class RenderRequest(BaseModel):
     #: Optional full-duration voice track (``/v1/tts/synthesize`` output) to
     #: mix over the original audio (original ducked to ~45%).
     voice_track_path: str | None = None
+    #: Optional pre-processed audio track (``/v1/audio/process`` output). When
+    #: set, it replaces the video's original audio (and becomes the base the
+    #: voice track mixes over when dubbing).
+    audio_track_path: str | None = None
+    #: Edited cues + position override. When ``subtitle_cues`` is present it
+    #: takes precedence over ``subtitle_path``: the renderer rebuilds the ASS
+    #: from these cues so text edits / deletions / the dragged position all
+    #: appear in the burned-in output.
+    subtitle_cues: list[RenderSubtitleCue] | None = None
+    subtitle_style: RenderSubtitleStyle | None = None
     check_window: tuple[float, float] | None = None
     job_id: str | None = None
+
+
+class LogoRegionRequest(BaseModel):
+    """Marked logo rectangle (source-pixel coords) + optional time window."""
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    time_start: float | None = Field(default=None, ge=0.0)
+    time_end: float | None = Field(default=None, ge=0.0)
+
+
+class LogoRemoveRequest(BaseModel):
+    video_path: str = Field(min_length=1)
+    output_path: str = Field(min_length=1)
+    region: LogoRegionRequest
+    job_id: str | None = None
+
+
+class LogoResult(BaseModel):
+    output_path: str
+
+
+class ChunkedAutomationRequest(BaseModel):
+    """Run the chunked parallel pipeline (TASK_AUTOMATION_PINELINE).
+
+    One worker call processes the whole video in 30 s logical chunks under
+    bounded concurrency, merging the per-chunk STT/translation/TTS results
+    into the project's cache artifacts (transcript/translation/subtitles/
+    voice track) exactly where the later render stage expects them.
+    """
+
+    job_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    project_dir: str = Field(min_length=1)
+    source_video: str = Field(min_length=1)
+    source_audio: str = Field(min_length=1)
+    target_language: str = Field(min_length=2, max_length=8)
+    source_language: str | None = None
+    provider: str = "mock"
+    provider_config: dict[str, str] | None = None
+    api_key: str | None = None
+    model: str = "gemini-flash-lite-latest"
+    glossary_ver: str = "0"
+    glossary: dict[str, str] | None = None
+    characters: dict[str, str] | None = None
+    rules: list[str] | None = None
+    dub: bool = False
+    voice: str | None = None
+    tts_engine: str = "edge"
+    stt_model: str = "large-v3"
+    stt_device: str = "auto"
+    chunk_duration: float = 30.0
+    overlap: float = 2.0
+    max_concurrency: int = 4
+    # Per-stage pool sizes for the streaming pipeline (optional; defaults derive
+    # from ``max_concurrency``). Set by benchmarks, never hard-coded at call sites.
+    stt_workers: int | None = None
+    translate_workers: int | None = None
+    tts_workers: int | None = None
+    max_retries: int = 2
+    duration_tolerance: float = 0.5
+
+
+class ChunkedFinalizeRequest(BaseModel):
+    """Phase 13–16: final validation + output verification + cleanup.
+
+    Called by Rust after the chunked job's internal render produced
+    ``output_path``. The temp tree is removed ONLY when both validation and
+    verification pass; on failure everything is kept for debugging/retry.
+    """
+
+    job_id: str = Field(min_length=1)
+    project_dir: str = Field(min_length=1)
+    output_path: str = Field(min_length=1)
+    source_duration: float = Field(gt=0.0)
+    duration_tolerance: float = 0.5
+
+
+class AudioProcessRequestModel(BaseModel):
+    """Request for ``/v1/audio/process`` (one real ffmpeg mode)."""
+
+    video_path: str = Field(min_length=1)
+    output_path: str = Field(min_length=1)
+    mode: Literal["vocal_removal", "normalize", "denoise"] = "vocal_removal"
+    job_id: str | None = None
+
+
+class AudioProcessResult(BaseModel):
+    output_path: str
+    mode: str
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +528,7 @@ def provider_test(request: ProviderTestRequest) -> JSONResponse:
             provider = GeminiProvider(api_key=api_key, model=config.get("model"))
             client = provider._resolve_client()  # E_PROVIDER_UNAVAILABLE when SDK missing
             try:
-                client.models.get(provider.model_name)
+                client.models.get(model=provider.model_name)
             except Exception as exc:  # noqa: BLE001 - classify every API failure
                 code = _rest_code(exc)
                 if code in _AUTH_CODES:
@@ -512,6 +675,102 @@ def tts_synthesize(request: TTSRequest) -> JSONResponse:
     )
 
 
+@router.get("/v1/tts/voices")
+def tts_voices() -> JSONResponse:
+    """Available TTS voices per engine (single source of truth).
+
+    Served by the worker (mirrors ``tts_service.EDGE_VOICES`` /
+    ``PIPER_VOICES``) so voice names are never hard-coded in Rust or the
+    frontend. ``default`` is the per-engine fallback voice.
+    """
+    from src.services.tts_service import (  # noqa: PLC0415 - lazy
+        EDGE_VOICES,
+        PIPER_VOICES,
+        _DEFAULT_VOICE_FALLBACK,
+        available_engines,
+        voice_meta,
+    )
+
+    installed = set(available_engines())
+    engines = []
+    for engine_id, label, voices in (
+        ("edge", "Edge (cloud — Microsoft neural, best quality)", EDGE_VOICES),
+        ("piper", "Piper (local — offline, lower quality)", PIPER_VOICES),
+    ):
+        engines.append(
+            {
+                "id": engine_id,
+                "label": label,
+                "available": engine_id in installed,
+                "voices": [
+                    {"id": vid, "label": vlabel, **voice_meta(engine_id, vid)}
+                    for vid, vlabel in voices.items()
+                ],
+            }
+        )
+    return JSONResponse(
+        {
+            "engines": engines,
+            "defaults": {
+                engine: {"voice": voice} for engine, voice in _DEFAULT_VOICE_FALLBACK.items()
+            },
+        }
+    )
+
+
+class TTSPreviewRequest(BaseModel):
+    """Request body for ``POST /v1/tts/preview`` (Voice Library preview)."""
+
+    engine: str = "edge"  # ``edge`` (cloud, default) or ``piper`` (local)
+    voice: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    #: Cache directory (the Rust core passes the app-data voice-previews dir
+    #: so the asset protocol can serve the file); default = system temp.
+    output_dir: str | None = None
+
+
+@router.post("/v1/tts/preview")
+def tts_preview(request: TTSPreviewRequest) -> JSONResponse:
+    """Synthesize one short clip for a voice preview (real TTS, never fake).
+
+    Cached on disk by ``engine + voice + text`` hash so repeated previews of
+    the same voice reuse the file instead of re-synthesizing.
+    """
+    import hashlib
+    import tempfile
+
+    from src.services.tts_service import (  # noqa: PLC0415 - lazy
+        TTSError,
+        synthesize_preview,
+    )
+
+    cache_dir = Path(request.output_dir) if request.output_dir else Path(tempfile.gettempdir()) / "aivideo-tts-preview"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = f"{request.engine}-{request.voice}-{hashlib.sha1(request.text.encode('utf-8')).hexdigest()[:12]}"
+    out = cache_dir / f"{key}.wav"
+    if out.is_file():
+        try:
+            with wave.open(str(out), "rb") as w:
+                duration = w.getnframes() / float(w.getframerate())
+            return JSONResponse(
+                {"path": str(out), "duration_seconds": round(duration, 3), "cached": True}
+            )
+        except Exception:  # noqa: BLE001 - corrupt cache file → regenerate
+            out.unlink(missing_ok=True)
+    try:
+        duration = synthesize_preview(
+            request.voice,
+            engine=request.engine,
+            text=request.text,
+            out_wav=str(out),
+        )
+    except TTSError as exc:
+        return _error(exc.code, exc.message)
+    return JSONResponse(
+        {"path": str(out), "duration_seconds": round(duration, 3), "cached": False}
+    )
+
+
 @router.post("/v1/render")
 def render(request: RenderRequest) -> JSONResponse:
     """Burn subtitles into ``video_path`` with libass and validate the output."""
@@ -522,8 +781,26 @@ def render(request: RenderRequest) -> JSONResponse:
         ImageWatermark,
         TextWatermark,
         WatermarkConfig,
+        build_render_ass,
         render as render_video,
     )
+
+    # When edited cues are supplied, rebuild the render-time ASS from them
+    # (text edits, deletions and the dragged position) instead of burning the
+    # subtitle stage's regenerated ``subtitle.ass``.
+    subtitle_ass_text = None
+    if request.subtitle_cues is not None:
+        style = request.subtitle_style or RenderSubtitleStyle()
+        cues = [
+            c for c in request.subtitle_cues if c.end > c.start and c.text.strip()
+        ]
+        subtitle_ass_text = build_render_ass(
+            cues,
+            language=style.language,
+            position=style.position,
+            custom_x=style.custom_x,
+            custom_y=style.custom_y,
+        )
 
     watermark = None
     if request.watermark is not None:
@@ -559,13 +836,15 @@ def render(request: RenderRequest) -> JSONResponse:
 
     config = RenderConfig(
         input_path=request.video_path,
-        subtitle_path=request.subtitle_path,
+        subtitle_path=None if request.subtitle_cues is not None else request.subtitle_path,
+        subtitle_ass_text=subtitle_ass_text,
         output_path=request.output_path,
         video_encoder=request.encoder,
         video_preset=request.preset,
         video_crf=request.crf,
         watermark=watermark,
         voice_track_path=request.voice_track_path,
+        audio_track_path=request.audio_track_path,
         check_window=request.check_window,
     )
     try:
@@ -592,6 +871,316 @@ def render(request: RenderRequest) -> JSONResponse:
             "audio_streams": result.audio_streams,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Logo removal + audio processing (custom workflow steps)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/v1/automation/chunked")
+def chunked_automation(request: ChunkedAutomationRequest) -> JSONResponse:
+    """Run the chunked parallel pipeline (Phase 1–10 of the chunked task)."""
+    from src.services.chunk_service import (  # noqa: PLC0415 - lazy
+        ChunkFailedError,
+        run_chunked_pipeline,
+    )
+
+    try:
+        with _cancel_scope(request.job_id) as cancel:
+            manifest = run_chunked_pipeline(
+                job_id=request.job_id,
+                project_id=request.project_id,
+                project_dir=request.project_dir,
+                source_video=request.source_video,
+                source_audio=request.source_audio,
+                target_language=request.target_language,
+                source_language=request.source_language,
+                provider=request.provider,
+                provider_config=request.provider_config,
+                api_key=request.api_key,
+                model=request.model,
+                glossary_ver=request.glossary_ver,
+                glossary=request.glossary,
+                characters=request.characters,
+                rules=request.rules,
+                dub=request.dub,
+                voice=request.voice,
+                tts_engine=request.tts_engine,
+                stt_model=request.stt_model,
+                stt_device=request.stt_device,
+                chunk_duration=request.chunk_duration,
+                overlap=request.overlap,
+                max_concurrency=request.max_concurrency,
+                stt_workers=request.stt_workers,
+                translate_workers=request.translate_workers,
+                tts_workers=request.tts_workers,
+                max_retries=request.max_retries,
+                duration_tolerance=request.duration_tolerance,
+                cancel=cancel,
+                on_progress=lambda fraction, stage, message: cancel.set_progress(
+                    fraction, stage, message
+                ),
+                on_event=lambda level, message: cancel.set_progress(0.5, "chunk", message),
+            )
+    except CancelledError:
+        return _error("E_CANCELLED", "Chunked automation was cancelled.", http=status.HTTP_409_CONFLICT)
+    except ChunkFailedError as exc:
+        return _error(exc.code, exc.message, recoverable=True)
+    except ProviderError as exc:
+        return _error(exc.code, exc.message)
+    return JSONResponse(manifest)
+
+
+@router.post("/v1/automation/finalize")
+def chunked_finalize(request: ChunkedFinalizeRequest) -> JSONResponse:
+    """Final validation + output verification + cleanup for a chunked job."""
+    import os  # noqa: PLC0415
+
+    from src.services.chunk_service import (  # noqa: PLC0415 - lazy
+        CleanupManager,
+        final_validation,
+        verify_output,
+    )
+
+    cleanup = CleanupManager(os.path.join(request.project_dir, "temp", request.job_id))
+    cleanup.transition("validating")
+    issues = final_validation(
+        request.output_path,
+        request.source_duration,
+        tolerance=request.duration_tolerance,
+    )
+    if issues:
+        cleanup.keep_temp()
+        return JSONResponse(
+            {
+                "validation": "FAIL",
+                "verification": "SKIPPED",
+                "issues": issues,
+                "cleanup": "kept",
+            }
+        )
+    cleanup.transition("output_ready")
+    v_issues = verify_output(request.output_path)
+    if v_issues:
+        cleanup.keep_temp()
+        return JSONResponse(
+            {"validation": "PASS", "verification": "FAIL", "issues": v_issues, "cleanup": "kept"}
+        )
+    cleanup.transition("output_verified")
+    cleaned = cleanup.cleanup()
+    return JSONResponse(
+        {
+            "validation": "PASS",
+            "verification": "PASS",
+            "cleanup": "done" if cleaned else "kept",
+        }
+    )
+
+
+@router.post("/v1/logo/remove")
+def logo_remove(request: LogoRemoveRequest) -> JSONResponse:
+    """Remove a marked logo region with ffmpeg ``delogo`` (custom step)."""
+    from src.services.logo_service import (  # noqa: PLC0415 - lazy
+        LogoError,
+        LogoRegion,
+        remove_logo,
+    )
+
+    region = LogoRegion(
+        x=request.region.x,
+        y=request.region.y,
+        width=request.region.width,
+        height=request.region.height,
+        time_start=request.region.time_start,
+        time_end=request.region.time_end,
+    )
+    try:
+        with _cancel_scope(request.job_id) as cancel:
+            output = remove_logo(
+                request.video_path,
+                request.output_path,
+                region,
+                cancel=cancel,
+                on_progress=lambda f: cancel.set_progress(f, "logo", f"{(f * 100):.0f}% removed"),
+            )
+    except CancelledError:
+        return _error("E_CANCELLED", "Logo removal was cancelled.", http=status.HTTP_409_CONFLICT)
+    except LogoError as exc:
+        return _error(exc.code, exc.message)
+    return JSONResponse({"output_path": output})
+
+
+@router.post("/v1/audio/process")
+def audio_process(request: AudioProcessRequestModel) -> JSONResponse:
+    """Process the video's audio (vocal removal / normalize / denoise)."""
+    from src.services.audio_process_service import (  # noqa: PLC0415 - lazy
+        AudioError,
+        process_audio,
+    )
+
+    try:
+        with _cancel_scope(request.job_id) as cancel:
+            output = process_audio(
+                request.video_path,
+                request.output_path,
+                request.mode,
+                cancel=cancel,
+                on_progress=lambda f: cancel.set_progress(f, "audio", f"{(f * 100):.0f}% processed"),
+            )
+    except CancelledError:
+        return _error("E_CANCELLED", "Audio processing was cancelled.", http=status.HTTP_409_CONFLICT)
+    except AudioError as exc:
+        return _error(exc.code, exc.message)
+    return JSONResponse({"output_path": output, "mode": request.mode})
+
+
+# ---------------------------------------------------------------------------
+# Model management (Settings → Providers → "Download LLM model")
+# ---------------------------------------------------------------------------
+
+#: Downloadable translation models (GGUF). Single source of truth: the worker
+#: serves this catalog so no model name is hard-coded in Rust or the frontend.
+#: The Qwen2.5-3B Q4_K_M entry is the model verified to translate vi→zh end-to-end
+#: on a CPU-only machine (llama.cpp, ~2007 MB, measured upstream size pinned here).
+_MODEL_CATALOG: list[ModelCatalogEntryModel] = [
+    ModelCatalogEntryModel(
+        id="qwen2.5-3b-instruct",
+        name="Qwen2.5-3B Instruct (Q4_K_M)",
+        repo_id="Qwen/Qwen2.5-3B-Instruct-GGUF",
+        filename="qwen2.5-3b-instruct-q4_k_m.gguf",
+        size_bytes=2104932768,
+        vram_hint_mb=2560,
+    )
+]
+
+
+@router.get("/v1/models/catalog")
+def model_catalog() -> JSONResponse:
+    """List downloadable translation models with pinned sizes (no secrets)."""
+    return JSONResponse(
+        {
+            "models": [
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "repo_id": m.repo_id,
+                    "filename": m.filename,
+                    "size_bytes": m.size_bytes,
+                    "vram_hint_mb": m.vram_hint_mb,
+                }
+                for m in _MODEL_CATALOG
+            ]
+        }
+    )
+
+
+#: Allowed mirror base URLs (China mirror + upstream). The mirror may only
+#: override the *host* of the canonical Hugging Face layout; the repo path and
+#: filename are always taken from the catalog so a mirror can never redirect a
+#: download to an arbitrary URL.
+_MIRROR_ALLOWLIST = ("https://huggingface.co", "https://hf-mirror.com")
+
+#: Characters that make a filename unsafe as a path component (traversal /
+#: separator injection). Catalog filenames are plain ``<name>.gguf``.
+_SAFE_MODEL_FILENAME = r"^[A-Za-z0-9][A-Za-z0-9._-]*\.gguf$"
+
+
+@router.post("/v1/models/download")
+def model_download(request: ModelDownloadRequest) -> JSONResponse:
+    """Download a translation GGUF into ``local_dir`` (resume + cancel).
+
+    Uses ``model_downloader.download_file`` (stdlib urllib, Range-resume,
+    progress callback, cancellation) so an interrupted download continues from
+    where it stopped. On success returns the final path + size so providers can
+    point their ``model_path`` at it.
+
+    The ``repo_id``/``filename`` must exist in the shipped catalog and the
+    filename must be a plain ``*.gguf`` basename — arbitrary specifiers would
+    allow path traversal on ``local_dir`` or an arbitrary HTTP fetch.
+    """
+    from src.services.model_downloader import (  # noqa: PLC0415 - lazy
+        E_DISK_FULL,
+        E_MODEL_DOWNLOAD,
+        ModelDownloadError,
+        download_file,
+    )
+
+    catalog_entry = next(
+        (
+            entry
+            for entry in _MODEL_CATALOG
+            if entry.repo_id == request.repo_id and entry.filename == request.filename
+        ),
+        None,
+    )
+    if catalog_entry is None:
+        return _error(
+            "E_MODEL_UNKNOWN",
+            "Unknown model — the requested repo/filename is not in the catalog.",
+        )
+    if not re.fullmatch(_SAFE_MODEL_FILENAME, request.filename):
+        return _error(
+            "E_MODEL_UNKNOWN",
+            "Unsupported model filename — must be a plain *.gguf basename.",
+        )
+    expected_size_bytes = catalog_entry.size_bytes
+
+    mirror = request.mirror
+    if mirror is not None:
+        normalized_mirror = mirror.rstrip("/")
+        if normalized_mirror not in _MIRROR_ALLOWLIST:
+            return _error(
+                "E_MODEL_UNKNOWN",
+                "Unsupported download mirror.",
+            )
+
+    dest_dir = Path(request.local_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / request.filename
+
+    if dest_path.is_file():
+        actual = dest_path.stat().st_size
+        if actual == expected_size_bytes:
+            return JSONResponse(
+                {"path": str(dest_path), "size_bytes": actual, "cached": True}
+            )
+        # Size mismatch: stale file — let download_file resume a fresh .part.
+        dest_path.unlink()
+
+    host = (request.mirror or "https://huggingface.co").rstrip("/")
+    url = f"{host}/{request.repo_id}/resolve/main/{request.filename}"
+    # Security: repo_id/filename are validated against the catalog above, and
+    # the mirror against the allowlist, so this URL is always the canonical
+    # Hugging Face layout — never an arbitrary fetch location.
+    try:
+        with _cancel_scope(request.job_id) as cancel:
+            download_file(
+                url,
+                dest_path,
+                expected_size_bytes=expected_size_bytes,
+                cancel=cancel,
+                on_progress=lambda downloaded, total: cancel.set_progress(
+                    (downloaded / total) if total else 0.0,
+                    "model-download",
+                    f"{_fmt_mb(downloaded)} / {_fmt_mb(total)} MB",
+                ),
+            )
+    except CancelledError:
+        return _error("E_CANCELLED", "Model download was cancelled.", http=status.HTTP_409_CONFLICT)
+    except ModelDownloadError as exc:
+        if exc.code == E_DISK_FULL:
+            return _error(exc.code, exc.message, recoverable=True)
+        return _error(exc.code, exc.message, recoverable=True)
+    except Exception:  # noqa: BLE001 - network/IO edge cases (S310 allowlisted)
+        return _error(E_MODEL_DOWNLOAD, "Model download failed (network error).", recoverable=True)
+
+    size = dest_path.stat().st_size
+    return JSONResponse({"path": str(dest_path), "size_bytes": size, "cached": False})
+
+
+def _fmt_mb(value: float) -> int:
+    return int(value // (1024 * 1024))
 
 
 @router.post("/v1/jobs/{job_id}/cancel")

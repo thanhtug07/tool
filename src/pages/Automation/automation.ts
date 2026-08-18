@@ -1,3 +1,4 @@
+import type { SubtitleOverlayStyle } from "@/components/subtitleOverlay";
 import type { WatermarkConfig } from "@/components/WatermarkConfig";
 
 /** Real source-language options (worker accepts any ISO-2 code; auto = detect). */
@@ -32,7 +33,14 @@ export const PIPELINE_STAGE_ORDER = [
   "tts",
   "render",
 ] as const;
-export type StageKey = (typeof PIPELINE_STAGE_ORDER)[number];
+/** Extra stages that only exist in the custom workflow (not the one-click run). */
+export const EXTRA_CUSTOM_STAGES = ["audio", "logo"] as const;
+/** The chunked pipeline stage — replaces the whole STT→translate→TTS→subtitle
+ * chain with one job that processes the video in fixed-length chunks under
+ * bounded concurrency (TASK_AUTOMATION_PINELINE), then renders + validates. */
+export const CHUNK_STAGE = "chunk" as const;
+export type StageKey =
+  (typeof PIPELINE_STAGE_ORDER)[number] | (typeof EXTRA_CUSTOM_STAGES)[number] | typeof CHUNK_STAGE;
 
 export const STAGE_CHECKLIST = [
   { key: "transcribe", label: "Extract audio & transcribe" },
@@ -40,6 +48,7 @@ export const STAGE_CHECKLIST = [
   { key: "subtitle", label: "Generate subtitles" },
   { key: "tts", label: "Generate voice" },
   { key: "render", label: "Render video" },
+  { key: "chunk", label: "Chunked pipeline" },
 ] as const;
 
 /**
@@ -59,10 +68,34 @@ export const PIPELINE_CHECKLIST: {
   { key: "subtitle", label: "Generate subtitles" },
   { key: "tts", label: "Generate voice" },
   { key: "render", label: "Render video" },
+  {
+    key: "chunk",
+    label: "Chunked pipeline (30s parallel chunks)",
+    subStage: "chunk",
+  },
 ];
 
-/** Stages the current build cannot run — shown honestly as "later". */
-export const FUTURE_STAGES = [{ key: "logo", label: "Logo removal" }] as const;
+/** Stages the current build cannot run — shown honestly as "later". Empty: all
+ * pipeline stages (incl. audio separation + logo removal) are real backend
+ * stages now. */
+export const FUTURE_STAGES = [] as const;
+
+/** Per-custom-step configuration (audio mode / logo region / provider). */
+export type StepConfig = {
+  mode?: "vocal_removal" | "normalize" | "denoise";
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  timeStart?: number;
+  timeEnd?: number;
+  /**
+   * Tool-specific translation provider — lets two applied tools (e.g. Dịch
+   * video + Lồng tiếng) keep their own providers instead of the last-applied
+   * tool silently overriding the shared workspace provider.
+   */
+  provider?: string;
+};
 
 /** Options captured when AUTOMATE is clicked. */
 export type AutomationOptions = {
@@ -75,6 +108,18 @@ export type AutomationOptions = {
   voice: string;
   ttsEngine: string;
   watermark: WatermarkConfig;
+  /**
+   * Caption position override (dragged spot in the preview) for the
+   * burned-in subtitles; sent to the render stage as `subtitle_style`.
+   */
+  subtitleStyle?: SubtitleOverlayStyle;
+  /** Config of the custom-workflow step being submitted (audio/logo). */
+  stepConfig?: StepConfig;
+  /**
+   * Stages included in the current run — the render stage uses it to pick up
+   * the custom-workflow artifacts (logo removal / processed audio).
+   */
+  enabledStages?: StageKey[];
 };
 
 /** Build the `job.submit` params for a stage (pure — unit tested). */
@@ -89,7 +134,12 @@ export function buildStageParams(
         ...(options.sourceLanguage ? { language: options.sourceLanguage } : {}),
       };
     case "translate":
-      return { provider: options.provider, target_language: options.targetLanguage };
+      return {
+        // A custom tool may pin its own provider; the one-click run uses the
+        // workspace provider.
+        provider: options.stepConfig?.provider ?? options.provider,
+        target_language: options.targetLanguage,
+      };
     case "subtitle":
       return {};
     case "tts":
@@ -98,6 +148,21 @@ export function buildStageParams(
         ...(options.ttsEngine ? { engine: options.ttsEngine } : {}),
         ...(options.voice ? { voice: options.voice } : {}),
       };
+    case "audio":
+      return { audio_mode: options.stepConfig?.mode ?? "vocal_removal" };
+    case "logo":
+      return {
+        logo_x: options.stepConfig?.x ?? 0,
+        logo_y: options.stepConfig?.y ?? 0,
+        logo_width: options.stepConfig?.width ?? 64,
+        logo_height: options.stepConfig?.height ?? 64,
+        ...(options.stepConfig?.timeStart !== undefined
+          ? { logo_time_start: options.stepConfig.timeStart }
+          : {}),
+        ...(options.stepConfig?.timeEnd !== undefined
+          ? { logo_time_end: options.stepConfig.timeEnd }
+          : {}),
+      };
     case "render":
       return {
         ...(options.burnSubtitles ? {} : { burn_subtitles: "false" }),
@@ -105,8 +170,47 @@ export function buildStageParams(
         ...(watermarkToWire(options.watermark)
           ? { watermark: watermarkToWire(options.watermark) }
           : {}),
+        ...(options.burnSubtitles && options.subtitleStyle
+          ? { subtitle_style: subtitleStyleToWire(options.subtitleStyle) }
+          : {}),
+        // The custom workflow's pre-processing steps write artifacts the
+        // render picks up (logo-free video / processed audio track).
+        ...(options.enabledStages?.includes("logo") ? { logo_removed: "true" } : {}),
+        ...(options.enabledStages?.includes("audio") ? { audio_mix: "true" } : {}),
+      };
+    case "chunk":
+      // One job runs the whole chain chunked (STT → translate → TTS →
+      // subtitle → render → final validation). It carries every option the
+      // run needs so the single job is self-contained.
+      return {
+        provider: options.stepConfig?.provider ?? options.provider,
+        target_language: options.targetLanguage,
+        ...(options.sourceLanguage ? { source_language: options.sourceLanguage } : {}),
+        ...(options.dubAudio ? { dub: "true" } : {}),
+        ...(options.dubAudio && options.ttsEngine ? { engine: options.ttsEngine } : {}),
+        ...(options.dubAudio && options.voice ? { voice: options.voice } : {}),
+        ...(options.burnSubtitles ? {} : { burn_subtitles: "false" }),
+        ...(watermarkToWire(options.watermark)
+          ? { watermark: watermarkToWire(options.watermark) }
+          : {}),
+        ...(options.burnSubtitles && options.subtitleStyle
+          ? { subtitle_style: subtitleStyleToWire(options.subtitleStyle) }
+          : {}),
       };
   }
+}
+
+/**
+ * Map the preview's caption style to the render `subtitle_style` wire format:
+ * the position preset plus the dragged custom anchor (frame fractions). The
+ * worker rebuilds the burn-in ASS with this placement.
+ */
+export function subtitleStyleToWire(style: SubtitleOverlayStyle): Record<string, unknown> {
+  return {
+    position: style.position,
+    ...(style.customX !== undefined ? { custom_x: style.customX } : {}),
+    ...(style.customY !== undefined ? { custom_y: style.customY } : {}),
+  };
 }
 
 /**
@@ -178,6 +282,44 @@ export function initialPipelinePlan(dubAudio = false): PipelinePlan {
 /** Begin a run, capturing the options the user clicked AUTOMATE with. */
 export function startPipeline(options: PlanOptions): PipelinePlan {
   return { ...initialPipelinePlan(options.dubAudio), options };
+}
+
+/**
+ * Ordered stages for the one-click Automation run: the fixed pipeline plus
+ * any optional pre-render stages (logo removal) wired from the toolbar. The
+ * ``logo`` stage runs delogo and the render picks up ``logo_removed.mp4``.
+ *
+ * With ``chunked`` the whole STT→translate→TTS→subtitle→render chain collapses
+ * into the single ``chunk`` job (TASK_AUTOMATION_PINELINE) — the backend runs
+ * the same provider/voice options in parallel 30 s chunks.
+ */
+export function automationPipelineSteps(
+  dubAudio: boolean,
+  logoRemoval: boolean,
+  chunked = false,
+): StageKey[] {
+  if (chunked) return ["chunk"];
+  const steps: StageKey[] = ["transcribe", "translate", "subtitle"];
+  if (dubAudio) steps.push("tts");
+  if (logoRemoval) steps.push("logo");
+  steps.push("render");
+  return steps;
+}
+
+/**
+ * Begin a run from an explicit ordered list of stages (the Custom workflow).
+ * Only the given stages are scheduled — the orchestration loop advances
+ * through exactly this order, so the same engine runs both flows.
+ */
+export function startPipelineWithSteps(
+  steps: readonly StageKey[],
+  options: PlanOptions,
+): PipelinePlan {
+  return {
+    stages: steps.map((key) => ({ key, jobId: null })),
+    startedAt: null,
+    options,
+  };
 }
 
 /** Record the jobId returned by `job.submit` for a stage. */

@@ -10,6 +10,8 @@ import {
 export type WorkerSnapshot = {
   info: WorkerStateInfo | null;
   hardware: HardwareProfile | null;
+  /** Poll failure message, or null when the last poll succeeded. */
+  error: string | null;
 };
 
 const POLL_INTERVAL_MS = 3000;
@@ -17,9 +19,8 @@ const POLL_INTERVAL_MS = 3000;
 // ---- module-level store: one polling loop shared by Sidebar / Dashboard / ---
 // ---- Automation so they can never show different worker states.       ----
 
-let snapshot: WorkerSnapshot = { info: null, hardware: null };
+let snapshot: WorkerSnapshot = { info: null, hardware: null, error: null };
 let started = false;
-let error: string | null = null;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -29,10 +30,11 @@ function emit() {
 async function poll() {
   try {
     const [info, hardware] = await Promise.all([getWorkerState(), getHardware()]);
-    snapshot = { info, hardware };
-    error = null;
+    snapshot = { info, hardware, error: null };
   } catch (e) {
-    error = String(e);
+    // Keep the last good snapshot but surface the poll failure — folded into
+    // the snapshot object so `useSyncExternalStore` re-renders on the change.
+    snapshot = { ...snapshot, error: String(e) };
   }
   emit();
 }
@@ -59,9 +61,8 @@ function getSnapshot(): WorkerSnapshot {
  * feeds every consumer, so the Sidebar dot, the Dashboard card and the
  * Automation error banner always agree.
  */
-export function useWorker(): WorkerSnapshot & { error: string | null } {
-  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return { ...state, error };
+export function useWorker(): WorkerSnapshot {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /** Stop + restart the Python sidecar, then refresh the shared snapshot. */

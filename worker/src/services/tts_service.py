@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from src.core.ffmpeg import resolve_ffmpeg
 from src.core.job import CancelledError, CancellationToken
 
 logger = logging.getLogger(__name__)
@@ -52,22 +53,141 @@ TRACK_SAMPLE_WIDTH = 2
 #: Speech that overflows its cue window is sped up; never beyond this factor.
 MAX_FIT_ATEMPO = 1.5
 
-#: Voice registry: ``{voice_id: label}``.
+#: Voice registry: ``{voice_id: label}``. These are REAL Microsoft neural
+#: voices served by edge-tts (the ``edge`` engine) — every id is a voice the
+#: provider actually synthesizes. Nothing here is invented.
 EDGE_VOICES: dict[str, str] = {
+    # Vietnamese
     "vi-VN-HoaiMyNeural": "Vietnamese — female (edge)",
     "vi-VN-NamMinhNeural": "Vietnamese — male (edge)",
+    # Chinese (Mandarin)
     "zh-CN-XiaoxiaoNeural": "Chinese — female (edge)",
+    "zh-CN-XiaoyiNeural": "Chinese — female (edge)",
+    "zh-CN-YunjianNeural": "Chinese — male (edge)",
     "zh-CN-YunxiNeural": "Chinese — male (edge)",
-    "en-US-AriaNeural": "English — female (edge)",
-    "en-US-GuyNeural": "English — male (edge)",
+    "zh-CN-YunxiaNeural": "Chinese — male (edge)",
+    "zh-CN-YunyangNeural": "Chinese — male, news (edge)",
+    "zh-CN-liaoning-XiaobeiNeural": "Chinese — female, Liaoning (edge)",
+    "zh-CN-shaanxi-XiaoniNeural": "Chinese — female, Shaanxi (edge)",
+    # English (US)
+    "en-US-AriaNeural": "English (US) — female (edge)",
+    "en-US-AnaNeural": "English (US) — female, child (edge)",
+    "en-US-ChristopherNeural": "English (US) — male (edge)",
+    "en-US-EricNeural": "English (US) — male (edge)",
+    "en-US-GuyNeural": "English (US) — male (edge)",
+    "en-US-JennyNeural": "English (US) — female (edge)",
+    "en-US-MichelleNeural": "English (US) — female (edge)",
+    "en-US-RogerNeural": "English (US) — male (edge)",
+    "en-US-SteffanNeural": "English (US) — male (edge)",
+    # English (GB)
+    "en-GB-LibbyNeural": "English (GB) — female (edge)",
+    "en-GB-MaisieNeural": "English (GB) — female, child (edge)",
+    "en-GB-RyanNeural": "English (GB) — male (edge)",
+    "en-GB-SoniaNeural": "English (GB) — female (edge)",
+    "en-GB-ThomasNeural": "English (GB) — male (edge)",
+    # Japanese
     "ja-JP-NanamiNeural": "Japanese — female (edge)",
+    "ja-JP-KeitaNeural": "Japanese — male (edge)",
+    # Korean
     "ko-KR-SunHiNeural": "Korean — female (edge)",
+    "ko-KR-InJoonNeural": "Korean — male (edge)",
+    "ko-KR-HyunsuNeural": "Korean — male (edge)",
+    # French
+    "fr-FR-DeniseNeural": "French — female (edge)",
+    "fr-FR-HenriNeural": "French — male (edge)",
+    # German
+    "de-DE-KatjaNeural": "German — female (edge)",
+    "de-DE-ConradNeural": "German — male (edge)",
+    # Spanish (Spain)
+    "es-ES-ElviraNeural": "Spanish (Spain) — female (edge)",
+    "es-ES-AlvaroNeural": "Spanish (Spain) — male (edge)",
 }
 
 PIPER_VOICES: dict[str, str] = {
     "vi_VN-vais1000-medium": "Vietnamese — piper local (medium)",
     "zh_CN-huayan-medium": "Chinese — piper local (medium)",
 }
+
+#: Voice metadata for the Voice Library. Gender/age come from the provider's
+#: public voice catalogue (Microsoft neural voices); ``age`` is only set for
+#: the documented child voices. Style ``tags`` are only set where the provider
+#: documents a style for that voice (news/chat) — everything else stays empty
+#: ("Not specified" in the UI). Nothing here is invented.
+VOICE_META: dict[str, dict[str, object]] = {
+    # Vietnamese
+    "vi-VN-HoaiMyNeural": {"lang": "vi", "gender": "female"},
+    "vi-VN-NamMinhNeural": {"lang": "vi", "gender": "male"},
+    # Chinese (Mandarin)
+    "zh-CN-XiaoxiaoNeural": {"lang": "zh", "gender": "female", "tags": ["Chat"]},
+    "zh-CN-XiaoyiNeural": {"lang": "zh", "gender": "female"},
+    "zh-CN-YunjianNeural": {"lang": "zh", "gender": "male"},
+    "zh-CN-YunxiNeural": {"lang": "zh", "gender": "male", "tags": ["Chat"]},
+    "zh-CN-YunxiaNeural": {"lang": "zh", "gender": "male"},
+    "zh-CN-YunyangNeural": {"lang": "zh", "gender": "male", "tags": ["News", "Narrator"]},
+    "zh-CN-liaoning-XiaobeiNeural": {"lang": "zh", "gender": "female"},
+    "zh-CN-shaanxi-XiaoniNeural": {"lang": "zh", "gender": "female"},
+    # English (US)
+    "en-US-AriaNeural": {"lang": "en", "gender": "female", "tags": ["Chat", "Narration"]},
+    "en-US-AnaNeural": {"lang": "en", "gender": "female", "age": "child"},
+    "en-US-ChristopherNeural": {"lang": "en", "gender": "male"},
+    "en-US-EricNeural": {"lang": "en", "gender": "male"},
+    "en-US-GuyNeural": {"lang": "en", "gender": "male", "tags": ["Chat"]},
+    "en-US-JennyNeural": {"lang": "en", "gender": "female", "tags": ["Chat"]},
+    "en-US-MichelleNeural": {"lang": "en", "gender": "female", "tags": ["Chat"]},
+    "en-US-RogerNeural": {"lang": "en", "gender": "male", "tags": ["Chat"]},
+    "en-US-SteffanNeural": {"lang": "en", "gender": "male", "tags": ["Chat"]},
+    # English (GB)
+    "en-GB-LibbyNeural": {"lang": "en", "gender": "female"},
+    "en-GB-MaisieNeural": {"lang": "en", "gender": "female", "age": "child"},
+    "en-GB-RyanNeural": {"lang": "en", "gender": "male"},
+    "en-GB-SoniaNeural": {"lang": "en", "gender": "female"},
+    "en-GB-ThomasNeural": {"lang": "en", "gender": "male"},
+    # Japanese
+    "ja-JP-NanamiNeural": {"lang": "ja", "gender": "female", "tags": ["Chat"]},
+    "ja-JP-KeitaNeural": {"lang": "ja", "gender": "male"},
+    # Korean
+    "ko-KR-SunHiNeural": {"lang": "ko", "gender": "female", "tags": ["Chat"]},
+    "ko-KR-InJoonNeural": {"lang": "ko", "gender": "male"},
+    "ko-KR-HyunsuNeural": {"lang": "ko", "gender": "male"},
+    # French
+    "fr-FR-DeniseNeural": {"lang": "fr", "gender": "female"},
+    "fr-FR-HenriNeural": {"lang": "fr", "gender": "male"},
+    # German
+    "de-DE-KatjaNeural": {"lang": "de", "gender": "female"},
+    "de-DE-ConradNeural": {"lang": "de", "gender": "male"},
+    # Spanish (Spain)
+    "es-ES-ElviraNeural": {"lang": "es", "gender": "female"},
+    "es-ES-AlvaroNeural": {"lang": "es", "gender": "male"},
+    # Piper (local) — piper does not expose gender/age; keep honest.
+    "vi_VN-vais1000-medium": {"lang": "vi"},
+    "zh_CN-huayan-medium": {"lang": "zh"},
+}
+
+#: Per-language default preview sentence (real text used for voice previews).
+PREVIEW_TEXTS: dict[str, str] = {
+    "vi": "Xin chào, đây là bản thử giọng lồng tiếng của video.",
+    "en": "Hello, this is a voice preview for your video.",
+    "zh": "你好，这是你的视频配音试听。",
+    "ja": "こんにちは、これはビデオの吹き替えボイスのプレビューです。",
+    "ko": "안녕하세요, 이것은 비디오 더빙 음성 미리보기입니다.",
+    "fr": "Bonjour, ceci est un aperçu vocal pour votre vidéo.",
+    "de": "Hallo, dies ist eine Sprachvorschau für dein Video.",
+    "es": "Hola, esta es una vista previa de voz para tu video.",
+}
+
+
+def voice_meta(engine: str, voice: str) -> dict[str, object]:
+    """Voice Library metadata for one voice (honest — "Not specified" when the
+    provider does not expose it)."""
+    raw = VOICE_META.get(voice, {})
+    lang = str(raw.get("lang", ""))
+    return {
+        "language": lang,
+        "gender": str(raw.get("gender", "Not specified")),
+        "age": str(raw.get("age", "Not specified")),
+        "tags": list(raw.get("tags", [])),
+        "preview_text": PREVIEW_TEXTS.get(lang, PREVIEW_TEXTS["en"]),
+    }
 
 _PIPER_HF_REPO = "rhasspy/piper-voices"
 _PIPER_HF_FILES = {
@@ -82,14 +202,26 @@ _PIPER_HF_FILES = {
 }
 
 #: Default voice per target language + engine (used when ``voice`` is unset).
+#:
+#: An engine only lists a language it actually has a native voice for — piper
+#: currently ships Vietnamese + Chinese models only, so en/ja/ko deliberately
+#: have **no** piper default. Requesting piper for an unsupported language must
+#: fail loudly (``E_TTS_UNAVAILABLE``) instead of silently dubbing with a
+#: Vietnamese voice (the ``vi_VN-*`` default used before read the target
+#: language as en/ja/ko). FIX #4 (review 2026-08-18).
 _DEFAULT_VOICE: dict[str, dict[str, str]] = {
     "vi": {ENGINE_EDGE: "vi-VN-HoaiMyNeural", ENGINE_PIPER: "vi_VN-vais1000-medium"},
     "zh": {ENGINE_EDGE: "zh-CN-XiaoxiaoNeural", ENGINE_PIPER: "zh_CN-huayan-medium"},
-    "en": {ENGINE_EDGE: "en-US-AriaNeural", ENGINE_PIPER: "vi_VN-vais1000-medium"},
-    "ja": {ENGINE_EDGE: "ja-JP-NanamiNeural", ENGINE_PIPER: "vi_VN-vais1000-medium"},
-    "ko": {ENGINE_EDGE: "ko-KR-SunHiNeural", ENGINE_PIPER: "vi_VN-vais1000-medium"},
+    "en": {ENGINE_EDGE: "en-US-AriaNeural"},
+    "ja": {ENGINE_EDGE: "ja-JP-NanamiNeural"},
+    "ko": {ENGINE_EDGE: "ko-KR-SunHiNeural"},
+    "fr": {ENGINE_EDGE: "fr-FR-DeniseNeural"},
+    "de": {ENGINE_EDGE: "de-DE-KatjaNeural"},
+    "es": {ENGINE_EDGE: "es-ES-ElviraNeural"},
 }
-_DEFAULT_VOICE_FALLBACK = {ENGINE_EDGE: "vi-VN-HoaiMyNeural", ENGINE_PIPER: "vi_VN-vais1000-medium"}
+#: Unknown languages have no default voice for any engine → ``validate_voice``
+#: raises instead of silently producing Vietnamese audio.
+_DEFAULT_VOICE_FALLBACK: dict[str, str] = {}
 
 #: Progress callback: ``(fraction 0..1)``.
 ProgressCallback = Callable[[float], None]
@@ -168,7 +300,13 @@ def validate_voice(engine: str, voice: str | None, language: str | None) -> tupl
             raise TTSError(E_TTS_UNAVAILABLE, "piper is not installed; run `pip install piper-tts`.") from exc
     resolved = voice
     if not resolved:
-        resolved = _DEFAULT_VOICE.get((language or "").lower(), _DEFAULT_VOICE_FALLBACK).get(engine)
+        lang = (language or "").lower()
+        resolved = _DEFAULT_VOICE.get(lang, _DEFAULT_VOICE_FALLBACK).get(engine)
+        if resolved is None:
+            raise TTSError(
+                E_TTS_UNAVAILABLE,
+                f"{engine} has no default voice for language {language or 'any'}.",
+            )
     table = EDGE_VOICES if engine == ENGINE_EDGE else PIPER_VOICES
     if resolved not in table:
         raise TTSError(E_TTS_UNAVAILABLE, f"Unknown {engine} voice: {resolved!r}.")
@@ -181,6 +319,7 @@ def validate_voice(engine: str, voice: str | None, language: str | None) -> tupl
 
 
 def _run_ffmpeg(args: list[str], *, stage: str) -> None:
+    args = [resolve_ffmpeg(), *args]
     try:
         proc = subprocess.run(args, check=False, capture_output=True, text=True)
     except FileNotFoundError as exc:
@@ -194,7 +333,7 @@ def _run_ffmpeg(args: list[str], *, stage: str) -> None:
 
 def _normalize_to_wav(src: str, dst: str, *, atempo: float | None = None) -> float:
     """Convert ``src`` to a 44.1 kHz mono 16-bit WAV; returns duration (s)."""
-    args = ["ffmpeg", "-y", "-nostdin", "-i", src]
+    args = ["-y", "-nostdin", "-i", src]
     if atempo is not None and abs(atempo - 1.0) > 1e-6:
         args += ["-filter:a", f"atempo={atempo:.4f}"]
     args += [
@@ -209,16 +348,41 @@ def _normalize_to_wav(src: str, dst: str, *, atempo: float | None = None) -> flo
         return w.getnframes() / float(w.getframerate())
 
 
+#: edge-tts is a free cloud service that intermittently answers a request
+#: with metadata but no audio (NoAudioReceived) — observed under rapid
+#: successive requests and transient service hiccups. A short retry-with-
+#: backoff turns those blips into successes instead of aborting the whole
+#: dubbing stage.
+_EDGE_MAX_ATTEMPTS = 3
+_EDGE_RETRY_DELAY_S = 1.5
+
+
 def _synthesize_edge(text: str, voice: str, out_wav: str) -> float:
     import asyncio
+    import time
 
     import edge_tts  # noqa: PLC0415 - lazy, heavy
 
     mp3 = out_wav + ".mp3"
-    try:
-        asyncio.run(edge_tts.Communicate(text, voice).save(mp3))
-    except Exception as exc:  # noqa: BLE001 - network/auth/voice failures
-        raise TTSError(E_TTS_FAILED, f"edge-tts synthesis failed: {exc}") from exc
+    last_exc: Exception | None = None
+    for attempt in range(1, _EDGE_MAX_ATTEMPTS + 1):
+        try:
+            asyncio.run(edge_tts.Communicate(text, voice).save(mp3))
+            last_exc = None
+            break
+        except Exception as exc:  # noqa: BLE001 - network/auth/voice failures
+            last_exc = exc
+            if attempt < _EDGE_MAX_ATTEMPTS:
+                logger.warning(
+                    "edge-tts attempt %d/%d failed for %r: %s — retrying",
+                    attempt,
+                    _EDGE_MAX_ATTEMPTS,
+                    text[:60],
+                    exc,
+                )
+                time.sleep(_EDGE_RETRY_DELAY_S)
+    if last_exc is not None:
+        raise TTSError(E_TTS_FAILED, f"edge-tts synthesis failed: {last_exc}") from last_exc
     try:
         return _normalize_to_wav(mp3, out_wav)
     finally:
@@ -275,6 +439,29 @@ def _synthesize_piper(text: str, voice: str, out_wav: str) -> float:
     Path(tmp).replace(out_wav)
     with wave.open(out_wav, "rb") as w:
         return w.getnframes() / float(w.getframerate())
+
+
+# ---------------------------------------------------------------------------
+# Single-clip preview synthesis (Voice Library ▶ Preview)
+# ---------------------------------------------------------------------------
+
+
+def synthesize_preview(
+    voice: str,
+    *,
+    engine: str,
+    text: str,
+    out_wav: str,
+) -> float:
+    """Synthesize one short clip for the Voice Library preview; returns duration (s).
+
+    Real synthesis through the same engine as dubbing (edge-tts / piper) —
+    never a fake audio. The caller is responsible for caching (the API layer
+    reuses an existing file for the same engine+voice+text).
+    """
+    _engine, resolved = validate_voice(engine, voice, None)
+    synth = _synthesize_edge if _engine == ENGINE_EDGE else _synthesize_piper
+    return synth(text, resolved, out_wav)
 
 
 # ---------------------------------------------------------------------------

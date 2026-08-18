@@ -13,12 +13,14 @@
 
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::db::DbError;
 use crate::security::secret_store::{SecretStore, SecretStoreError};
 use crate::services::cache_service::CacheService;
 use crate::services::settings_service::SettingsService;
+use crate::services::worker_client::{TtsPreviewRequest, TtsPreviewResponse, TtsVoicesResponse};
+use crate::services::worker_manager::WorkerManager;
 
 /// `secrets.set_api_key(provider, key) → ()`
 #[tauri::command(rename = "secrets.set_api_key")]
@@ -49,6 +51,46 @@ pub fn delete_api_key(store: State<'_, Arc<SecretStore>>, provider: String) -> R
 #[tauri::command(rename = "settings.get_all")]
 pub fn get_all(service: State<'_, Arc<SettingsService>>) -> Result<serde_json::Value, String> {
     service.get_all().map_err(db_err)
+}
+
+/// `settings.voices() → TtsVoicesResponse` — available TTS voices per engine,
+/// served by the worker (never hard-coded in the UI).
+#[tauri::command(rename = "settings.voices")]
+pub fn voices(manager: State<'_, WorkerManager>) -> Result<TtsVoicesResponse, String> {
+    let client = manager
+        .worker_client()
+        .ok_or_else(|| "The worker is not running — start it before listing voices.".to_string())?;
+    client.tts_voices().map_err(|e| e.to_string())
+}
+
+/// `settings.ttsPreview(engine, voice, text) → TtsPreviewResponse` — real
+/// single-clip TTS synthesis for the Voice Library preview (worker-cached).
+/// The generated wav lands in the app-data `voice-previews` dir, which is
+/// added to the asset scope so the webview can play it via `asset://`.
+#[tauri::command(rename = "settings.ttsPreview")]
+pub fn tts_preview(
+    app: tauri::AppHandle,
+    manager: State<'_, WorkerManager>,
+    engine: String,
+    voice: String,
+    text: String,
+) -> Result<TtsPreviewResponse, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let preview_dir = data_dir.join("voice-previews");
+    std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
+    // Asset-scope the preview dir so the returned wav is playable.
+    let _ = app.asset_protocol_scope().allow_directory(&preview_dir, true);
+    let client = manager
+        .worker_client()
+        .ok_or_else(|| "The worker is not running — start it before previewing a voice.".to_string())?;
+    client
+        .tts_preview(&TtsPreviewRequest {
+            engine,
+            voice,
+            text,
+            output_dir: Some(preview_dir.to_string_lossy().into_owned()),
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// `settings.set(key, value) → updated object`

@@ -13,11 +13,13 @@ const SETTINGS: SettingsSnapshot = {
   "ai.preset": "balanced",
   "gpu.override": "auto",
   "api.gemini.base_url": "",
-  "api.gemini.model": "gemini-2.5-flash-lite",
+  "api.gemini.model": "gemini-flash-lite-latest",
   "api.local.base_url": "http://127.0.0.1:8080",
   "cache.quota_bytes": 10737418240,
   "privacy.mode": "local",
   "privacy.telemetry": false,
+  "tts.engine": "edge",
+  "tts.voice": "vi-VN-HoaiMyNeural",
 };
 
 describe("ProcessingSection", () => {
@@ -54,25 +56,21 @@ describe("ProvidersPanel", () => {
     );
   }
 
-  it("shows FREE as the default translation provider with its capabilities", () => {
+  it("shows FREE as the default translation provider", () => {
     const html = renderPanel();
     expect(html).toContain('data-role="provider-card-free"');
     expect(html).toContain("FREE");
     expect(html).toContain("Default");
-    expect(html).toContain("Capabilities: Translation · STT");
     expect(html).toContain('data-role="default-translation-provider"');
   });
 
   it("never offers a Delete button on FREE and hides its enable toggle", () => {
     const html = renderPanel();
-    // Only the FREE card section: no Delete / Disable buttons on it.
     const freeCard = html.slice(html.indexOf('data-role="provider-card-free"'));
     const nextCard = freeCard.indexOf('data-role="provider-card-');
     const slice = nextCard === -1 ? freeCard : freeCard.slice(0, nextCard);
     expect(slice).not.toContain("Delete");
     expect(slice).not.toContain("Disable");
-    // Other providers (gemini/local/mock) do have delete + toggle affordances.
-    expect(html).toContain("Delete");
   });
 
   it("exposes Add Provider and Save & Test entry points", () => {

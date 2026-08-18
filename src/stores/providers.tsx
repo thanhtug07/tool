@@ -55,7 +55,7 @@ const FALLBACK_PROVIDERS: ProviderView[] = [
     provider_kind: "gemini",
     enabled: true,
     base_url: null,
-    model: "gemini-2.5-flash-lite",
+    model: "gemini-flash-lite-latest",
     config: {},
     capabilities: ["translation"],
     last_test_status: null,

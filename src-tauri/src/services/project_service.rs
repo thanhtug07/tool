@@ -23,6 +23,7 @@ use crate::db::{
 
 const MAX_NAME_LEN: usize = 200;
 const MAX_PATH_BYTES: usize = 4096;
+const MAX_SETTINGS_BYTES: usize = 16 * 1024;
 
 /// Sub-directories created for every project.
 const PROJECT_SUBDIRS: [&str; 3] = ["video", "cache", "output"];
@@ -110,6 +111,55 @@ impl ProjectService {
         Ok(())
     }
 
+    /// Rename a project (validates the new name, bumps `updated_at`).
+    pub fn rename(&self, id: &str, new_name: String) -> Result<Project, DbError> {
+        let id = validate_id(id)?;
+        let name = validate_name(new_name)?;
+        let conn = self.db()?.conn();
+        let repo = ProjectRepo::new(&conn);
+        let mut project = repo
+            .get(&id)?
+            .ok_or_else(|| DbError::NotFound(format!("project {id} does not exist")))?;
+        project.name = name;
+        project.updated_at = utc_iso8601_now();
+        repo.update(&project)?;
+        Ok(project)
+    }
+
+    /// Persist project-level overrides as raw JSON text (`settings_json`).
+    ///
+    /// The value is stored verbatim so the Automation page can round-trip its
+    /// option snapshot per project (RELEASE-P0-007). A short length bound keeps
+    /// the JSON column sane; the caller (frontend) already validates shape.
+    pub fn update_settings(
+        &self,
+        id: &str,
+        settings_json: Option<String>,
+    ) -> Result<Project, DbError> {
+        let id = validate_id(id)?;
+        let settings_json = match settings_json {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.len() > MAX_SETTINGS_BYTES {
+                    return Err(DbError::InvalidInput(format!(
+                        "project settings exceed {MAX_SETTINGS_BYTES} bytes"
+                    )));
+                }
+                Some(trimmed.to_string())
+            }
+            None => None,
+        };
+        let conn = self.db()?.conn();
+        let repo = ProjectRepo::new(&conn);
+        let mut project = repo
+            .get(&id)?
+            .ok_or_else(|| DbError::NotFound(format!("project {id} does not exist")))?;
+        project.settings_json = settings_json;
+        project.updated_at = utc_iso8601_now();
+        repo.update(&project)?;
+        Ok(project)
+    }
+
     /// Delete a project: remove the row, then the working directory.
     pub fn delete(&self, id: &str) -> Result<(), DbError> {
         let id = validate_id(id)?;
@@ -120,6 +170,18 @@ impl ProjectService {
         }
         self.remove_project_dir(&id);
         Ok(())
+    }
+
+    /// Find a project that already references the same source video
+    /// (case-insensitive, separator-normalized) — the frontend uses this to
+    /// reopen an existing project instead of creating a duplicate.
+    pub fn find_by_source_video_path(
+        &self,
+        source_video_path: &str,
+    ) -> Result<Option<Project>, DbError> {
+        let source_video_path = validate_source_path(source_video_path)?;
+        let conn = self.db()?.conn();
+        ProjectRepo::new(&conn).find_by_source_path(&source_video_path)
     }
 
     /// All projects, most recently updated first (Dashboard support).
@@ -315,6 +377,28 @@ mod tests {
         assert!(matches!(svc.load(&id), Err(DbError::NotFound(_))));
         assert!(matches!(svc.save(&id), Err(DbError::NotFound(_))));
         assert!(matches!(svc.delete(&id), Err(DbError::NotFound(_))));
+        let _ = fs::remove_dir_all(svc.data_dir());
+    }
+
+    #[test]
+    fn dedup_lookup_reopens_existing_project_for_the_same_video() {
+        let svc = service("dedup");
+        let original = svc
+            .create("Lần đầu".into(), "D:\\Phim\\vid.mp4".into())
+            .expect("create");
+
+        // Re-importing the same file (different case/separators) finds it.
+        let found = svc
+            .find_by_source_video_path("d:/phim/VID.MP4")
+            .expect("find")
+            .expect("row");
+        assert_eq!(found.id, original.id);
+
+        // A different file must not match.
+        assert!(svc
+            .find_by_source_video_path("D:\\Phim\\other.mp4")
+            .expect("find")
+            .is_none());
         let _ = fs::remove_dir_all(svc.data_dir());
     }
 

@@ -20,6 +20,20 @@ export function openProject(id: string): Promise<Project> {
   return safeInvoke("project.open", { id });
 }
 
+/** Touch `updated_at` on a project (auto-save signal). */
+export function saveProject(id: string): Promise<void> {
+  return safeInvoke("project.save", { id });
+}
+
+/**
+ * Reopen a project that already uses the given source video (case- and
+ * separator-insensitive on the Rust side). Returns `null` when the file has
+ * no project yet — the caller can then create one without duplicating.
+ */
+export function findProjectBySourceVideo(videoPath: string): Promise<Project | null> {
+  return safeInvoke("project.findBySourceVideo", { videoPath });
+}
+
 /** All projects, most recently updated first. */
 export function listProjects(): Promise<Project[]> {
   return safeInvoke("project.list");

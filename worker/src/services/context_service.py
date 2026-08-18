@@ -34,7 +34,7 @@ BLOCK_MAX_CUES = 10
 OVERLAP_BLOCKS = 2
 #: Prompt must stay under this share of the model context window.
 TOKEN_BUDGET_RATIO = 0.70
-#: Default context window (gemini-2.5-flash-lite has 1M tokens).
+#: Default context window (the flash-lite tier has a 1M-token context).
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000
 FALLBACK_SPEAKER_PREFIX = "speaker"
 

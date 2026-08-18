@@ -186,7 +186,7 @@ pub const MIGRATIONS: &[Migration] = &[
             VALUES
                 ('free',   'FREE',           'translation', 'free',   1, 'http://127.0.0.1:8080', NULL,
                  '{}', '["translation","stt"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
-                ('gemini', 'Gemini (cloud)', 'translation', 'gemini', 1, NULL, 'gemini-2.5-flash-lite',
+                ('gemini', 'Gemini (cloud)', 'translation', 'gemini', 1, NULL, 'gemini-flash-lite-latest',
                  '{}', '["translation"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
                 ('local',  'Local LLM',      'translation', 'local',  1, 'http://127.0.0.1:8080', NULL,
                  '{}', '["translation"]', NULL, NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),

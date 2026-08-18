@@ -22,7 +22,7 @@ pub fn ping() -> Result<String, String> {
 /// The probe runs once (lazily) and is reused for every caller; the payload is
 /// static hardware info — never live usage %. Live CPU/GPU/RAM usage is not
 /// exposed by any backend endpoint, so the UI must not fake it.
-#[tauri::command]
+#[tauri::command(rename = "system.hardware")]
 pub fn hardware(info: State<'_, Arc<SystemInfo>>) -> HardwareProfile {
     info.get()
 }
@@ -33,7 +33,7 @@ pub fn hardware(info: State<'_, Arc<SystemInfo>>) -> HardwareProfile {
 /// Windows opens an Explorer window with the target selected
 /// (`explorer /select,<path>`); other platforms are not supported yet and
 /// return a clear error instead of silently doing nothing.
-#[tauri::command]
+#[tauri::command(rename = "system.reveal")]
 pub fn reveal(path: String) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("cannot reveal an empty path".to_string());

@@ -22,11 +22,13 @@ const SNAPSHOT: SettingsSnapshot = {
   "ai.preset": "balanced",
   "gpu.override": "auto",
   "api.gemini.base_url": "",
-  "api.gemini.model": "gemini-2.5-flash-lite",
+  "api.gemini.model": "gemini-flash-lite-latest",
   "api.local.base_url": "http://127.0.0.1:8080",
   "cache.quota_bytes": 10737418240,
   "privacy.mode": "local",
   "privacy.telemetry": false,
+  "tts.engine": "edge",
+  "tts.voice": "vi-VN-HoaiMyNeural",
 };
 
 describe("settings bridge (unit — mocked invoke)", () => {

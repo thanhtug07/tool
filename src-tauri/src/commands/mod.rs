@@ -6,6 +6,8 @@
 pub mod dictionary;
 pub mod export;
 pub mod job;
+pub mod media;
+pub mod models;
 pub mod pipeline;
 pub mod project;
 pub mod provider;

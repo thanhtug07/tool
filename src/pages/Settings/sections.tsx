@@ -1,8 +1,11 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { SettingsSnapshot } from "@/api/settings";
+import { isTauri } from "@/lib/env";
 import type { WorkerStateInfo } from "@/api/worker";
-import { workerStateLabel } from "@/components/layout/Sidebar";
+import { workerStateLabel } from "@/lib/nav";
+import { getTtsVoices, type TtsEngineVoices } from "@/api/voices";
+import VoicePickerButton from "@/components/voices/VoicePickerButton";
 
 /** Top-level group shell (General / AI providers / Audio & video / Storage / Advanced). */
 export function SettingsGroup({
@@ -107,13 +110,81 @@ export function GeneralSection() {
 
 // ---- VOICE / SUBTITLE / VIDEO (backend-fixed) ------------------------------
 
-export function VoiceSection() {
+const TTS_ENGINES: Record<string, { label: string }> = {
+  edge: { label: "Edge (cloud — Microsoft neural, best quality)" },
+  piper: { label: "Piper (local — offline, lower quality)" },
+};
+
+export function VoiceSection({
+  settings,
+  onSaveEngine,
+  onSaveVoice,
+}: {
+  settings: SettingsSnapshot;
+  onSaveEngine: (value: string) => void;
+  onSaveVoice: (value: string) => void;
+}) {
+  const [engines, setEngines] = useState<TtsEngineVoices[]>([]);
+  const [engineError, setEngineError] = useState<string | null>(null);
+
+  const engine = settings["tts.engine"];
+  const voice = settings["tts.voice"];
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!isTauri()) return;
+      try {
+        const result = await getTtsVoices();
+        if (!cancelled) setEngines(result.engines);
+      } catch (error) {
+        if (!cancelled) setEngineError(String(error));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const engineVoices = engines.find((e) => e.id === engine)?.voices ?? [];
+  const voiceLabel =
+    engineVoices.find((v) => v.id === voice)?.label ?? TTS_ENGINES[engine]?.label ?? "edge";
+
   return (
-    <SettingsSection id="voice-subheading" title="Voice">
-      <ComingSoon
-        label="Voice selection"
-        note="Default voice and dubbing options require the TTS pipeline — not available in this build."
-      />
+    <SettingsSection
+      id="voice-subheading"
+      title="Voice"
+      description="Default dubbing voice applied to new Automation runs."
+    >
+      <ControlRow label="Engine">
+        <select
+          data-role="tts-engine"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={engine}
+          disabled={engine !== "edge" && engine !== "piper"}
+          onChange={(event) => onSaveEngine(event.target.value)}
+        >
+          <option value="edge">{TTS_ENGINES["edge"].label}</option>
+          <option value="piper">{TTS_ENGINES["piper"].label}</option>
+        </select>
+      </ControlRow>
+      <ControlRow label="Voice">
+        <div className="w-full max-w-xs">
+          <VoicePickerButton
+            label="Default voice"
+            value={engineVoices.some((v) => v.id === voice) ? voice : ""}
+            onSelect={(voiceId, engine) => {
+              onSaveVoice(voiceId);
+              onSaveEngine(engine);
+            }}
+          />
+        </div>
+        {voiceLabel && <span className="text-xs text-muted-foreground">{voiceLabel}</span>}
+      </ControlRow>
+      {engineError && <p className="text-xs text-destructive">Voices unavailable: {engineError}</p>}
+      <p className="text-xs text-muted-foreground">
+        Edge needs internet at synthesis time; Piper downloads a small model once and works offline.
+      </p>
     </SettingsSection>
   );
 }

@@ -27,7 +27,6 @@ from pathlib import Path
 from src.core.job import CancellationToken
 from src.services.model_downloader import (
     MODEL_FILE,
-    DownloadResult,
     download_model,
     import_model,
 )

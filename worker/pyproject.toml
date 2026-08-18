@@ -10,9 +10,8 @@ dependencies = [
     # Manifest validation (TASK-016A) validates against schemas/*.schema.json.
     "jsonschema>=4.21,<5",
     # MVP default cloud translation provider (FROZEN ADR §3.3). Imported
-    # lazily by GeminiProvider, so the packaged worker must bundle it too
-    # (PyInstaller hidden import) or production translation silently falls
-    # back to E_PROVIDER_UNAVAILABLE.
+    # lazily by GeminiProvider, so it must stay a direct dependency or
+    # production translation silently falls back to E_PROVIDER_UNAVAILABLE.
     "google-genai>=1.0,<3.0",
 ]
 

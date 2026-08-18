@@ -55,3 +55,8 @@ golden/results/
 .freebuff/
 # Agent skill files owned by the desktop client (not project content).
 .agents/
+
+# --- Vendor binaries / models (downloaded, not committed) ---
+vendor/llama/
+# Agent tool state (not project content).
+.ohmyagent/

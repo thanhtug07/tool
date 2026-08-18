@@ -831,8 +831,8 @@ mod tests {
             "stt:deadbeef:large-v3:int8:zh:silero"
         );
         assert_eq!(
-            CacheService::tr_key("feed", "vi", "gemini-2.5-flash-lite", "g3", "r2"),
-            "tr:feed:vi:gemini-2.5-flash-lite:g3:r2"
+            CacheService::tr_key("feed", "vi", "gemini-flash-lite-latest", "g3", "r2"),
+            "tr:feed:vi:gemini-flash-lite-latest:g3:r2"
         );
         let r = CacheService::render_key("vid", "styleA", "wm1", "libx264", "fast");
         assert!(r.starts_with("render:"));

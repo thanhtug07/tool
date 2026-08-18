@@ -97,4 +97,26 @@ describe("captionStyle parity with ASS defaults", () => {
     expect(style.fontSize).toBe("22px");
     expect(style.bottom).toBe("12px");
   });
+
+  it("anchors the caption at the custom dragged spot", () => {
+    const style = captionStyle(
+      { ...ASS_DEFAULT_STYLE, position: "custom", customX: 0.25, customY: 0.7 },
+      1080,
+    );
+    expect(style.left).toBe("25%");
+    expect(style.top).toBe("70%");
+    expect(style.transform).toBe("translate(-50%, -50%)");
+    expect(style.cursor).toBe("grab");
+    expect(style.bottom).toBeUndefined();
+    expect(style.right).toBeUndefined();
+  });
+
+  it("clamps out-of-range custom fractions to the draggable area", () => {
+    const style = captionStyle(
+      { ...ASS_DEFAULT_STYLE, position: "custom", customX: 2.5, customY: -1 },
+      1080,
+    );
+    expect(style.left).toBe("92%");
+    expect(style.top).toBe("6%");
+  });
 });

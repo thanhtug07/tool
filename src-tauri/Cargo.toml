@@ -15,7 +15,7 @@ crate-type = ["lib", "cdylib"]
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.5", features = [] }
+tauri = { version = "2.11.5", features = ["protocol-asset"] }
 # Native file-open dialog for the video import flow (RELEASE-P0-005). Only the
 # `dialog` permission is granted to the main window (capabilities/default.json).
 tauri-plugin-dialog = "2"

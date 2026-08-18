@@ -120,10 +120,26 @@ describe("editorReducer", () => {
     state = editorReducer(state, { type: "set-draft", field: "text", value: "đã sửa" });
     state = editorReducer(state, { type: "commit-edit" });
     const saved = { ...state.cues[1], text: "đã sửa", status: "edited" as const };
-    const next = editorReducer(state, { type: "save-ok", saved });
+    const next = editorReducer(state, { type: "save-ok", saved, pending: state.pending! });
     expect(next.pending).toBeNull();
     expect(next.cues[1].text).toBe("đã sửa");
     expect(next.cues[1].status).toBe("edited");
+  });
+
+  it("save-ok for a stale in-flight save keeps a newer pending edit", () => {
+    let state = editorReducer(baseState(), { type: "begin-edit", id: "2" });
+    state = editorReducer(state, { type: "set-draft", field: "text", value: "đã sửa" });
+    state = editorReducer(state, { type: "commit-edit" });
+    const stalePending = state.pending!;
+    // The user edits again while the first save is in flight.
+    state = editorReducer(state, { type: "begin-edit", id: "3" });
+    state = editorReducer(state, { type: "set-draft", field: "text", value: "dòng mới" });
+    state = editorReducer(state, { type: "commit-edit" });
+    const saved = { ...state.cues[2], text: "dòng mới", status: "edited" as const };
+    const next = editorReducer(state, { type: "save-ok", saved, pending: stalePending });
+    // The stale save resolved but must not wipe the newer pending edit.
+    expect(next.pending).not.toBeNull();
+    expect(next.pending?.patch.text).toBe("dòng mới");
   });
 
   it("undo restores the previous cue and schedules an immediate re-save", () => {
@@ -138,6 +154,7 @@ describe("editorReducer", () => {
     state = editorReducer(state, {
       type: "save-ok",
       saved: { ...before, text: "sửa", status: "edited" },
+      pending: state.pending!,
     });
     const undone = editorReducer(state, { type: "undo" });
     expect(undone.undoStack).toHaveLength(0);
@@ -175,6 +192,7 @@ describe("CueTable virtualization", () => {
         onSetDraft={() => undefined}
         onCommitEdit={() => undefined}
         onCancelEdit={() => undefined}
+        onDelete={() => undefined}
       />,
     );
     const totalCues = /data-total-cues="(\d+)"/.exec(html);
@@ -195,6 +213,7 @@ describe("CueTable virtualization", () => {
         onSetDraft={() => undefined}
         onCommitEdit={() => undefined}
         onCancelEdit={() => undefined}
+        onDelete={() => undefined}
       />,
     );
     expect(html).toContain('data-cue-number="1"');

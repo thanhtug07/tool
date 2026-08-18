@@ -29,12 +29,15 @@ export function reduceJobFailures(failures: JobFailure[], event: JobStatusEvent)
   return [failure, ...rest].slice(0, 5);
 }
 
+import { useToast } from "@/components/toast";
+
 /**
  * Job failure banner (TASK-030): subscribes to `job:status` and shows a
  * dismissible banner with the error code, a Retry action, and an expandable
  * "view logs" detail row.
  */
 export default function JobFailBanner() {
+  const toast = useToast();
   const [failures, setFailures] = useState<JobFailure[]>([]);
 
   useEffect(() => {
@@ -61,7 +64,9 @@ export default function JobFailBanner() {
     <JobFailBannerList
       failures={failures}
       onDismiss={(jobId) => setFailures((current) => current.filter((f) => f.jobId !== jobId))}
-      onRetry={(jobId) => void retryJob(jobId)}
+      onRetry={(jobId) =>
+        void retryJob(jobId).catch((e) => toast.push(`Retry failed: ${String(e)}`, "error"))
+      }
       onToggle={(jobId) =>
         setFailures((current) =>
           current.map((f) => (f.jobId === jobId ? { ...f, expanded: !f.expanded } : f)),

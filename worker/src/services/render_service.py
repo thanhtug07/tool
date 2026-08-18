@@ -44,6 +44,7 @@ import errno
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -55,7 +56,6 @@ from pathlib import Path
 from src.api.schemas import MediaMetadata
 from src.core.ffmpeg import (
     E_FFMPEG_FAILED,
-    CancelledError,
     CancellationToken,
     FFmpegError,
     out_time_seconds,
@@ -191,6 +191,10 @@ class RenderConfig:
     input_path: str
     output_path: str
     subtitle_path: str | None = None
+    #: Render-time ASS content built from the project's edited cue table (text
+    #: edits / deletions / the dragged custom position). Takes precedence over
+    #: ``subtitle_path`` when set; written into the workdir and burned there.
+    subtitle_ass_text: str | None = None
     video_encoder: str | None = None
     video_preset: str = DEFAULT_RENDER_PRESET
     video_crf: int = DEFAULT_RENDER_CRF
@@ -201,6 +205,10 @@ class RenderConfig:
     #: Optional full-duration voice track (``/v1/tts/synthesize`` output) to
     #: mix over the original audio (original ducked to ~45%).
     voice_track_path: str | None = None
+    #: Optional pre-processed audio track (``/v1/audio/process`` output). When
+    #: set it replaces the video's original audio — and becomes the base the
+    #: voice track mixes over when dubbing.
+    audio_track_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -288,8 +296,15 @@ def build_render_args(
     validate_input_path(input_path)
     validate_input_path(output_path)
     args = ["-y", "-nostdin", "-i", input_path]
+    # Input indices: 0 = source video, 1 = replacement audio track (when any),
+    # 2 = image-watermark overlay (when any). Tracked explicitly — deriving the
+    # audio index from ``args.count('-i') - 1`` breaks the moment the watermark
+    # input is appended *after* the audio (it would map the image's streams and
+    # drop the audio track). FIX #2 (review 2026-08-18).
+    audio_input_index: int | None = None
     if audio_path:
         validate_input_path(audio_path)
+        audio_input_index = 1
         args += ["-i", audio_path]
     if filter_graph is not None:
         if filter_graph.extra_input:
@@ -304,9 +319,9 @@ def build_render_args(
         args += ["-vf", subtitle_arg, "-map", "0:v:0"]
     else:
         args += ["-map", "0:v:0"]
-    if audio_path:
-        # The last ``-i`` is the provided audio track; map it directly.
-        args += ["-map", f"{args.count('-i') - 1}:a"]
+    if audio_input_index is not None:
+        # Input 1 is the replacement audio track; map it directly.
+        args += ["-map", f"{audio_input_index}:a"]
     else:
         args += ["-map", "0:a?"]
     args += ["-c:v", encoder]
@@ -333,6 +348,90 @@ def _probe_audio_format(path: str) -> tuple[int, int]:
     return 2, 44100
 
 
+#: Bare workdir name of the render-time ASS written from edited cues.
+_RENDER_ASS_NAME = "render.ass"
+
+
+def build_render_ass(
+    cues: Sequence,
+    *,
+    language: str | None = None,
+    position: str = "bottom_center",
+    custom_x: float | None = None,
+    custom_y: float | None = None,
+) -> str:
+    """Serialize a render-time ASS from the project's edited cues (pure).
+
+    The render stage normally burns ``cache/subtitle.ass`` produced by the
+    subtitle stage from transcript+translation. Once the user edits the cue
+    table (text changes, deletions) or drags the caption to a custom position
+    in the preview, the output must reflect that — so the renderer rebuilds
+    the ASS from the edited cues plus the position chosen on screen.
+
+    A custom position is applied as a per-line ``{\\an5\\pos(x,y)}`` override
+    with the text center anchored at a PlayRes fraction of the video frame
+    (x = custom_x * 1920, y = custom_y * 1080), so the burn-in matches the
+    preview overlay exactly. ``position`` values other than ``custom`` keep the
+    style's own alignment (bottom/top center). ``cues`` may be empty — after
+    the user deletes every subtitle the output is burned without any captions.
+    """
+    from src.api.schemas import Cue, Subtitle, SubtitleOutput  # noqa: PLC0415
+    from src.services.subtitle_service import (  # noqa: PLC0415
+        ASS_PLAYRES_X,
+        ASS_PLAYRES_Y,
+        ass_header,
+        ass_to_ass_text,
+        default_style,
+    )
+
+    style = default_style(language or "vi")
+    if cues:
+        document = Subtitle(
+            schema_version=1,
+            project_id="render",
+            style=style,
+            cues=[
+                Cue(cue_number=i, start=c.start, end=c.end, text=c.text)
+                for i, c in enumerate(cues, start=1)
+            ],
+            output=SubtitleOutput(),
+        )
+        ass = ass_to_ass_text(document)
+    else:
+        # Every cue was deleted: a valid ASS with no Dialogue events burns
+        # nothing — libass renders an empty document.
+        ass = ass_header(style) + "\n"
+
+    if position == "custom" and custom_x is not None and custom_y is not None:
+        x = round(_clamp01(custom_x) * ASS_PLAYRES_X)
+        y = round(_clamp01(custom_y) * ASS_PLAYRES_Y)
+        override = f"{{\\an5\\pos({x},{y})}}"
+        lines = []
+        for line in ass.splitlines():
+            if line.startswith("Dialogue: "):
+                head, _, text = line.rpartition(",,")
+                lines.append(f"{head},,{override}{text}")
+            else:
+                lines.append(line)
+        ass = "\n".join(lines)
+    return ass
+
+
+def resolve_audio_codec(requested: str, *, voice_track: bool, wav_audio_track: bool = False) -> str:
+    """Audio codec for the final render (pure — unit tested).
+
+    ``copy`` is the right default for non-dub renders: the source audio stream
+    is already in a container-compatible codec (e.g. AAC inside an MP4). When
+    a voice track is mixed in, or the base audio is itself a PCM wav (an
+    audio/process output), copying would mux raw PCM into the MP4, which most
+    players and upload platforms refuse — so the audio is re-encoded to AAC
+    instead.
+    """
+    if requested == DEFAULT_AUDIO_CODEC and (voice_track or wav_audio_track):
+        return "aac"
+    return requested
+
+
 def _mix_voice_track(input_path: str, voice_track_path: str, out_wav: str, source_has_audio: bool) -> None:
     """Mix the TTS voice track over the original audio (original ducked ~45%).
 
@@ -345,7 +444,7 @@ def _mix_voice_track(input_path: str, voice_track_path: str, out_wav: str, sourc
     if source_has_audio:
         channels, sample_rate = _probe_audio_format(input_path)
         args = [
-            "ffmpeg", "-y", "-nostdin",
+            resolve_ffmpeg(), "-y", "-nostdin",
             "-i", input_path,
             "-i", voice_track_path,
             "-filter_complex",
@@ -359,7 +458,7 @@ def _mix_voice_track(input_path: str, voice_track_path: str, out_wav: str, sourc
     else:
         channels, sample_rate = _probe_audio_format(voice_track_path)
         args = [
-            "ffmpeg", "-y", "-nostdin",
+            resolve_ffmpeg(), "-y", "-nostdin",
             "-i", voice_track_path,
             "-ac", str(channels), "-ar", str(sample_rate),
             "-c:a", "pcm_s16le",
@@ -525,12 +624,20 @@ def build_filter_graph(
     textfile: str | None = None,
     fontfile: str | None = None,
     image_input: str | None = None,
+    image_index: int = 1,
 ) -> _FilterGraph | None:
     """Compose subtitle burn-in + text/image watermark into one filter graph.
 
     Returns ``None`` when there is nothing to filter. A pure text/subtitle chain
-    stays a single ``-vf``; an image watermark adds a second input and is emitted
+    stays a single ``-vf``; an image watermark adds an extra input and is emitted
     as ``-filter_complex`` with explicit labels.
+
+    ``image_index`` is the ffmpeg input slot of the image: ``1`` when it directly
+    follows the source video, but ``2`` when a replacement/voice audio track was
+    inserted at slot 1 first. Hardcoding ``[1:v]`` for the watermark broke the
+    moment an audio input preceded it — the graph then read the WAV's streams
+    and ffmpeg errored ``No such stream``. Same class of bug as the audio
+    ``-map`` derivation (FIX #2, review 2026-08-18).
     """
     chain = [
         f
@@ -550,7 +657,7 @@ def build_filter_graph(
     prep, overlay_text = build_overlay_filter(image_watermark)
     pieces = [
         f"[0:v]{','.join(chain) if chain else 'null'}[vbase]",
-        f"[1:v]{prep if prep else 'null'}[wmimg]",
+        f"[{image_index}:v]{prep if prep else 'null'}[wmimg]",
         f"[vbase][wmimg]{overlay_text}[vout]",
     ]
     return _FilterGraph("-filter_complex", ";".join(pieces), extra_input=image_input)
@@ -849,7 +956,37 @@ def _region_mad(a: bytes, b: bytes, width: int, height: int, region: tuple[float
     return total / count if count else None
 
 
-def _burn_in_detected(source_path: str, output_path: str, width: int, height: int, window: tuple[float, float]) -> bool | None:
+def _burn_region_for_ass(ass_text: str | None) -> tuple[float, float, float, float]:
+    """Sampling region for the burn-in check, derived from the rendered ASS.
+
+    The default region is the bottom band (where ASS bottom-aligned text
+    renders). When the user dragged the caption to a custom spot the rebuilt
+    ASS carries ``{\\pos(x,y)}`` (1920x1080 PlayRes grid) — the region must
+    follow the text or a correctly moved subtitle would be rejected. Falls
+    back to the bottom band when no explicit position is found.
+    """
+    if ass_text:
+        m = re.search(r"\\pos\((\d+),(\d+)\)", ass_text)
+        if m:
+            x = int(m.group(1)) / 1920.0
+            y = int(m.group(2)) / 1080.0
+            return (
+                max(0.0, x - 0.25),
+                max(0.0, y - 0.08),
+                min(1.0, x + 0.25),
+                min(1.0, y + 0.08),
+            )
+    return _BURN_REGION
+
+
+def _burn_in_detected(
+    source_path: str,
+    output_path: str,
+    width: int,
+    height: int,
+    window: tuple[float, float],
+    region: tuple[float, float, float, float] = _BURN_REGION,
+) -> bool | None:
     """Confirm the subtitle actually rendered by comparing output vs source.
 
     The video is (presumably) moving, so comparing output frames against the
@@ -857,6 +994,9 @@ def _burn_in_detected(source_path: str, output_path: str, width: int, height: in
     screen the region's mean-absolute difference jumps far above the residual
     re-encode noise measured just before the cue window. Returns ``None`` when
     the frames could not be decoded (validation is then skipped).
+
+    ``region`` is the fractional frame region sampled — normally the bottom
+    band, or the band around a custom ``{\\pos}`` when the caption was moved.
     """
     start, end = window
     if end <= start or start < 0:
@@ -869,8 +1009,8 @@ def _burn_in_detected(source_path: str, output_path: str, width: int, height: in
     active_out = _extract_frame(output_path, active_t, width, height)
     if None in (baseline_src, baseline_out, active_src, active_out):
         return None
-    noise_mad = _region_mad(baseline_src, baseline_out, width, height, _BURN_REGION)
-    active_mad = _region_mad(active_src, active_out, width, height, _BURN_REGION)
+    noise_mad = _region_mad(baseline_src, baseline_out, width, height, region)
+    active_mad = _region_mad(active_src, active_out, width, height, region)
     if noise_mad is None or active_mad is None:
         return None
     return (active_mad - noise_mad) >= BURN_IN_MIN_DELTA
@@ -919,27 +1059,59 @@ def render(
     except RenderError:
         raise
 
-    workdir = Path(tempfile.mkdtemp(prefix="render_", dir=str(Path(output_path).parent)))
+    # The temp workdir lives next to the output so the final ``os.replace`` is
+    # atomic (same volume). A missing output parent must surface as the typed
+    # ``E_RENDER_INVALID`` — not a raw ``FileNotFoundError`` escaping the rich
+    # error taxonomy. FIX #3 (review 2026-08-18).
+    output_parent = Path(output_path).parent
+    try:
+        output_parent.mkdir(parents=True, exist_ok=True)
+        workdir = Path(tempfile.mkdtemp(prefix="render_", dir=str(output_parent)))
+    except OSError as exc:
+        raise RenderError(E_RENDER_INVALID, "Output directory is missing or not writable.") from exc
     temp_out = workdir / "out.mp4"
     try:
         subtitle_arg = None
         if subtitle_path:
             shutil.copy(subtitle_path, workdir / Path(subtitle_path).name)
             subtitle_arg = subtitle_filter_arg(subtitle_path)
+        elif config.subtitle_ass_text is not None:
+            # Render-time ASS rebuilt from the edited cue table — written into
+            # the workdir under a safe bare name (same security model as the
+            # subtitle file copy: the filter graph only ever sees the name).
+            (workdir / _RENDER_ASS_NAME).write_text(config.subtitle_ass_text, encoding="utf-8")
+            subtitle_arg = subtitle_filter_arg(_RENDER_ASS_NAME)
 
         audio_path = None
+        # An audio/process output replaces the video's original audio; the
+        # voice-track mix (if any) then uses it as its base instead of the
+        # source track.
+        if config.audio_track_path:
+            audio_path = os.path.abspath(validate_input_path(config.audio_track_path))
+            if not os.path.isfile(audio_path):
+                raise RenderError(E_RENDER_INVALID, "Audio track does not exist.")
         if config.voice_track_path:
             voice_track = os.path.abspath(validate_input_path(config.voice_track_path))
             if not os.path.isfile(voice_track):
                 raise RenderError(E_RENDER_INVALID, "Voice track does not exist.")
             mixed = workdir / "mixed_audio.wav"
             _mix_voice_track(
-                input_path,
+                audio_path or input_path,
                 voice_track,
                 str(mixed),
-                bool(source_meta.audio_streams),
+                audio_path is not None or bool(source_meta.audio_streams),
             )
             audio_path = str(mixed)
+
+        # The mix above produces a PCM wav; ``-c:a copy`` on it would mux raw
+        # PCM into the mp4, which most players/platforms refuse. Re-encode to
+        # AAC so a dubbed render stays a normal, playable MP4 (matches the
+        # non-dub outputs whose source audio is already AAC).
+        audio_codec = resolve_audio_codec(
+            config.audio_codec,
+            voice_track=config.voice_track_path is not None,
+            wav_audio_track=audio_path is not None and str(audio_path).lower().endswith(".wav"),
+        )
 
         textfile, fontfile, image_input = prepare_watermark(workdir, config.watermark)
         filter_graph = build_filter_graph(
@@ -949,6 +1121,9 @@ def render(
             textfile=textfile,
             fontfile=fontfile,
             image_input=image_input,
+            # The watermark image follows the source video (slot 0) and — when a
+            # replacement/voice audio track was requested — the audio (slot 1).
+            image_index=2 if audio_path else 1,
         )
 
         args = build_render_args(
@@ -958,7 +1133,7 @@ def render(
             filter_graph=filter_graph,
             preset=config.video_preset,
             crf=config.video_crf,
-            audio_codec=config.audio_codec,
+            audio_codec=audio_codec,
             audio_path=audio_path,
         )
 
@@ -974,7 +1149,7 @@ def render(
                     filter_graph=filter_graph,
                     preset=config.video_preset,
                     crf=config.video_crf,
-                    audio_codec=config.audio_codec,
+                    audio_codec=audio_codec,
                     audio_path=audio_path,
                 )
                 _run_encode(args, workdir=workdir, cancel=cancel, source_duration=source_meta.duration, on_progress=on_progress)
@@ -990,7 +1165,14 @@ def render(
 
         burn_in: bool | None = None
         if config.check_window and not issues:
-            burn_in = _burn_in_detected(input_path, str(temp_out), output_meta.width or 0, output_meta.height or 0, config.check_window)
+            burn_in = _burn_in_detected(
+                input_path,
+                str(temp_out),
+                output_meta.width or 0,
+                output_meta.height or 0,
+                config.check_window,
+                _burn_region_for_ass(config.subtitle_ass_text),
+            )
             if burn_in is False:
                 issues.append("subtitle burn-in not detected in the sampled frame region")
             elif burn_in is None:

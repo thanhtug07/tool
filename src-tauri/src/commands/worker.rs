@@ -9,7 +9,7 @@ use tauri::State;
 use crate::services::worker_manager::{WorkerManager, WorkerStateInfo};
 
 /// Returns the current lifecycle snapshot of the Python sidecar.
-#[tauri::command]
+#[tauri::command(rename = "worker.get_worker_state")]
 pub fn get_worker_state(manager: State<'_, WorkerManager>) -> WorkerStateInfo {
     manager.state_info()
 }
@@ -20,7 +20,7 @@ pub fn get_worker_state(manager: State<'_, WorkerManager>) -> WorkerStateInfo {
 /// Idempotent-safe: `stop` blocks until the supervisor has cleaned up and
 /// `start` rejects when a worker is already running, so this is the only
 /// restart path the UI should use.
-#[tauri::command]
+#[tauri::command(rename = "worker.restart")]
 pub fn restart(manager: State<'_, WorkerManager>) -> WorkerStateInfo {
     manager.stop();
     if let Err(e) = manager.start() {

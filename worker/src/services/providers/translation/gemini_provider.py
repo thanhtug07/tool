@@ -1,7 +1,7 @@
 """Gemini provider (TASK-019): default translation backend (FROZEN ADR §3.3).
 
 Uses the ``google-genai`` SDK with ``responseSchema`` structured output. The
-model is configurable via settings with the S1 default ``gemini-2.5-flash-lite``
+model is configurable via settings with the S1 default ``gemini-flash-lite-latest``
 (Fast/Balanced) and ``gemini-2.5-flash`` for High/Maximum presets — never
 hard-coded at call sites.
 
@@ -29,13 +29,12 @@ import logging
 import time
 from typing import Any
 
-from src.api.schemas import TranslationBlock, TranslationItem
+from src.api.schemas import TranslationBlock
 from src.services.providers.base import (
     E_PROVIDER_UNAVAILABLE,
     BlockInput,
     CostEstimate,
     ProviderError,
-    TranslationProvider,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +44,9 @@ E_API_RATE_LIMIT = "E_API_RATE_LIMIT"
 E_API_ERROR = "E_API_ERROR"
 
 #: S1 default model (ADR §3.3 / MASTER_PLAN §12): Fast/Balanced preset.
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite"
+#: `gemini-2.5-flash-lite` was deprecated upstream (HTTP 404) — replaced with
+#: the stable `-latest` alias that tracks the current flash-lite tier.
+GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest"
 #: High/Maximum preset model.
 GEMINI_HIGH_MODEL = "gemini-2.5-flash"
 

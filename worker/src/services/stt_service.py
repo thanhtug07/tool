@@ -53,6 +53,15 @@ E_STT_NO_SPEECH = "E_STT_NO_SPEECH"
 #: (whisper.cpp issue #3638).
 _WHISPER_INIT_LOCK = threading.Lock()
 
+#: Chunked-pipeline shared faster-whisper model cache. Loading large-v3 costs
+#: ~3 GB RAM plus a HuggingFace revision round-trip per load; the chunk
+#: scheduler runs several chunks concurrently, so each chunk used to load its
+#: own copy (OOM / network flakes on long videos). One instance is loaded per
+#: (model, device, compute_type) and reused — CTranslate2 inference is safe
+#: for concurrent ``transcribe()`` calls on the same model object.
+_WHISPER_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
+_WHISPER_MODEL_LOCK = threading.Lock()
+
 BACKEND_FASTER_WHISPER = "faster-whisper"
 BACKEND_WHISPER_CPP = "whisper-cpp"
 
@@ -181,24 +190,51 @@ def _is_cuda_library_error(exc: Exception) -> bool:
 
 
 def _load_whisper_model(model_name: str, device: str, compute_type: str) -> Any:
-    """Lazy-import faster-whisper and load ``model_name`` on ``device``."""
-    # Register pip-provided CUDA DLLs (Windows) before ctranslate2 resolves its
-    # dependencies at first encode; harmless elsewhere.
-    ensure_cuda_libraries()
-    try:
-        from faster_whisper import WhisperModel  # noqa: PLC0415 - lazy, heavy
-    except ImportError as exc:
-        raise STTError(
-            E_STT_MODEL_UNAVAILABLE,
-            "faster-whisper is not installed; cannot run STT.",
-        ) from exc
-    try:
-        return WhisperModel(model_name, device=device, compute_type=compute_type)
-    except Exception as exc:  # noqa: BLE001 - map every load failure to a code
-        lowered = str(exc).lower()
-        if device == "cuda" and any(m in lowered for m in ("memory", "vram")):
-            raise STTError(E_STT_FAILED, "Not enough VRAM to load the STT model.") from exc
-        raise STTError(E_STT_FAILED, "Failed to load the STT model.") from exc
+    """Lazy-import faster-whisper and load ``model_name`` on ``device``.
+
+    Instances are **shared** (module-level cache keyed by model/device/compute):
+    the chunked pipeline runs several chunks concurrently, and loading a fresh
+    ~3 GB large-v3 per chunk exhausted RAM and added a HuggingFace revision
+    round-trip per load. ``local_files_only`` skips that network check when the
+    model is already cached locally (falls back to a normal load otherwise).
+    """
+    key = (model_name, device, compute_type)
+    cached = _WHISPER_MODEL_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    with _WHISPER_MODEL_LOCK:
+        cached = _WHISPER_MODEL_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+        # Register pip-provided CUDA DLLs (Windows) before ctranslate2 resolves
+        # its dependencies at first encode; harmless elsewhere.
+        ensure_cuda_libraries()
+        try:
+            from faster_whisper import WhisperModel  # noqa: PLC0415 - lazy, heavy
+        except ImportError as exc:
+            raise STTError(
+                E_STT_MODEL_UNAVAILABLE,
+                "faster-whisper is not installed; cannot run STT.",
+            ) from exc
+        try:
+            try:
+                model = WhisperModel(
+                    model_name,
+                    device=device,
+                    compute_type=compute_type,
+                    local_files_only=True,
+                )
+            except Exception:  # noqa: BLE001 - not cached yet → allow download
+                model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            _WHISPER_MODEL_CACHE[key] = model
+            return model
+        except Exception as exc:  # noqa: BLE001 - map every load failure to a code
+            lowered = str(exc).lower()
+            if device == "cuda" and any(m in lowered for m in ("memory", "vram")):
+                raise STTError(E_STT_FAILED, "Not enough VRAM to load the STT model.") from exc
+            raise STTError(E_STT_FAILED, "Failed to load the STT model.") from exc
 
 
 def _segment_language(segment: Any, fallback: str) -> str:

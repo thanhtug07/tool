@@ -22,7 +22,7 @@ import DictionaryPage from "@/pages/Dictionary";
 import SubtitleEditorView from "@/pages/Project/SubtitleEditorView";
 import PreviewView from "@/pages/Project/PreviewView";
 import ExportView from "@/pages/Project/ExportView";
-import type { NavKey } from "@/components/layout/Sidebar";
+import type { NavKey } from "@/lib/nav";
 
 export type ToolId =
   | "subtitles"
@@ -32,6 +32,8 @@ export type ToolId =
   | "watermark"
   | "voice"
   | "audio"
+  | "audio-separator"
+  | "logo-remover"
   | "video"
   | "translate";
 
@@ -74,6 +76,14 @@ const CATEGORIES: ToolCategory[] = [
         icon: Stamp,
         goto: "automation",
       },
+      {
+        id: "logo-remover",
+        name: "Logo Remover",
+        description:
+          "Remove a logo rectangle from the source with ffmpeg delogo — a real workflow step.",
+        icon: Stamp,
+        goto: "automation",
+      },
     ],
   },
   {
@@ -85,6 +95,13 @@ const CATEGORIES: ToolCategory[] = [
         name: "Audio Extractor",
         description: "Extract the audio track as part of the automation pipeline.",
         icon: FileAudio,
+        goto: "automation",
+      },
+      {
+        id: "audio-separator",
+        name: "Audio Separator",
+        description: "Separate the vocal track (karaoke mix) with ffmpeg — a real workflow step.",
+        icon: AudioLines,
         goto: "automation",
       },
     ],
@@ -137,15 +154,7 @@ const CATEGORIES: ToolCategory[] = [
 ];
 
 /** Not-yet-implemented tools — listed honestly, never as working buttons. */
-const PLANNED = [
-  "Video Cutter",
-  "Video Converter",
-  "Logo Remover",
-  "Audio Separator",
-  "Audio Mixer",
-  "Voice Generator",
-  "Voice Dubbing",
-] as const;
+const PLANNED = ["Video Cutter", "Video Converter", "Voice Generator", "Voice Dubbing"] as const;
 
 const TOOL_VIEWS: Partial<Record<ToolId, (projectId?: string) => ReactNode>> = {
   subtitles: (projectId) => <SubtitleEditorView projectId={projectId} />,
@@ -179,117 +188,113 @@ export default function ToolsPage({
 
   const activeDef = CATEGORIES.flatMap((c) => c.tools).find((t) => t.id === activeTool);
 
-  if (activeTool && activeDef && !activeDef.goto && TOOL_VIEWS[activeTool]) {
-    const projectId = request?.projectId ?? project?.id;
-    return (
-      <section aria-labelledby="tools-heading" className="mx-auto max-w-5xl space-y-4">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setActiveTool(null)}
-            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="size-3.5" aria-hidden="true" /> Tools
-          </button>
-          <div>
-            <h1 id="tools-heading" className="text-xl font-semibold tracking-tight">
-              {activeDef.name}
-            </h1>
-            <p className="text-sm text-muted-foreground">{activeDef.description}</p>
-          </div>
-        </div>
-        {TOOL_VIEWS[activeTool]?.(projectId)}
-      </section>
-    );
-  }
+  const projectId = request?.projectId ?? project?.id;
+  const activeView = activeTool && activeDef && !activeDef.goto ? TOOL_VIEWS[activeTool] : null;
 
   return (
-    <section aria-labelledby="tools-heading" className="mx-auto max-w-5xl space-y-6">
-      <div>
-        <h1 id="tools-heading" className="text-2xl font-semibold tracking-tight">
-          Tools
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Single-purpose utilities — run a task without the full automation pipeline. Only tools
-          backed by the current backend are enabled.
-        </p>
-      </div>
-
-      {CATEGORIES.map((category) => {
-        const CategoryIcon = category.icon;
-        return (
-          <section key={category.title} aria-labelledby={`tools-${category.title}`}>
-            <h2
-              id={`tools-${category.title}`}
-              className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-            >
-              <CategoryIcon className="size-3.5" aria-hidden="true" />
-              {category.title}
-            </h2>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {category.tools.map((tool) => {
-                const Icon = tool.icon;
-                return (
-                  <button
-                    key={`${category.title}-${tool.id}`}
-                    type="button"
-                    data-role={`tool-${tool.id}`}
-                    onClick={() => {
-                      if (tool.goto) onNavigate(tool.goto);
-                      else setActiveTool(tool.id);
-                    }}
-                    className={cn(
-                      "flex flex-col items-start gap-2 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/40",
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
-                      <span className="text-sm font-semibold">{tool.name}</span>
-                    </span>
-                    <span className="text-xs text-muted-foreground">{tool.description}</span>
-                    {tool.goto && (
-                      <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-sky-400/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-400">
-                        <Zap className="size-3" aria-hidden="true" /> Runs in Automation
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
-
-      {/* Honest planned list — not rendered as working buttons. */}
-      <section
-        aria-labelledby="tools-planned"
-        className="rounded-lg border border-dashed border-border bg-muted/20 p-4"
-      >
-        <h2
-          id="tools-planned"
-          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-        >
-          Planned — not in this build
-        </h2>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {PLANNED.map((name) => (
-            <span
-              key={name}
-              className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground"
-            >
-              <Scissors className="size-3" aria-hidden="true" />
-              {name}
-              <span className="text-[9px] uppercase tracking-wide text-muted-foreground/70">
-                later
-              </span>
-            </span>
-          ))}
+    <section aria-labelledby="tools-heading" className="flex h-full min-h-0 gap-4">
+      {/* LEFT — compact tool panel (editor style, not giant cards) */}
+      <nav aria-label="Tools" className="w-52 shrink-0 space-y-3 overflow-y-auto pr-1">
+        <div>
+          <h1 id="tools-heading" className="text-sm font-semibold tracking-tight">
+            Tools
+          </h1>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Real backend tools only.</p>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Dubbing, audio separation, OCR/logo removal and video editing arrive with their respective
-          backend stages.
-        </p>
-      </section>
+        {CATEGORIES.map((category) => {
+          const CategoryIcon = category.icon;
+          return (
+            <div key={category.title}>
+              <h2 className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <CategoryIcon className="size-3" aria-hidden="true" />
+                {category.title}
+              </h2>
+              <ul className="space-y-0.5">
+                {category.tools.map((tool) => {
+                  const Icon = tool.icon;
+                  const selected = activeTool === tool.id;
+                  return (
+                    <li key={`${category.title}-${tool.id}`}>
+                      <button
+                        type="button"
+                        data-role={`tool-${tool.id}`}
+                        onClick={() => {
+                          if (tool.goto) onNavigate(tool.goto);
+                          else setActiveTool(tool.id);
+                        }}
+                        title={tool.description}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors",
+                          selected
+                            ? "bg-accent font-medium text-accent-foreground"
+                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                        )}
+                      >
+                        <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+                        <span className="truncate">{tool.name}</span>
+                        {tool.goto && (
+                          <Zap
+                            className="ml-auto size-3 shrink-0 text-sky-400"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+        <div className="rounded border border-dashed border-border bg-muted/20 p-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Planned — later
+          </p>
+          <ul className="mt-1 flex flex-wrap gap-1">
+            {PLANNED.map((name) => (
+              <li
+                key={name}
+                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground/80"
+              >
+                <Scissors className="size-2.5" aria-hidden="true" />
+                {name}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </nav>
+
+      {/* RIGHT — tool workspace */}
+      <div className="min-w-0 flex-1 overflow-y-auto rounded-lg border border-border bg-card p-4">
+        {activeView ? (
+          <>
+            <div className="mb-4 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveTool(null)}
+                className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <ArrowLeft className="size-3.5" aria-hidden="true" /> Back
+              </button>
+              <div>
+                <h2 className="text-sm font-semibold">{activeDef?.name}</h2>
+                <p className="text-xs text-muted-foreground">{activeDef?.description}</p>
+              </div>
+            </div>
+            {activeView(projectId)}
+          </>
+        ) : (
+          <div className="grid h-full place-items-center p-6 text-center">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Select a tool</p>
+              <p className="text-xs text-muted-foreground">
+                Only tools backed by the current backend are listed. Tools that run inside the
+                automation pipeline are marked with ⚡ and open the workspace.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

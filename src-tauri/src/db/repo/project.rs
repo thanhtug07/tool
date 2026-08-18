@@ -103,6 +103,26 @@ impl<'a> ProjectRepo<'a> {
             .map_err(DbError::from)
     }
 
+    /// Find a project that already references the same source video path.
+    /// Paths are compared case-insensitively and separator-normalized so
+    /// re-importing the same file never creates a duplicate project.
+    pub fn find_by_source_path(&self, path: &str) -> Result<Option<Project>, DbError> {
+        let needle = normalize_source_path(path);
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {COLUMNS} FROM projects"))?;
+        let rows = stmt.query_map([], row_to_project)?;
+        let mut found = None;
+        for row in rows {
+            let project = row?;
+            if normalize_source_path(&project.source_video_path) == needle {
+                found = Some(project);
+                break;
+            }
+        }
+        Ok(found)
+    }
+
     /// All projects, most recently updated first.
     pub fn list(&self) -> Result<Vec<Project>, DbError> {
         let mut stmt = self.conn.prepare(&format!(
@@ -153,6 +173,13 @@ impl<'a> ProjectRepo<'a> {
             .execute("DELETE FROM projects WHERE id = ?1", params![id])?;
         Ok(n > 0)
     }
+}
+
+/// Normalize a source video path for duplicate detection: lowercase (Dedup is
+/// case-insensitive on Windows) and unify separators so `C:\Videos\A.mp4` and
+/// `c:/videos/a.mp4` are treated as the same file.
+fn normalize_source_path(path: &str) -> String {
+    path.trim().to_lowercase().replace('\\', "/")
 }
 
 fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
@@ -294,6 +321,63 @@ mod tests {
         assert!(repo.delete(&project.id).expect("delete"));
         assert!(repo.get(&project.id).expect("get").is_none());
         assert!(!repo.delete(&project.id).expect("delete again"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_by_source_path_matches_normalized_and_case_insensitive() {
+        let (db, dir) = repo("r8");
+        let conn = db.conn();
+        let repo = ProjectRepo::new(&conn);
+        let mut project = sample("source");
+        project.source_video_path = "C:\\Videos\\Dự án\\A.MP4".into();
+        repo.insert(&project).expect("insert");
+
+        // Exact match (Windows-style path).
+        let found = repo
+            .find_by_source_path("C:\\Videos\\Dự án\\A.MP4")
+            .expect("find")
+            .expect("row");
+        assert_eq!(found.id, project.id);
+
+        // Case + separator variations resolve to the same project.
+        for variant in [
+            "c:/videos/dự án/a.mp4",
+            "C:/VIDEOS/Dự án/a.mp4",
+            "c:\\videos\\dự án\\a.mp4",
+        ] {
+            let found = repo
+                .find_by_source_path(variant)
+                .expect("find")
+                .expect("row");
+            assert_eq!(found.name, project.name, "variant {variant:?} must match");
+        }
+
+        // A truly different file is not matched.
+        assert!(repo
+            .find_by_source_path("C:\\Videos\\B.mp4")
+            .expect("find")
+            .is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_by_source_path_returns_first_match_only() {
+        let (db, dir) = repo("r9");
+        let conn = db.conn();
+        let repo = ProjectRepo::new(&conn);
+        let mut a = sample("first");
+        a.source_video_path = "Z:\\same.mp4".into();
+        let mut b = sample("second");
+        b.source_video_path = "z:/same.mp4".into();
+        repo.insert(&a).expect("insert a");
+        repo.insert(&b).expect("insert b");
+
+        let found = repo
+            .find_by_source_path("Z:\\SAME.MP4")
+            .expect("find")
+            .expect("row");
+        assert_eq!(found.id, a.id, "oldest matching project wins");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

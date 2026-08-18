@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_WATERMARK, type WatermarkConfig } from "@/components/WatermarkConfig";
 import {
+  automationPipelineSteps,
   buildStageParams,
   derivePhase,
   deriveStages,
@@ -10,6 +11,8 @@ import {
   markStageSubmitted,
   pipelineProgress,
   startPipeline,
+  startPipelineWithSteps,
+  subtitleStyleToWire,
   watermarkToWire,
 } from "./automation";
 
@@ -39,6 +42,18 @@ describe("buildStageParams", () => {
       provider: "gemini",
       target_language: "vi",
     });
+  });
+
+  it("translate prefers the step's own provider over the workspace default", () => {
+    // Two applied tools may pin different providers — the translate stage must
+    // follow the tool that owns it, not the last-applied shared option.
+    expect(
+      buildStageParams("translate", {
+        ...OPTIONS,
+        provider: "free",
+        stepConfig: { provider: "gemini" },
+      }),
+    ).toEqual({ provider: "gemini", target_language: "vi" });
   });
 
   it("render omits burn_subtitles when burning is on (backend default)", () => {
@@ -74,6 +89,104 @@ describe("buildStageParams", () => {
         rotation: 0,
       },
     });
+  });
+
+  it("render sends the dragged caption position as subtitle_style", () => {
+    const subtitleStyle = {
+      font: "Arial",
+      fontSizePlayRes: 44,
+      strokePlayRes: 2,
+      shadowPlayRes: 1,
+      position: "custom" as const,
+      bgBox: false,
+      customX: 0.3,
+      customY: 0.65,
+    };
+    const params = buildStageParams("render", { ...OPTIONS, subtitleStyle });
+    expect(params.subtitle_style).toEqual({ position: "custom", custom_x: 0.3, custom_y: 0.65 });
+  });
+
+  it("render omits subtitle_style when burning is off", () => {
+    const subtitleStyle = {
+      font: "Arial",
+      fontSizePlayRes: 44,
+      strokePlayRes: 2,
+      shadowPlayRes: 1,
+      position: "custom" as const,
+      bgBox: false,
+      customX: 0.3,
+      customY: 0.65,
+    };
+    const params = buildStageParams("render", {
+      ...OPTIONS,
+      burnSubtitles: false,
+      subtitleStyle,
+    });
+    expect(params.subtitle_style).toBeUndefined();
+  });
+
+  it("audio sends the configured processing mode", () => {
+    expect(buildStageParams("audio", OPTIONS)).toEqual({ audio_mode: "vocal_removal" });
+    expect(buildStageParams("audio", { ...OPTIONS, stepConfig: { mode: "denoise" } })).toEqual({
+      audio_mode: "denoise",
+    });
+  });
+
+  it("logo sends the marked region (with optional time window)", () => {
+    expect(
+      buildStageParams("logo", { ...OPTIONS, stepConfig: { x: 10, y: 20, width: 80, height: 40 } }),
+    ).toEqual({ logo_x: 10, logo_y: 20, logo_width: 80, logo_height: 40 });
+    expect(
+      buildStageParams("logo", {
+        ...OPTIONS,
+        stepConfig: { x: 0, y: 0, width: 64, height: 64, timeStart: 1, timeEnd: 5 },
+      }),
+    ).toEqual({
+      logo_x: 0,
+      logo_y: 0,
+      logo_width: 64,
+      logo_height: 64,
+      logo_time_start: 1,
+      logo_time_end: 5,
+    });
+  });
+
+  it("render picks up the custom-workflow artifacts only when their steps ran", () => {
+    expect(buildStageParams("render", OPTIONS)).toEqual({});
+    expect(buildStageParams("render", { ...OPTIONS, enabledStages: ["logo"] })).toEqual({
+      logo_removed: "true",
+    });
+    expect(buildStageParams("render", { ...OPTIONS, enabledStages: ["audio", "logo"] })).toEqual({
+      logo_removed: "true",
+      audio_mix: "true",
+    });
+  });
+});
+
+describe("subtitleStyleToWire", () => {
+  it("maps a custom preset to the worker's wire fields", () => {
+    expect(
+      subtitleStyleToWire({
+        font: "Arial",
+        fontSizePlayRes: 44,
+        strokePlayRes: 2,
+        shadowPlayRes: 1,
+        position: "custom",
+        bgBox: false,
+        customX: 0.4,
+        customY: 0.8,
+      }),
+    ).toEqual({ position: "custom", custom_x: 0.4, custom_y: 0.8 });
+    expect(
+      subtitleStyleToWire({
+        font: "Arial",
+        fontSizePlayRes: 44,
+        strokePlayRes: 2,
+        shadowPlayRes: 1,
+        position: "bottom_center",
+        bgBox: false,
+      }),
+    ).toEqual({ position: "bottom_center" });
   });
 });
 
@@ -118,6 +231,66 @@ describe("watermarkToWire", () => {
         opacity: 0.5,
       },
     });
+  });
+});
+
+describe("chunked pipeline (TASK_AUTOMATION_PINELINE)", () => {
+  it("chunk stage params carry provider, language, dub + render options", () => {
+    const params = buildStageParams("chunk", {
+      ...OPTIONS,
+      sourceLanguage: "zh",
+      dubAudio: true,
+    });
+    expect(params.provider).toBe("gemini");
+    expect(params.target_language).toBe("vi");
+    expect(params.source_language).toBe("zh");
+    expect(params.dub).toBe("true");
+    expect(params.engine).toBe("edge");
+    expect(params.voice).toBe("vi-VN-HoaiMyNeural");
+    expect(params.burn_subtitles).toBeUndefined();
+    // The default watermark kind is "none" → no watermark wire payload.
+    expect(params.watermark).toBeUndefined();
+  });
+
+  it("chunk stage omits dub options when dubbing is off", () => {
+    const params = buildStageParams("chunk", { ...OPTIONS, dubAudio: false });
+    expect(params.dub).toBeUndefined();
+    expect(params.voice).toBeUndefined();
+    expect(params.engine).toBeUndefined();
+  });
+
+  it("automationPipelineSteps collapses the chain to one chunk job", () => {
+    const steps = automationPipelineSteps(true, false, true);
+    expect(steps).toEqual(["chunk"]);
+  });
+
+  it("automationPipelineSteps keeps the classic chain when chunked is off", () => {
+    const steps = automationPipelineSteps(true, false, false);
+    expect(steps).toEqual(["transcribe", "translate", "subtitle", "tts", "render"]);
+  });
+
+  it("the chunk plan derives real job status like any stage", () => {
+    const plan = startPipelineWithSteps(["chunk"], {
+      sourceLanguage: "",
+      targetLanguage: "vi",
+      provider: "gemini",
+      dubAudio: false,
+    });
+    const submitted = markStageSubmitted(plan, "chunk", "job_1");
+    const stages = deriveStages(submitted, [
+      {
+        id: "job_1",
+        status: "running",
+        progress: 0.42,
+        stage: "chunk-stt",
+        error_code: null,
+        error_message: null,
+      },
+    ]);
+    expect(stages[0].key).toBe("chunk");
+    expect(stages[0].status).toBe("running");
+    expect(stages[0].progress).toBe(0.42);
+    expect(derivePhase(stages, submitted.startedAt)).toBe("running");
   });
 });
 

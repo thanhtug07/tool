@@ -67,6 +67,9 @@ pub fn run() {
             commands::project::list_projects,
             commands::project::save,
             commands::project::delete,
+            commands::project::rename,
+            commands::project::update_settings,
+            commands::project::find_by_source_video,
             commands::job::submit,
             commands::job::get,
             commands::job::list,
@@ -85,12 +88,18 @@ pub fn run() {
             commands::subtitle::update_cue,
             commands::export::export_video,
             commands::export::export_subtitles,
+            commands::media::media_probe_command,
             commands::pipeline::artifact_paths_command,
+            commands::models::catalog,
+            commands::models::list_local,
+            commands::models::download,
             commands::settings::set_api_key,
             commands::settings::get_api_key_masked,
             commands::settings::delete_api_key,
             commands::settings::get_all,
             commands::settings::set,
+            commands::settings::voices,
+            commands::settings::tts_preview,
             commands::provider::list_providers,
             commands::provider::get_provider,
             commands::provider::create_provider,
@@ -101,20 +110,12 @@ pub fn run() {
             commands::provider::test_provider,
         ])
         .setup(|app| {
-            // Release-mode packaging (MASTER_PLAN §32): when the bundled
-            // worker + FFmpeg resources are present next to the binary, the
-            // worker is spawned from the bundle — no Python on PATH, no
-            // source tree. Dev mode falls back to `python -m src.main`.
-            let mut worker_config = WorkerManagerConfig::default();
-            let resource_dir = app.path().resource_dir().ok();
-            if let Some(res) = &resource_dir {
-                let bundled = res.join("worker/worker.exe");
-                if bundled.is_file() {
-                    log::info!("release mode: bundled worker at {}", bundled.display());
-                    worker_config.worker_bin = Some(bundled);
-                    worker_config.resource_dir = Some(res.clone());
-                }
-            }
+            // Local-development mode: the AI worker is always spawned from the
+            // Python source tree (`python -m src.main` via WORKER_PYTHON/PATH).
+            // No bundled `worker.exe` exists anymore — packaging/release builds
+            // (PyInstaller, installer, updater) are out of scope for this
+            // repository (see DEVELOPMENT.md).
+            let worker_config = WorkerManagerConfig::default();
             app.manage(WorkerManager::new(worker_config));
 
             // The app keeps running even if the worker cannot start (e.g. no
@@ -133,6 +134,19 @@ pub fn run() {
             // All services are shared with the pipeline runner via `Arc`.
             let data_dir = app.path().app_data_dir()?;
             let projects = Arc::new(ProjectService::open(data_dir.clone()));
+
+            // Asset-protocol scope: every registered project's source video
+            // and working directory (audio/transcript/subtitle/output
+            // artifacts) becomes previewable via `asset://`. New projects are
+            // scoped at `project.create`; this covers projects from older
+            // app versions on startup.
+            for project in projects.list().unwrap_or_default() {
+                commands::media::allow_project_media(
+                    app.handle(),
+                    &project,
+                    &projects.project_dir(&project.id),
+                );
+            }
             let settings = Arc::new(SettingsService::open(data_dir.clone()));
             let secrets = Arc::new(SecretStore::new());
             let subtitles = Arc::new(SubtitleService::open(data_dir.clone()));

@@ -8,6 +8,7 @@
 //! whole clip into memory.
 
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 
 use tauri::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use tauri::http::{Request, Response, StatusCode};
@@ -137,8 +138,8 @@ pub fn mime_for(path: &str) -> &'static str {
 /// directory (cache/ + output/ artifacts such as the extracted audio or the
 /// rendered video) is served — the UI needs those to preview pipeline output.
 /// Arbitrary files outside a project directory are still refused.
-fn allowed_media_paths<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
-    let Some(service) = app.try_state::<ProjectService>() else {
+pub fn allowed_media_paths<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    let Some(service) = app.try_state::<Arc<ProjectService>>() else {
         return Vec::new();
     };
     let Ok(projects) = service.list() else {

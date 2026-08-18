@@ -3,10 +3,11 @@
 Two responsibilities, both feeding cost control:
 
 1. **TranslationMemory** — an exact-source cache keyed by
-   ``(source_hash, target_language, glossary_ver, model)`` (MASTER_PLAN.md
-   §8.4.3). Repeating segments are answered from memory without calling the
-   LLM; when the glossary (or its fingerprint) changes, ``glossary_ver``
-   rotates and stale entries become misses.
+   ``(source_hash, target_language, glossary_ver, rules_ver, model)``
+   (MASTER_PLAN.md §8.4.3). Repeating segments are answered from memory
+   without calling the LLM; when the glossary (or its fingerprint) or the
+   translation rules change, ``glossary_ver``/``rules_ver`` rotate and stale
+   entries become misses.
 2. **TranslationService.translate_segments** — chunks cues with the Context
    Engine, resolves whole blocks from memory when possible, and otherwise
    translates via a provider behind the QualityGate (retry/validation).
@@ -41,32 +42,46 @@ def source_hash(text: str) -> str:
     return hashlib.sha256(text.strip().lower().encode("utf-8")).hexdigest()
 
 
+def rules_version(rules: Sequence[str] | None) -> str:
+    """Stable fingerprint of the translation rules — part of the TM key.
+
+    Rules change how the provider translates (e.g. natural vs literal), so a
+    memory entry made under one rule set must never answer under another.
+    ``None``/empty rules hash to a fixed sentinel so entries stay shareable
+    across jobs that pass no rules. FIX #5 (review 2026-08-18).
+    """
+    if not rules:
+        return "none"
+    return hashlib.sha256("\n".join(sorted(rules)).encode("utf-8")).hexdigest()
+
+
 @dataclass
 class TMCacheEntry:
     hash: str
     target_language: str
     glossary_ver: str
     model: str
-    idx: int
-    segment_id: str
-    source_text: str
-    translated_text: str
-    confidence: float
+    rules_ver: str = "none"
+    idx: int = 0
+    segment_id: str = ""
+    source_text: str = ""
+    translated_text: str = ""
+    confidence: float = 1.0
 
 
 class TranslationMemory:
-    """Exact-source translation cache keyed by (hash, target, glossary_ver, model)."""
+    """Exact-source translation cache keyed by (hash, target, glossary_ver, rules_ver, model)."""
 
     def __init__(self, entries: Mapping[tuple, TMCacheEntry] | None = None) -> None:
         self._entries: dict[tuple, TMCacheEntry] = dict(entries or {})
 
-    def _key(self, text: str, target_language: str, glossary_ver: str, model: str) -> tuple:
-        return (source_hash(text), target_language, glossary_ver, model)
+    def _key(self, text: str, target_language: str, glossary_ver: str, rules_ver: str, model: str) -> tuple:
+        return (source_hash(text), target_language, glossary_ver, rules_ver, model)
 
     def get(
-        self, text: str, *, target_language: str, glossary_ver: str, model: str
+        self, text: str, *, target_language: str, glossary_ver: str, rules_ver: str, model: str
     ) -> TMCacheEntry | None:
-        return self._entries.get(self._key(text, target_language, glossary_ver, model))
+        return self._entries.get(self._key(text, target_language, glossary_ver, rules_ver, model))
 
     def put(
         self,
@@ -74,6 +89,7 @@ class TranslationMemory:
         *,
         target_language: str,
         glossary_ver: str,
+        rules_ver: str,
         model: str,
     ) -> None:
         entry = TMCacheEntry(
@@ -81,13 +97,14 @@ class TranslationMemory:
             target_language=target_language,
             glossary_ver=glossary_ver,
             model=model,
+            rules_ver=rules_ver,
             idx=item.idx,
             segment_id=item.segment_id,
             source_text=item.source_text,
             translated_text=item.translated_text,
             confidence=item.confidence,
         )
-        self._entries[self._key(item.source_text, target_language, glossary_ver, model)] = entry
+        self._entries[self._key(item.source_text, target_language, glossary_ver, rules_ver, model)] = entry
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -99,6 +116,7 @@ class TranslationMemory:
                 "target_language": e.target_language,
                 "glossary_ver": e.glossary_ver,
                 "model": e.model,
+                "rules_ver": e.rules_ver,
                 "idx": e.idx,
                 "segment_id": e.segment_id,
                 "source_text": e.source_text,
@@ -115,7 +133,13 @@ class TranslationMemory:
             return cls()
         payload = json.loads(path.read_text(encoding="utf-8"))
         entries = {
-            (e["hash"], e["target_language"], e["glossary_ver"], e["model"]): TMCacheEntry(**e)
+            (
+                e["hash"],
+                e["target_language"],
+                e["glossary_ver"],
+                e.get("rules_ver", "none"),
+                e["model"],
+            ): TMCacheEntry(**e)
             for e in payload
         }
         return cls(entries)
@@ -164,7 +188,7 @@ class TranslationService:
             ],
         )
 
-    def _store(self, segments: Sequence[SourceSegment], block: TranslationBlock, *, target_language: str, glossary_ver: str, model: str) -> None:
+    def _store(self, segments: Sequence[SourceSegment], block: TranslationBlock, *, target_language: str, glossary_ver: str, rules_ver: str, model: str) -> None:
         by_id = {t.segment_id: t for t in block.translations}
         for segment in segments:
             item = by_id.get(segment.segment_id)
@@ -179,7 +203,7 @@ class TranslationService:
                     translated_text=item.translated_text,
                     confidence=item.confidence,
                 )
-            self.tm.put(item, target_language=target_language, glossary_ver=glossary_ver, model=model)
+            self.tm.put(item, target_language=target_language, glossary_ver=glossary_ver, rules_ver=rules_ver, model=model)
 
     def translate_segments(
         self,
@@ -197,6 +221,9 @@ class TranslationService:
     ) -> list[TranslationBlock]:
         if not segments:
             return []
+        # Rules shape the provider output, so the memory key must rotate with
+        # them (FIX #5, review 2026-08-18).
+        rules_v = rules_version(rules)
         prepared = self.engine.process(
             segments,
             target_language=target_language,
@@ -220,6 +247,7 @@ class TranslationService:
                     seg.text,
                     target_language=target_language,
                     glossary_ver=glossary_ver,
+                    rules_ver=rules_v,
                     model=model,
                 )
                 for seg in p.segments
@@ -233,7 +261,7 @@ class TranslationService:
                         E_TRANSLATION,
                         f"block {p.block_idx} failed after {report.attempts} attempt(s): {report.error}",
                     )
-                self._store(p.segments, report.result, target_language=target_language, glossary_ver=glossary_ver, model=model)
+                self._store(p.segments, report.result, target_language=target_language, glossary_ver=glossary_ver, rules_ver=rules_v, model=model)
                 blocks.append(report.result)
             if on_progress is not None and total:
                 on_progress(index / total)

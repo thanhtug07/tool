@@ -25,6 +25,15 @@ pub enum JobType {
     Subtitle,
     Tts,
     Render,
+    /// Custom-workflow step: remove a marked logo region (ffmpeg ``delogo``).
+    Logo,
+    /// Custom-workflow step: process the audio (vocal removal / normalize /
+    /// denoise) into a track the render maps instead of the original.
+    Audio,
+    /// Chunked parallel pipeline (TASK_AUTOMATION_PINELINE): the whole
+    /// STT→translate→(TTS)→subtitle chain runs inside one job, chunked into
+    /// fixed-length segments under bounded concurrency, then renders.
+    Chunk,
 }
 
 impl JobType {
@@ -35,6 +44,9 @@ impl JobType {
             JobType::Subtitle => "subtitle",
             JobType::Tts => "tts",
             JobType::Render => "render",
+            JobType::Logo => "logo",
+            JobType::Audio => "audio",
+            JobType::Chunk => "chunk",
         }
     }
 
@@ -45,6 +57,9 @@ impl JobType {
             "subtitle" => Some(JobType::Subtitle),
             "tts" => Some(JobType::Tts),
             "render" => Some(JobType::Render),
+            "logo" => Some(JobType::Logo),
+            "audio" => Some(JobType::Audio),
+            "chunk" => Some(JobType::Chunk),
             _ => None,
         }
     }

@@ -17,15 +17,12 @@ Implements the frozen :class:`TranslationProvider` protocol (ADR §3.3).
 
 from __future__ import annotations
 
-from typing import Any
-
 from src.api.schemas import TranslationBlock, TranslationItem
 from src.services.providers.base import (
     E_PROVIDER,
     BlockInput,
     CostEstimate,
     ProviderError,
-    TranslationProvider,
 )
 
 #: Map: ``target_language -> {source_text: translated_text}``.

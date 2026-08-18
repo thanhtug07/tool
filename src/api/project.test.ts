@@ -5,7 +5,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { createProject, deleteProject, listProjects, openProject, type Project } from "./project";
+import {
+  createProject,
+  deleteProject,
+  findProjectBySourceVideo,
+  listProjects,
+  openProject,
+  type Project,
+} from "./project";
 
 const mockedInvoke = vi.mocked(invoke);
 
@@ -38,6 +45,21 @@ describe("project bridge (unit — mocked invoke)", () => {
     const project = await openProject(PROJECT.id);
     expect(mockedInvoke).toHaveBeenCalledWith("project.open", { id: PROJECT.id });
     expect(project.name).toBe("Sample");
+  });
+
+  it("finds an existing project for a source video path", async () => {
+    mockedInvoke.mockResolvedValue(PROJECT);
+    const project = await findProjectBySourceVideo("C:\\Videos\\sample.mp4");
+    expect(mockedInvoke).toHaveBeenCalledWith("project.findBySourceVideo", {
+      videoPath: "C:\\Videos\\sample.mp4",
+    });
+    expect(project?.id).toBe(PROJECT.id);
+  });
+
+  it("returns null when the source video has no project yet", async () => {
+    mockedInvoke.mockResolvedValue(null);
+    const project = await findProjectBySourceVideo("D:\\other.mp4");
+    expect(project).toBeNull();
   });
 
   it("lists projects", async () => {

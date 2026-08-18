@@ -1,5 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { onModelDownloadProgress } from "@/api/events";
+import {
+  downloadModel,
+  listLocalModels,
+  modelCatalog,
+  type LocalModelInfo,
+  type ModelCatalogEntry,
+} from "@/api/models";
 import {
   createProvider,
   deleteProvider,
@@ -22,22 +30,11 @@ const CAPABILITY_LABELS: Record<ProviderCapability, string> = {
   tts: "TTS",
 };
 
-const KIND_LABELS: Record<ProviderKind, string> = {
-  free: "FREE (built-in)",
-  gemini: "Gemini (cloud)",
-  local: "Local LLM (llama.cpp / OpenAI-compatible)",
-  mock: "Mock (offline test)",
-};
-
 const INPUT_CLS = "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm";
 const LABEL_CLS = "text-xs font-medium text-muted-foreground";
 
 function capLabel(cap: string): string {
   return CAPABILITY_LABELS[cap as ProviderCapability] ?? cap;
-}
-
-function kindLabel(kind: string): string {
-  return KIND_LABELS[kind as ProviderKind] ?? kind;
 }
 
 // ---- form state ------------------------------------------------------------
@@ -112,6 +109,190 @@ function Modal({
 }
 
 // ---- main panel ------------------------------------------------------------
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${bytes} B`;
+}
+
+/**
+ * Local LLM model management: downloads a translation GGUF into the app-data
+ * models dir (via the worker) with live progress, then can point the FREE
+ * provider's `model_path` at it — so offline translation works without a
+ * manually-started llama-server.
+ */
+export function LocalModelManager() {
+  const toast = useToast();
+  const { providers, refresh } = useProviders();
+  const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([]);
+  const [installed, setInstalled] = useState<LocalModelInfo[]>([]);
+  const [downloading, setDownloading] = useState<ModelCatalogEntry | null>(null);
+  const [progress, setProgress] = useState<{ fraction: number; message: string | null }>({
+    fraction: 0,
+    message: null,
+  });
+
+  const load = useCallback(async () => {
+    try {
+      const [cat, local] = await Promise.all([modelCatalog(), listLocalModels()]);
+      setCatalog(cat.models);
+      setInstalled(local);
+    } catch (error) {
+      toast.push(`Cannot load the model catalog: ${String(error)}`, "error");
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void load();
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onModelDownloadProgress((event) => {
+      setProgress(() => ({ fraction: event.progress, message: event.message ?? null }));
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [load]);
+
+  const handleDownload = useCallback(
+    async (entry: ModelCatalogEntry) => {
+      setDownloading(entry);
+      setProgress({ fraction: 0, message: "Starting download…" });
+      try {
+        await downloadModel(entry.repo_id, entry.filename);
+        toast.push(`Model "${entry.name}" downloaded`, "success");
+        await load();
+      } catch (error) {
+        toast.push(`Download failed: ${String(error)}`, "error");
+      } finally {
+        setDownloading(null);
+      }
+    },
+    [load, toast],
+  );
+
+  const handleUseAsFreeModel = useCallback(
+    async (model: LocalModelInfo) => {
+      const free = providers.find((p) => p.id === "free");
+      if (!free) {
+        toast.push("The built-in FREE provider is not configured.", "error");
+        return;
+      }
+      try {
+        await updateProvider(free.id, {
+          name: free.name,
+          provider_type: free.provider_type,
+          provider_kind: "free",
+          capabilities: free.capabilities,
+          config: { ...(free.config ?? {}), model_path: model.path },
+        });
+        toast.push("FREE provider now uses this model file (offline LLM)", "success");
+        await refresh();
+      } catch (error) {
+        toast.push(`Could not set the model: ${String(error)}`, "error");
+      }
+    },
+    [providers, refresh, toast],
+  );
+
+  const installedFiles = useMemo(() => new Set(installed.map((m) => m.file_name)), [installed]);
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Local LLM model (free / offline)
+        </p>
+        <Button size="sm" variant="ghost" onClick={() => void load()}>
+          Refresh
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Download a GGUF once; it is stored in the app data dir and needs no API key. Point the FREE
+        provider at it for fully offline translation.
+      </p>
+
+      {catalog.length === 0 && <p className="text-xs text-muted-foreground">Loading catalog…</p>}
+
+      <ul className="space-y-2">
+        {catalog.map((entry) => {
+          const alreadyInstalled = installedFiles.has(entry.filename);
+          return (
+            <li
+              key={entry.id}
+              data-role={`model-catalog-${entry.id}`}
+              className="flex flex-wrap items-center justify-between gap-2"
+            >
+              <div>
+                <p className="text-sm font-medium">{entry.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatBytes(entry.size_bytes)} · {entry.filename}
+                </p>
+              </div>
+              {alreadyInstalled ? (
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-400">
+                  Installed
+                </span>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={downloading !== null}
+                  data-role={`model-download-${entry.id}`}
+                  onClick={() => void handleDownload(entry)}
+                >
+                  {downloading?.id === entry.id ? "Downloading…" : "Download model"}
+                </Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {downloading && (
+        <div className="space-y-1">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{ width: `${(progress.fraction * 100).toFixed(0)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>
+              {(progress.fraction * 100).toFixed(1)}% · {downloading.name}
+            </span>
+            {progress.message && <span className="truncate pl-2">{progress.message}</span>}
+          </div>
+        </div>
+      )}
+
+      {installed.length > 0 && (
+        <div className="space-y-1 pt-1">
+          <p className="text-xs font-medium text-muted-foreground">Installed models</p>
+          {installed.map((model) => (
+            <div
+              key={model.path}
+              data-role="installed-model"
+              className="flex flex-wrap items-center justify-between gap-2"
+            >
+              <span className="max-w-[60%] truncate text-xs" title={model.path}>
+                {model.file_name} ({formatBytes(model.size_bytes)})
+              </span>
+              <Button size="sm" variant="outline" onClick={() => void handleUseAsFreeModel(model)}>
+                Use for FREE provider
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ProvidersPanel() {
   const toast = useToast();
@@ -239,41 +420,33 @@ export function ProvidersPanel() {
 
   return (
     <div className="space-y-4">
-      {/* Defaults per capability */}
-      <div className="space-y-2 rounded-lg border border-border bg-card p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Default providers
-        </p>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="w-28 shrink-0 text-muted-foreground">Translation</span>
-          <select
-            data-role="default-translation-provider"
-            className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-            value={translationDefault?.id ?? "free"}
-            onChange={(e) => void handleSetDefault(e.target.value)}
-          >
-            {translationOptions.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.provider_kind === "free" ? " (local, free)" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="w-28 shrink-0 text-muted-foreground">STT</span>
-          <span className="text-sm">Local (faster-whisper — built-in)</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="w-28 shrink-0 text-muted-foreground">TTS</span>
-          <span className="text-sm text-muted-foreground">Not available in this build</span>
-        </div>
+      {/* Default translation provider — compact row */}
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-xs text-muted-foreground">Default</span>
+        <select
+          data-role="default-translation-provider"
+          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          value={translationDefault?.id ?? "free"}
+          onChange={(e) => void handleSetDefault(e.target.value)}
+        >
+          {translationOptions.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* Add */}
+      <details className="rounded-md border border-border px-3 py-2">
+        <summary className="cursor-pointer text-xs text-muted-foreground">Local models</summary>
+        <div className="mt-2">
+          <LocalModelManager />
+        </div>
+      </details>
+
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Connected providers
+          Providers
         </p>
         <Button
           data-role="add-provider"
@@ -283,121 +456,49 @@ export function ProvidersPanel() {
             setForm(EMPTY_FORM);
           }}
         >
-          + Add Provider
+          + Add
         </Button>
       </div>
 
-      {/* Cards */}
-      <ul className="space-y-2">
+      {/* Cards — Name / Status / Default; click opens configure */}
+      <ul className="divide-y divide-border rounded-md border border-border">
         {providers.map((p) => {
           const isDefault = defaults.translation === p.id;
-          const isFree = p.id === "free";
           return (
             <li
               key={p.id}
               data-role={`provider-card-${p.id}`}
-              className="space-y-2 rounded-lg border border-border bg-card p-4"
+              className="flex items-center gap-2 px-3 py-2"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold">{p.name}</span>
-                  {isDefault && (
-                    <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
-                      Default
-                    </span>
-                  )}
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-                      p.enabled
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {p.enabled ? "Enabled" : "Disabled"}
-                  </span>
-                  {p.last_test_status && (
-                    <span
-                      title={p.last_test_at ?? undefined}
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-                        p.last_test_status === "success"
-                          ? "bg-emerald-500/20 text-emerald-400"
-                          : "bg-destructive/20 text-destructive"
-                      }`}
-                    >
-                      Last test: {p.last_test_status}
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={testingId === p.id}
-                    onClick={() => void handleTest(p)}
-                  >
-                    {testingId === p.id ? "Testing…" : "Test"}
-                  </Button>
-                  {!isFree && (
-                    <Button size="sm" variant="outline" onClick={() => void handleToggle(p)}>
-                      {p.enabled ? "Disable" : "Enable"}
-                    </Button>
-                  )}
-                  {!isDefault && !isFree && (
-                    <Button size="sm" variant="outline" onClick={() => void handleSetDefault(p.id)}>
-                      Set Default
-                    </Button>
-                  )}
-                  {!isFree && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setEditing(p);
-                        setForm(formFromProvider(p));
-                      }}
-                    >
-                      Configure
-                    </Button>
-                  )}
-                  {isFree && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setEditing(p);
-                        setForm(formFromProvider(p));
-                      }}
-                    >
-                      Configure
-                    </Button>
-                  )}
-                  {!isFree && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive"
-                      onClick={() => setDeleting(p)}
-                    >
-                      Delete
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {p.provider_kind === "free"
-                  ? "Local / free — no API key required · works offline when a local LLM server is configured"
-                  : kindLabel(p.provider_kind)}
-                {p.needs_key
-                  ? p.api_key_configured
-                    ? " · API key configured"
-                    : " · API key missing — add one to use this provider"
-                  : ""}
-              </p>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>Capabilities: {p.capabilities.map(capLabel).join(" · ") || "—"}</span>
-                {p.model && <span>Model: {p.model}</span>}
-                {p.base_url && <span className="truncate">{p.base_url}</span>}
-              </div>
+              <button
+                type="button"
+                className="min-w-0 flex-1 text-left"
+                onClick={() => {
+                  setEditing(p);
+                  setForm(formFromProvider(p));
+                }}
+              >
+                <span className="text-sm font-medium">{p.name}</span>
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                  {p.enabled ? "Enabled" : "Disabled"}
+                  {p.needs_key && !p.api_key_configured ? " · key missing" : ""}
+                </span>
+              </button>
+              {isDefault && (
+                <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                  Default
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setEditing(p);
+                  setForm(formFromProvider(p));
+                }}
+              >
+                Configure
+              </Button>
             </li>
           );
         })}
@@ -501,7 +602,7 @@ export function ProvidersPanel() {
                     id="provider-model"
                     data-role="provider-model"
                     className={INPUT_CLS}
-                    placeholder="gemini-2.5-flash-lite"
+                    placeholder="gemini-flash-lite-latest"
                     value={form.model}
                     onChange={(e) => setForm({ ...form, model: e.target.value })}
                   />
@@ -550,6 +651,32 @@ export function ProvidersPanel() {
               </p>
             </div>
             <div className="flex flex-wrap justify-end gap-2 pt-1">
+              {editing && editing.id !== "free" && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={testingId === editing.id}
+                    onClick={() => void handleTest(editing)}
+                  >
+                    {testingId === editing.id ? "Testing…" : "Test"}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void handleToggle(editing)}>
+                    {editing.enabled ? "Disable" : "Enable"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    onClick={() => {
+                      setDeleting(editing);
+                      setForm(null);
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </>
+              )}
               <Button
                 variant="ghost"
                 disabled={busy}

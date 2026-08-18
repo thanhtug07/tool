@@ -11,7 +11,9 @@ export type SettingsKey =
   | "api.local.base_url"
   | "cache.quota_bytes"
   | "privacy.mode"
-  | "privacy.telemetry";
+  | "privacy.telemetry"
+  | "tts.engine"
+  | "tts.voice";
 
 /** Typed snapshot of every known setting (stored value or built-in default). */
 export type SettingsSnapshot = {
@@ -25,6 +27,8 @@ export type SettingsSnapshot = {
   "cache.quota_bytes": number;
   "privacy.mode": "local" | "cloud";
   "privacy.telemetry": boolean;
+  "tts.engine": "edge" | "piper";
+  "tts.voice": string;
 };
 
 /** Providers that can hold an API key in the OS credential vault. */

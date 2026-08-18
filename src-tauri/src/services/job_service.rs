@@ -91,19 +91,6 @@ pub trait JobRunner: Send + Sync {
     fn run(&self, job: &Job, ctx: &JobRunContext<'_>) -> Result<(), JobRunError>;
 }
 
-/// Placeholder runner used until concrete executors (worker HTTP dispatch) are
-/// wired by later pipeline tasks. It fails honestly instead of faking success.
-pub struct NotWiredRunner;
-
-impl JobRunner for NotWiredRunner {
-    fn run(&self, job: &Job, _ctx: &JobRunContext<'_>) -> Result<(), JobRunError> {
-        Err(JobRunError::Permanent {
-            code: "E_JOB_NOT_WIRED".into(),
-            message: format!("no executor wired for job type `{}`", job.job_type.as_str()),
-        })
-    }
-}
-
 /// `job:status` payload (MASTER_PLAN.md §25.2).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

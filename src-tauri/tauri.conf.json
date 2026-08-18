@@ -14,20 +14,24 @@
       {
         "label": "main",
         "title": "AI Video Localization Studio",
-        "width": 1200,
-        "height": 800,
+        "width": 1360,
+        "height": 840,
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true
       }
     ],
     "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      },
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",
         "style-src": "'self'",
         "img-src": "'self' asset: http://asset.localhost blob: data:",
-        "media-src": "'self' media: blob: data:",
+        "media-src": "'self' asset: http://asset.localhost media: blob: data:",
         "font-src": "'self' data:",
         "connect-src": "ipc: http://ipc.localhost",
         "object-src": "'none'",
@@ -40,7 +44,7 @@
         "script-src": "'self' 'unsafe-inline'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' asset: http://asset.localhost blob: data:",
-        "media-src": "'self' media: blob: data:",
+        "media-src": "'self' asset: http://asset.localhost media: blob: data:",
         "font-src": "'self' data:",
         "connect-src": "ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420",
         "object-src": "'none'",
@@ -50,8 +54,9 @@
       }
     }
   },
+  "plugins": {},
   "bundle": {
-    "active": true,
+    "active": false,
     "targets": "all",
     "category": "Productivity",
     "icon": [
@@ -62,8 +67,8 @@
       "icons/icon.png"
     ],
     "resources": {
-      "../worker-dist/worker": "worker",
-      "../vendor/ffmpeg": "ffmpeg"
+      "../vendor/ffmpeg": "ffmpeg",
+      "../vendor/llama": "llama"
     }
   }
 }

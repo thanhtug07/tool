@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 
-import { getSubtitleCues, updateSubtitleCue } from "@/api/subtitle";
-import type { CuePatch, SubtitleCue } from "@/api/subtitle";
+import { getSubtitleCues, replaceSubtitleCues, updateSubtitleCue } from "@/api/subtitle";
+import type { CuePatch, SubtitleCue, SubtitleCueInput } from "@/api/subtitle";
 
 const EMPTY_PROJECT = "00000000-0000-4000-8000-000000000000";
 const SAVE_DEBOUNCE_MS = 600;
@@ -40,7 +40,7 @@ export type EditorAction =
   | { type: "cancel-edit" }
   | { type: "set-draft"; field: keyof DraftFields; value: string }
   | { type: "commit-edit" }
-  | { type: "save-ok"; saved: SubtitleCue }
+  | { type: "save-ok"; saved: SubtitleCue; pending: CuePatchPending }
   | { type: "undo" };
 
 function parseSeconds(field: string): number | null {
@@ -95,11 +95,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
     }
     case "save-ok": {
-      const { saved } = action;
+      const { saved, pending } = action;
+      // Only clear the dirty slot if the pending edit that just saved is still
+      // the current one. If the user edited again while the save was in flight,
+      // `pending` now points at a *newer* edit — clearing it here would lose
+      // that edit (the debounced timer re-schedules it once it resolves).
       return {
         ...state,
         cues: state.cues.map((c) => (c.id === saved.id ? saved : c)),
-        pending: null,
+        pending: state.pending === pending ? null : state.pending,
       };
     }
     case "undo": {
@@ -156,8 +160,9 @@ export function CueTable(props: {
   onSetDraft: (field: keyof DraftFields, value: string) => void;
   onCommitEdit: () => void;
   onCancelEdit: () => void;
+  onDelete: (id: string) => void;
 }) {
-  const { cues, editingId, drafts } = props;
+  const { cues, editingId, drafts, onBeginEdit, onDelete } = props;
   const [scrollTop, setScrollTop] = useState(0);
 
   const totalHeight = cues.length * ROW_HEIGHT;
@@ -182,8 +187,11 @@ export function CueTable(props: {
               key={cue.id}
               data-role="cue-row"
               data-cue-number={cue.cue_number}
-              className="absolute left-0 right-0 flex items-start gap-3 border-b border-border px-3 py-2"
+              className={`absolute left-0 right-0 flex items-start gap-3 border-b border-border px-3 py-2 ${
+                editingId === cue.id ? "" : "cursor-pointer"
+              }`}
               style={{ top: (start + index) * ROW_HEIGHT, height: ROW_HEIGHT }}
+              onDoubleClick={() => onBeginEdit(cue.id)}
             >
               <span className="w-10 shrink-0 text-xs tabular-nums text-muted-foreground">
                 {cue.cue_number}
@@ -272,6 +280,15 @@ export function CueTable(props: {
                   <span className="shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
                     {cue.status}
                   </span>
+                  <button
+                    type="button"
+                    data-role="delete-cue"
+                    title="Delete this subtitle from the video"
+                    onClick={() => onDelete(cue.id)}
+                    className="shrink-0 rounded px-1.5 text-xs text-red-400 hover:bg-destructive/10"
+                  >
+                    ✕
+                  </button>
                   <span className="sr-only">Double-click to edit</span>
                 </>
               )}
@@ -303,7 +320,7 @@ export default function SubtitleEditorView({
     setSaving(true);
     try {
       const saved = await updateSubtitleCue(id, patch);
-      dispatch({ type: "save-ok", saved });
+      dispatch({ type: "save-ok", saved, pending });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -371,6 +388,30 @@ export default function SubtitleEditorView({
     try {
       const cues = await getSubtitleCues(projectId);
       dispatch({ type: "load", cues });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  // Delete one cue by replacing the project's cue set with the remaining rows.
+  // The backend keeps the surviving cues' numbers, so the timeline order and
+  // the burned-in render stay consistent.
+  async function deleteCue(id: string) {
+    if (!window.confirm("Delete this subtitle segment?")) return;
+    const remaining = state.cues.filter((c) => c.id !== id);
+    if (remaining.length === 0) return;
+    setError(null);
+    try {
+      const inputs: SubtitleCueInput[] = remaining.map((c) => ({
+        cue_number: c.cue_number,
+        start: c.start,
+        end: c.end,
+        text: c.text,
+        speaker: c.speaker,
+        source_text: c.source_text,
+      }));
+      await replaceSubtitleCues(projectId, inputs);
+      dispatch({ type: "load", cues: remaining });
     } catch (e) {
       setError(String(e));
     }
@@ -467,10 +508,12 @@ export default function SubtitleEditorView({
         onSetDraft={(field, value) => dispatch({ type: "set-draft", field, value })}
         onCommitEdit={() => dispatch({ type: "commit-edit" })}
         onCancelEdit={() => dispatch({ type: "cancel-edit" })}
+        onDelete={(id) => void deleteCue(id)}
       />
 
       <p className="text-xs text-muted-foreground">
-        Double-click a cue row to edit its timing, speaker and translation.
+        Double-click a cue row to edit its timing, speaker and translation. Deleted cues are removed
+        from the burned-in video on the next render.
       </p>
     </section>
   );

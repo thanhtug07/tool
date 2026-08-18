@@ -21,7 +21,7 @@ export const PLAY_RES_Y = 1080;
 export const ASS_MARGIN_V = 24;
 export const ASS_MARGIN_LR = 10;
 
-export type OverlayPosition = "bottom_center" | "top_center";
+export type OverlayPosition = "bottom_center" | "top_center" | "custom";
 
 export type SubtitleOverlayStyle = {
   font: string;
@@ -33,6 +33,13 @@ export type SubtitleOverlayStyle = {
   shadowPlayRes: number;
   position: OverlayPosition;
   bgBox: boolean;
+  /**
+   * Custom anchor for `position: "custom"` — fractions (0..1) of the video
+   * frame with the text center as the anchor, matching the drag interaction
+   * in the preview and the worker's `\(\pos(x,y)\)` burn-in.
+   */
+  customX?: number;
+  customY?: number;
 };
 
 /** ASS-default overlay style shared by the vi/zh/en presets. */
@@ -65,7 +72,19 @@ export function activeCue(cues: SubtitleCue[], time: number): SubtitleCue | null
   return null;
 }
 
-/** Render-time CSS for the caption overlay given a measured video height. */
+/** Clamp a custom-position fraction to the draggable area of the frame. */
+export function clampFraction(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Render-time CSS for the caption overlay given a measured video height.
+ *
+ * `position: "custom"` anchors the text center at `customX/customY` (frame
+ * fractions) instead of the ASS-style bottom/top margin — the dragged spot in
+ * the preview maps 1:1 to the worker's `\(\pos\)` burn-in.
+ */
 export function captionStyle(
   style: SubtitleOverlayStyle,
   videoHeightPx: number,
@@ -88,12 +107,8 @@ export function captionStyle(
     outlines.push(`0 ${shadow}px ${shadow}px rgba(0, 0, 0, 0.5)`);
   }
 
-  return {
+  const base: React.CSSProperties = {
     position: "absolute",
-    left: cssPx(marginLR),
-    right: cssPx(marginLR),
-    bottom: style.position === "bottom_center" ? cssPx(marginV) : "auto",
-    top: style.position === "top_center" ? cssPx(marginV) : "auto",
     textAlign: "center",
     color: "#fff",
     fontFamily: style.font,
@@ -103,5 +118,30 @@ export function captionStyle(
     textShadow: outlines.join(", "),
     backgroundColor: style.bgBox ? "rgba(0, 0, 0, 0.5)" : undefined,
     padding: style.bgBox ? `${cssPx(stroke)} ${cssPx(fontSize / 4)}` : undefined,
+    // The caption is always grabbable — any drag repositions it.
+    cursor: "grab",
+  };
+
+  if (style.position === "custom") {
+    const x = clampFraction(style.customX ?? 0.5, 0.08, 0.92);
+    const y = clampFraction(style.customY ?? 0.9, 0.06, 0.94);
+    return {
+      ...base,
+      left: `${x * 100}%`,
+      top: `${y * 100}%`,
+      transform: "translate(-50%, -50%)",
+      width: "max-content",
+      maxWidth: "84%",
+      whiteSpace: "pre-wrap",
+      cursor: "grab",
+    };
+  }
+
+  return {
+    ...base,
+    left: cssPx(marginLR),
+    right: cssPx(marginLR),
+    bottom: style.position === "bottom_center" ? cssPx(marginV) : "auto",
+    top: style.position === "top_center" ? cssPx(marginV) : "auto",
   };
 }

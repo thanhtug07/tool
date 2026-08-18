@@ -2,6 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { isTauri } from "@/lib/env";
 import type { JobLogEvent, JobStatusEvent } from "./job";
+import type { ModelDownloadProgress } from "./models";
 
 /**
  * Subscribe to `job:status` events emitted by the Rust JobService.
@@ -26,4 +27,19 @@ export function onJobLog(handler: (event: JobLogEvent) => void): Promise<Unliste
     return Promise.resolve(() => {});
   }
   return listen<JobLogEvent>("job:log", (event) => handler(event.payload));
+}
+
+/**
+ * Subscribe to `models:download-progress` events emitted while a translation
+ * GGUF downloads (Settings → Providers → Local LLM). No-op outside Tauri.
+ */
+export function onModelDownloadProgress(
+  handler: (event: ModelDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(() => {});
+  }
+  return listen<ModelDownloadProgress>("models:download-progress", (event) =>
+    handler(event.payload),
+  );
 }

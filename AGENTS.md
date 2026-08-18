@@ -38,7 +38,7 @@ Thứ tự trước khi báo xong: **typecheck + lint + format + test layer liê
 - Frontend: React + TS + Vite (`src/`); Rust: `src-tauri/`; Worker: Python (`worker/`).
 - Schema dùng chung: `schemas/*.json` (single source of truth); Pydantic models trong `worker/src/api/schemas.py` được generate từ đó.
 - Binaries/model KHÔNG commit: `vendor/` gitignored.
-- Build exe: `npm run tauri build` (đóng gói frontend + Rust core + worker PyInstaller bundle → installer/executable phân phối được).
+- Build exe: KHÔNG còn trong scope — repo chạy local-development-only (`npm run tauri dev`); không đóng gói EXE/installer/updater.
 - Ngôn ngữ doc mặc định: tiếng Việt.
 
 ## Environment (đã detect trên máy dev)

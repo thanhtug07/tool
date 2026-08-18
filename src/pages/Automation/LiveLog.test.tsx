@@ -85,7 +85,7 @@ describe("LiveLogView", () => {
       ],
     });
     expect(html).toContain('data-role="live-log-status"');
-    expect(html).toContain("Running");
+    expect(html).toContain("Processing");
     expect(html).toContain('data-role="overall-pct"');
     expect(html).toContain("63%");
     expect(html).toContain('data-role="cancel-automation"');
