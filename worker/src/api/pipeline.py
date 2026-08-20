@@ -310,6 +310,8 @@ class ChunkedAutomationRequest(BaseModel):
     tts_engine: str = "edge"
     stt_model: str = "large-v3"
     stt_device: str = "auto"
+    stt_mode: str = "auto"
+    stt_batch_size: int = 2
     chunk_duration: float = 30.0
     overlap: float = 2.0
     max_concurrency: int = 4
@@ -909,6 +911,8 @@ def chunked_automation(request: ChunkedAutomationRequest) -> JSONResponse:
                 tts_engine=request.tts_engine,
                 stt_model=request.stt_model,
                 stt_device=request.stt_device,
+                stt_mode=request.stt_mode,
+                stt_batch_size=request.stt_batch_size,
                 chunk_duration=request.chunk_duration,
                 overlap=request.overlap,
                 max_concurrency=request.max_concurrency,

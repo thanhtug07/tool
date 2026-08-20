@@ -100,6 +100,9 @@ export type AutomationOptions = {
   /** Chunked parallel pipeline (TASK_AUTOMATION_PINELINE) — default off. */
   chunked: boolean;
   setChunked: (v: boolean) => void;
+  /** Directory the rendered video is auto-exported into on success ('' = none). */
+  outputFolder: string;
+  setOutputFolder: (v: string) => void;
   /** Logo removal (delogo) — region in source pixels, wired into the run. */
   logoRemoval: LogoRemovalConfig;
   setLogoRemoval: (v: LogoRemovalConfig) => void;
@@ -152,6 +155,8 @@ export type WorkspaceContext = {
     export(): void;
     copyPath(): void;
     openOutputFolder(): void;
+    /** Pick the folder the rendered video is auto-exported into on success. */
+    pickOutputFolder(): void;
     openProviderSettings(): void;
     openTool(tool: ToolId, projectId?: string): void;
   };

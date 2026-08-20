@@ -402,6 +402,7 @@ class MetricSampler:
         except Exception:  # noqa: BLE001 - optional dependency
             self._psutil = None
         self._samples: list[dict] = []
+        self._t0 = time.monotonic()
         self._running = False
 
     def start(self) -> "MetricSampler":
@@ -413,7 +414,7 @@ class MetricSampler:
     def _loop(self) -> None:
         util_path = shutil.which("nvidia-smi")
         while self._running:
-            sample: dict = {}
+            sample: dict = {"t": round(time.monotonic(), 2)}
             if self._psutil is not None and self._proc is not None:
                 try:
                     procs = [self._proc] + self._proc.children(recursive=True)
@@ -448,12 +449,18 @@ class MetricSampler:
             pass
         if not self._samples:
             return {}
+        t0 = min(s["t"] for s in self._samples)
+        timeline = [
+            {"t_rel_s": round(s["t"] - t0, 2), **{k: v for k, v in s.items() if k != "t"}}
+            for s in self._samples
+        ]
         return {
             "cpu_peak_percent": max(s.get("cpu_percent", 0) for s in self._samples),
             "ram_peak_mb": max(s.get("rss_mb", 0) for s in self._samples),
             "gpu_peak_percent": max((s.get("gpu_percent") for s in self._samples if "gpu_percent" in s), default=None),
             "vram_peak_mb": max((s.get("vram_mb") for s in self._samples if "vram_mb" in s), default=None),
             "samples": len(self._samples),
+            "timeline": timeline,
         }
 
 

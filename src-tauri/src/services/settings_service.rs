@@ -43,6 +43,8 @@ pub const SETTINGS_KEYS: &[&str] = &[
     "automation.chunk_overlap",
     "automation.chunk_concurrency",
     "automation.chunk_retries",
+    "automation.stt_mode",
+    "automation.stt_batch_size",
 ];
 
 /// Built-in defaults for keys that have never been written.
@@ -65,6 +67,8 @@ fn defaults() -> BTreeMap<&'static str, String> {
     map.insert("automation.chunk_overlap", "2".to_string());
     map.insert("automation.chunk_concurrency", "4".to_string());
     map.insert("automation.chunk_retries", "2".to_string());
+    map.insert("automation.stt_mode", "auto".to_string());
+    map.insert("automation.stt_batch_size", "2".to_string());
     map
 }
 
@@ -151,6 +155,23 @@ pub fn validate_setting(key: &str, value: &str) -> Result<String, DbError> {
             if v > 5 {
                 return Err(DbError::InvalidInput(
                     "automation.chunk_retries must be between 0 and 5".into(),
+                ));
+            }
+        }
+        "automation.stt_mode" => {
+            if !matches!(value, "auto" | "regular" | "batched") {
+                return Err(DbError::InvalidInput(
+                    "automation.stt_mode must be one of auto/regular/batched".into(),
+                ));
+            }
+        }
+        "automation.stt_batch_size" => {
+            let v: u32 = value.parse().map_err(|_| {
+                DbError::InvalidInput("automation.stt_batch_size must be an integer".into())
+            })?;
+            if !matches!(v, 1 | 2 | 4) {
+                return Err(DbError::InvalidInput(
+                    "automation.stt_batch_size must be one of 1/2/4".into(),
                 ));
             }
         }

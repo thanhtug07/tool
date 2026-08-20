@@ -24,6 +24,11 @@ Design rules honoured here:
   running* — a chunk's slow TTS tail no longer holds a worker slot away from
   the next chunk's STT (see :class:`StreamingChunkPipeline`). All the order /
   timeline / overlap / retry / cleanup guarantees above are unchanged.
+- **STT CPU thread budgeting** (2026-08-18): faster-whisper defaults
+  ``cpu_threads`` to *all* cores per ``transcribe()`` call, so N concurrent
+  chunks oversubscribed the machine N× and wall time barely dropped. Each STT
+  call now gets ``cores // stt_workers`` threads (see :func:`stt_thread_budget`)
+  so parallel chunks really run in parallel without thrashing.
 - Final video generation + **final validation** + **output verification** all
   run before **cleanup**; cleanup is the last step and keeps intermediates on
   any failure (per ``CleanupManager`` state machine).
@@ -42,6 +47,7 @@ import os
 import shutil
 import threading
 import time
+import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
@@ -70,6 +76,31 @@ DEFAULT_MAX_RETRIES = 2
 
 DEFAULT_DURATION_TOLERANCE = 0.5
 """Final-validation duration tolerance (seconds) between source and output."""
+
+# ---------------------------------------------------------------------------
+# STT quality guard (P1, 2026-08-20) — batched early-EOS collapse recovery
+#
+# faster-whisper ``BatchedInferencePipeline`` can emit an early `<|endoftext|>`
+# and swallow tens of seconds of speech *inside* a chunk (measured: a 21.3 s
+# block at local [7.5, 28.8] of a chunk starting mid-sentence). The output is
+# still formally valid (monotonic, non-overlapping, in-window) so timestamp
+# validation passes. The guard detects the acoustic signature — a long
+# interior gap between segments whose audio window carries speech energy —
+# and re-transcribes that chunk once in ``regular`` mode, which covers the
+# block fully (verified 30/30 s on the bench fixture).
+# ---------------------------------------------------------------------------
+
+STT_COVERAGE_RETRY_MIN_GAP = 3.0
+"""Interior gap (seconds) long enough to suspect a swallowed speech block."""
+
+STT_COVERAGE_RETRY_RMS_REL = 0.25
+"""Gap counts as "has speech" when its RMS ≥ this × the chunk's overall RMS."""
+
+STT_COVERAGE_RETRY_MIN_RMS = 200.0
+"""Absolute 16-bit RMS floor below which a gap is treated as silence."""
+
+STT_COVERAGE_RETRY_WINDOW_S = 0.5
+"""RMS measurement window (seconds) when analysing a gap for speech."""
 
 # Canonical chunk statuses (Phase 6).
 CHUNK_PENDING = "pending"
@@ -429,6 +460,20 @@ class ChunkScheduler:
 # ---------------------------------------------------------------------------
 
 
+def stt_thread_budget(stt_workers: int, cpu_count: int | None = None) -> int:
+    """Per-STT-call thread budget so concurrent STT chunks share the CPU.
+
+    faster-whisper defaults ``cpu_threads=0`` to *all* cores per
+    ``transcribe()`` call; with N chunks transcribing at once that
+    oversubscribes the machine N× and wall time barely drops. Budgeting
+    ``cores // stt_workers`` threads per call keeps
+    ``stt_workers × threads ≈ cores`` — real parallelism without thrashing.
+    One worker keeps all cores (no regression); very many workers floor at 1.
+    """
+    cpu_count = cpu_count or max(1, os.cpu_count() or 4)
+    return max(1, cpu_count // max(1, stt_workers))
+
+
 def _append_chunk_voice(
     pcm_file: Any,
     track_path: str | None,
@@ -614,6 +659,11 @@ class StreamingChunkPipeline:
             state = self._get(in_q)
             if state is None:
                 break
+            # Queue-wait instrumentation: seconds between "ready for this
+            # stage" (stamped by the upstream producer) and pickup now.
+            state.queue_wait[stage] = max(
+                0.0, time.monotonic() - state.ready.pop(stage, time.monotonic())
+            )
             attempts = 0
             while True:
                 self.manager.set_status(state.chunk.index, CHUNK_PROCESSING)
@@ -650,12 +700,17 @@ class StreamingChunkPipeline:
             if stage == "tts":
                 self._put(self.completed_q, (state, _build_chunk_artifacts(state, self.ctx)))
             else:
+                nxt = self._NEXT[stage]
+                if nxt is not None:
+                    state.ready[nxt] = time.monotonic()  # ready-for-next (queue-wait profile)
                 self._put(out_q, state)
         self._worker_done(stage)
 
     def _producer(self) -> None:
         for chunk in self.manager.chunks:
-            if not self._put(self.stt_q, _StageState(chunk=chunk)):
+            state = _StageState(chunk=chunk)
+            state.ready["stt"] = time.monotonic()  # queue-wait profile
+            if not self._put(self.stt_q, state):
                 return
         for _ in range(self.workers["stt"]):
             if not self._put(self.stt_q, None):
@@ -776,7 +831,7 @@ class _StageState:
     cues: list[dict[str, Any]] = field(default_factory=list)
     voice_track: str | None = None
     silent: bool = False
-    perf: dict[str, float] = field(
+    perf: dict[str, Any] = field(
         default_factory=lambda: {
             "wall_start_s": 0.0,
             "wall_end_s": 0.0,
@@ -790,6 +845,14 @@ class _StageState:
             "tts_s": 0.0,
         }
     )
+    #: Seconds this chunk sat in each stage's bounded input queue before a
+    #: worker picked it up (instrumentation for the pipeline performance
+    #: profile — measures backpressure, not load).
+    queue_wait: dict[str, float] = field(default_factory=dict)
+    #: Monotonic timestamps when a chunk became ready for each stage (set by
+    #: the upstream producer right before handing it on); consumed by the
+    #: downstream worker to compute ``queue_wait``.
+    ready: dict[str, float] = field(default_factory=dict)
     stage_attempts: dict[str, int] = field(default_factory=dict)
 
 
@@ -1181,6 +1244,106 @@ def slice_audio(
     return dst_wav
 
 
+def _large_interior_gaps(
+    segments: Sequence[dict[str, Any]],
+    logical_start: float,
+    logical_end: float,
+    min_gap: float = STT_COVERAGE_RETRY_MIN_GAP,
+) -> list[tuple[float, float]]:
+    """Closed ``[gap_start, gap_end]`` holes strictly inside a logical window.
+
+    Pure segment math — no audio I/O — so the STT guard can cheaply decide
+    whether an acoustic check is worth it.
+    """
+    ordered = sorted(segments, key=lambda s: s["start"])
+    holes: list[tuple[float, float]] = []
+    for a, b in zip(ordered, ordered[1:]):
+        gap_s = max(a["end"], logical_start)
+        gap_e = min(b["start"], logical_end)
+        if gap_e - gap_s > min_gap:
+            holes.append((gap_s, gap_e))
+    return holes
+
+
+def _segment_gap_has_speech(
+    audio_path: str,
+    logical_start: float,
+    logical_end: float,
+    segments: Sequence[dict[str, Any]],
+    time_offset: float = 0.0,
+    min_gap: float = STT_COVERAGE_RETRY_MIN_GAP,
+    rms_rel: float = STT_COVERAGE_RETRY_RMS_REL,
+    min_rms: float = STT_COVERAGE_RETRY_MIN_RMS,
+    window_s: float = STT_COVERAGE_RETRY_WINDOW_S,
+) -> bool:
+    """True when a large interior gap in ``segments`` overlaps speech energy.
+
+    ``segments`` carry **source-timeline** timestamps (clamped to the chunk's
+    logical window). ``time_offset`` is the source time at which ``audio_path``
+    starts (the chunk's slice start), so gap times map to slice-relative frames.
+    A batched early-EOS collapse leaves a long empty hole mid-chunk where the
+    audio still has voice energy; a real silence pause leaves a quiet hole.
+    The audio file is only read if at least one large hole exists.
+    """
+    holes = _large_interior_gaps(segments, logical_start, logical_end, min_gap)
+    if not holes:
+        return False
+    try:
+        import array
+
+        with wave.open(audio_path, "rb") as wav:
+            rate = wav.getframerate()
+            nch = wav.getnchannels()
+            sw = wav.getsampwidth()
+            nframes = wav.getnframes()
+            if sw != 2 or rate <= 0 or nframes <= 0:
+                return False
+            raw = wav.readframes(nframes)
+        samples = array.array("h", raw)
+        n_samples = len(samples)
+    except Exception:  # noqa: BLE001 - guard is best-effort
+        return False
+
+    baseline_rms = 0.0
+    if n_samples:
+        stride = max(1, n_samples // max(1, rate * 2))
+        sumsq = 0
+        count = 0
+        for i in range(0, n_samples, stride * nch):
+            sumsq += samples[i] * samples[i]
+            count += 1
+        baseline_rms = (sumsq / count) ** 0.5 if count else 0.0
+    speech_floor = max(min_rms, baseline_rms * rms_rel)
+
+    def _gap_rms(start_s: float, end_s: float) -> float:
+        # source-time gap -> slice-relative frame range
+        rel_lo = max(0.0, start_s - time_offset)
+        rel_hi = min(float(nframes) / rate, end_s - time_offset)
+        if rel_hi <= rel_lo:
+            return 0.0
+        lo = int(rel_lo * rate) * nch
+        hi = int(rel_hi * rate) * nch
+        if hi - lo < nch:
+            return 0.0
+        sumsq = 0
+        count = 0
+        for i in range(lo, hi, nch):
+            s = samples[i]
+            sumsq += s * s
+            count += 1
+        return (sumsq / count) ** 0.5
+
+    for gap_s, gap_e in holes:
+        mid = (gap_s + gap_e) / 2.0
+        window_lo = max(logical_start, mid - window_s / 2.0)
+        window_hi = min(logical_end, mid + window_s / 2.0)
+        if window_hi - window_lo < 0.2:
+            continue
+        if _gap_rms(window_lo, window_hi) >= speech_floor:
+            return True
+    return False
+
+
 @dataclass
 class ChunkPipelineContext:
     """Everything a chunk processor needs (paths + real services)."""
@@ -1205,8 +1368,53 @@ class ChunkPipelineContext:
     stt_model: str = "large-v3"
     stt_device: str = "auto"
     stt_compute_type: str | None = None
+    stt_cpu_threads: int | None = None
+    stt_mode: str = "auto"
+    stt_batch_size: int = 2
+    chunks_total: int = 0
     cancel: Any = None
     on_progress: Callable[[float, str, str | None], None] | None = None
+    #: One shared translation provider for the whole run (built lazily at most
+    #: once, then reused by every translate worker — never one provider per
+    #: chunk, which would spawn/tear down a llama-server per chunk for local
+    #: models). Stopped once by the orchestrator after the pools drain.
+    translation_provider: Any = None
+
+
+#: Guards lazy construction of the run's shared translation provider so a cold
+#: translate pool start cannot build two providers (or double-start servers).
+_PROVIDER_LOCK = threading.Lock()
+
+
+def _ensure_translation_provider(ctx: ChunkPipelineContext) -> Any:
+    """Return the run's shared translation provider, constructing it once."""
+    provider = ctx.translation_provider
+    if provider is not None:
+        return provider
+    from src.api.pipeline import build_translation_provider  # noqa: PLC0415 - lazy
+
+    with _PROVIDER_LOCK:
+        provider = ctx.translation_provider
+        if provider is None:
+            provider = build_translation_provider(ctx.provider, ctx.provider_config, ctx.api_key)
+            ctx.translation_provider = provider
+    return provider
+
+
+def _stop_translation_provider(ctx: ChunkPipelineContext) -> None:
+    """Release process-level resources owned by the run's provider (e.g. a
+    spawned llama-server) exactly once after the pipeline drains. Idempotent:
+    the provider is cleared on the first stop so repeated calls are no-ops."""
+    provider = ctx.translation_provider
+    if provider is None:
+        return
+    ctx.translation_provider = None
+    stop = getattr(provider, "stop", None)
+    if callable(stop):
+        try:
+            stop()
+        except Exception:  # noqa: BLE001 - never mask a pipeline failure
+            logger.exception("failed to stop the shared translation provider")
 
 
 def _check_cancel(ctx: ChunkPipelineContext) -> None:
@@ -1221,6 +1429,8 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     from src.services.stt_service import (  # noqa: PLC0415
         E_STT_NO_SPEECH,
         STTError,
+        STT_MODE_BATCHED,
+        STT_MODE_REGULAR,
         transcribe as stt_transcribe,
     )
 
@@ -1241,6 +1451,14 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     if ctx.on_progress:
         ctx.on_progress(0.0, "chunk-stt", f"STT_STARTED {chunk.chunk_id}")
     perf["stt_start_s"] = time.monotonic()
+
+    stt_log_lines: list[str] = []
+
+    def _stt_log(msg: str) -> None:
+        stt_log_lines.append(msg)
+        if ctx.on_progress:
+            ctx.on_progress(0.5, "chunk-stt", msg)
+
     try:
         result = stt_transcribe(
             audio_path,
@@ -1248,9 +1466,13 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
             model_name=ctx.stt_model,
             device=ctx.stt_device,
             compute_type=ctx.stt_compute_type,
+            cpu_threads=ctx.stt_cpu_threads,
             language=ctx.source_language,
             total_duration_seconds=chunk.duration,
             cancel=ctx.cancel,
+            stt_mode=ctx.stt_mode,
+            batch_size=ctx.stt_batch_size,
+            on_stt_log=_stt_log,
         )
         raw_segments = result.transcript.get("segments", [])
     except STTError as exc:
@@ -1259,6 +1481,12 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
         else:
             raise ChunkFailedError(f"{chunk.chunk_id}: STT failed: {exc.message}") from exc
     perf["stt_s"] = time.monotonic() - perf["stt_start_s"]
+    rtf = perf["stt_s"] / chunk.duration if chunk.duration > 0 else 0.0
+    _stt_log(f"[STT] Mode: {result.engine}")
+    _stt_log(f"[STT] Model: {result.model_used}")
+    _stt_log(f"[STT] Batch size: {ctx.stt_batch_size}")
+    _stt_log(f"[STT] Chunk: {chunk.index}/{ctx.chunks_total}")
+    _stt_log(f"[STT] RTF: {rtf:.3f}")
     if ctx.on_progress:
         ctx.on_progress(1.0, "chunk-stt", f"STT_COMPLETED {chunk.chunk_id}")
     _check_cancel(ctx)
@@ -1289,6 +1517,74 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
                 "speaker": seg.get("speaker"),
             }
         )
+
+    # P1 STT quality guard (2026-08-20): a batched early-EOS collapse swallows
+    # a large interior block of speech while the transcript still *looks*
+    # valid (monotonic, in-window). Acoustic check catches it and re-runs this
+    # chunk once in ``regular`` mode, which covers the block fully.
+    if (
+        getattr(result, "engine", None) == STT_MODE_BATCHED
+        and segments
+        and _segment_gap_has_speech(
+            audio_path,
+            chunk.logical_start,
+            chunk.logical_end,
+            segments,
+            time_offset=chunk.start,
+        )
+    ):
+        _stt_log("[STT-GUARD] batched output has a large speech-carrying gap; re-running in regular mode")
+        logger.warning(
+            "STT quality guard: %s swallowed speech; re-running STT in regular mode",
+            chunk.chunk_id,
+        )
+        perf["stt_guard_fallback_s"] = time.monotonic()
+        try:
+            result = stt_transcribe(
+                audio_path,
+                project_id=ctx.project_id,
+                model_name=ctx.stt_model,
+                device=ctx.stt_device,
+                compute_type=ctx.stt_compute_type,
+                cpu_threads=ctx.stt_cpu_threads,
+                language=ctx.source_language,
+                total_duration_seconds=chunk.duration,
+                cancel=ctx.cancel,
+                stt_mode=STT_MODE_REGULAR,
+                on_stt_log=_stt_log,
+            )
+            fallback_segments = result.transcript.get("segments", [])
+        except STTError as exc:
+            if exc.code == E_STT_NO_SPEECH:
+                fallback_segments = []
+            else:
+                raise ChunkFailedError(f"{chunk.chunk_id}: STT fallback failed: {exc.message}") from exc
+        perf["stt_guard_fallback_s"] = time.monotonic() - perf["stt_guard_fallback_s"]
+        rebuild: list[dict[str, Any]] = []
+        for i, seg in enumerate(fallback_segments):
+            g_start = chunk.start + float(seg["start"])
+            g_end = chunk.start + float(seg["end"])
+            clamped = clamp_to_logical(g_start, g_end, chunk.logical_start, chunk.logical_end)
+            if clamped is None:
+                continue
+            lo, hi = clamped
+            rebuild.append(
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "src_idx": i,
+                    "start": round(lo, 3),
+                    "end": round(hi, 3),
+                    "text": seg["text"],
+                    "language": seg.get("language", ctx.source_language or "und"),
+                    "confidence": seg.get("confidence"),
+                    "speaker": seg.get("speaker"),
+                }
+            )
+        if rebuild:
+            segments = rebuild
+        else:
+            _stt_log("[STT-GUARD] fallback produced no usable segments; keeping batched result")
+
     state.segments = segments
     state.silent = not segments
 
@@ -1301,7 +1597,6 @@ def _run_translate_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     """
     if not state.segments:
         return
-    from src.api.pipeline import build_translation_provider  # noqa: PLC0415
     from src.services.providers.base import SourceSegment  # noqa: PLC0415
     from src.services.translation_service import TranslationService  # noqa: PLC0415
 
@@ -1310,7 +1605,7 @@ def _run_translate_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     if ctx.on_progress:
         ctx.on_progress(0.0, "chunk-translate", f"TRANSLATION_STARTED {chunk.chunk_id}")
     perf["translate_start_s"] = time.monotonic()
-    provider = build_translation_provider(ctx.provider, ctx.provider_config, ctx.api_key)
+    provider = _ensure_translation_provider(ctx)
     service = TranslationService()
     sources = [
         SourceSegment(idx=i, segment_id=f"seg_{i}", text=s["text"], speaker=s.get("speaker"))
@@ -1404,7 +1699,7 @@ def _build_chunk_artifacts(state: _StageState, ctx: ChunkPipelineContext) -> Chu
         voice_track=state.voice_track,
         audio_path=state.audio_path,
         silent=state.silent,
-        perf={**state.perf, "wall_end_s": time.monotonic()},
+        perf={**state.perf, "wall_end_s": time.monotonic(), "queue_wait_s": {**state.queue_wait}},
     )
 
 
@@ -1463,6 +1758,7 @@ def build_performance_trace(
     rows: list[dict[str, Any]] = []
     intervals: dict[str, list[tuple[float, float]]] = {s: [] for s in stages}
     chunk_intervals: list[tuple[float, float]] = []
+    waits: dict[str, list[float]] = {s: [] for s in stages}
 
     measured = [a for a in per_chunk if a.perf is not None]
     baseline = min((a.perf["wall_start_s"] for a in measured), default=0.0)
@@ -1478,11 +1774,18 @@ def build_performance_trace(
             "start_ms": round((p["wall_start_s"] - baseline) * 1000),
             "end_ms": round((p["wall_end_s"] - baseline) * 1000),
         }
+        chunk_wait = p.get("queue_wait_s", {}) or {}
         for stage in stages:
             dur = p.get(f"{stage}_s", 0.0)
             row[f"{stage}_ms"] = round(dur * 1000)
             if dur > 0:
                 intervals[stage].append((p[f"{stage}_start_s"], p[f"{stage}_start_s"] + dur))
+                row[f"{stage}_start_ms"] = round((p[f"{stage}_start_s"] - baseline) * 1000)
+                row[f"{stage}_end_ms"] = round((p[f"{stage}_start_s"] - baseline) * 1000 + dur * 1000)
+            wait = max(0.0, chunk_wait.get(stage, 0.0))
+            row[f"queue_wait_{stage}_ms"] = round(wait * 1000)
+            if wait > 0:
+                waits[stage].append(wait)
         rows.append(row)
 
     def _peak_avg(active: list[tuple[float, float]]) -> dict[str, Any]:
@@ -1507,6 +1810,10 @@ def build_performance_trace(
         stage: {
             "total_ms": round(sum(end - start for start, end in intervals[stage]) * 1000),
             "chunks_ran": len(intervals[stage]),
+            "total_queue_ms": round(sum(waits[stage]) * 1000),
+            "avg_queue_ms": round(sum(waits[stage]) / len(waits[stage]) * 1000, 1)
+            if waits[stage]
+            else 0,
             **_peak_avg(intervals[stage]),
         }
         for stage in stages
@@ -1556,6 +1863,8 @@ def run_chunked_pipeline(
     tts_engine: str,
     stt_model: str = "large-v3",
     stt_device: str = "auto",
+    stt_mode: str = "auto",
+    stt_batch_size: int = 2,
     chunk_duration: float = DEFAULT_CHUNK_DURATION,
     overlap: float = DEFAULT_OVERLAP,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
@@ -1583,6 +1892,10 @@ def run_chunked_pipeline(
 
     if on_event:
         on_event("info", f"JOB_STARTED {job_id}")
+    # Pipeline performance profile: wall-seconds of the post-STT phases
+    # (validation / assembly / subtitle / file I/O). Stages measured by the
+    # scheduler (slice/stt/translate/tts) live in ``build_performance_trace``.
+    phases: dict[str, float] = {}
     manager = ChunkManager(
         total_duration, chunk_duration=chunk_duration, overlap=overlap
     )
@@ -1613,9 +1926,19 @@ def run_chunked_pipeline(
         workdir=os.path.join(project_dir, "temp", job_id),
         stt_model=stt_model,
         stt_device=stt_device,
+        stt_mode=stt_mode,
+        stt_batch_size=stt_batch_size,
+        chunks_total=len(manager.chunks),
         cancel=cancel,
         on_progress=on_progress,
     )
+
+    # Per-call CPU thread budget for the STT stage: on CPU faster-whisper
+    # defaults to *all* cores per transcribe() call, so concurrent chunks used
+    # to oversubscribe the machine N×. Budget cores // stt_workers so the pool
+    # really parallelizes (see stt_thread_budget).
+    effective_stt_workers = stt_workers or max_concurrency
+    ctx.stt_cpu_threads = stt_thread_budget(effective_stt_workers)
 
     cleanup = CleanupManager(ctx.workdir)
 
@@ -1626,7 +1949,7 @@ def run_chunked_pipeline(
     scheduler = StreamingChunkPipeline(
         manager=manager,
         ctx=ctx,
-        stt_workers=stt_workers or max_concurrency,
+        stt_workers=effective_stt_workers,
         translate_workers=translate_workers or max_concurrency,
         tts_workers=tts_workers or max_concurrency,
         max_retries=max_retries,
@@ -1638,8 +1961,13 @@ def run_chunked_pipeline(
     except ChunkFailedError:
         cleanup.keep_temp()
         raise
+    finally:
+        # The translate pool is fully drained here — release one-shot provider
+        # resources (a spawned llama-server, etc.) exactly once per run.
+        _stop_translation_provider(ctx)
 
     # validate every chunk's artifacts
+    _ph = time.monotonic()
     for art in per_chunk:
         issues = validate_chunk_result(art)
         if issues:
@@ -1647,6 +1975,7 @@ def run_chunked_pipeline(
             raise ChunkFailedError(
                 f"chunk {art.chunk_id} validation failed: " + "; ".join(issues)
             )
+    phases["validate_chunks"] = time.monotonic() - _ph
 
     cleanup.transition("assembling")
     if on_event:
@@ -1657,17 +1986,23 @@ def run_chunked_pipeline(
     # built FROM it, matched per segment by identity — never re-numbered from
     # a separate cue list that can dedup differently and shift every ``seg_N``
     # after the first dropped row (FIX #1, review 2026-08-18).
+    _ph = time.monotonic()
     segments = merge_segments(per_chunk)
+    phases["merge_segments"] = time.monotonic() - _ph
 
     # Pair translated text to its source segment by the stable (chunk_id,
     # src_idx) identity (FIX #1, review 2026-08-18).
+    _ph = time.monotonic()
     translated = assemble_translations(segments, per_chunk)
+    phases["assemble_translations"] = time.monotonic() - _ph
 
     # timeline validation before writing anything (Phase 11)
+    _ph = time.monotonic()
     timeline_issues = validate_timeline(manager.chunks, segments, total_duration, tolerance=duration_tolerance)
     if timeline_issues:
         cleanup.keep_temp()
         raise ChunkFailedError("timeline validation failed: " + "; ".join(timeline_issues))
+    phases["validate_timeline"] = time.monotonic() - _ph
 
     cache_dir = os.path.join(project_dir, "cache")
     os.makedirs(cache_dir, exist_ok=True)
@@ -1686,9 +2021,6 @@ def run_chunked_pipeline(
         translate_workers=translate_workers or max_concurrency,
         tts_workers=tts_workers or max_concurrency,
     )
-    trace_path = os.path.join(cache_dir, f"performance_trace_{job_id}.json")
-    with open(trace_path, "w", encoding="utf-8") as fh:
-        json.dump(trace, fh, ensure_ascii=False, indent=2)
     s = trace["stages"]
     logger.info(
         "PERF %d chunks wall=%.1fs | stt: %d/%s | translate: %d/%s | tts: %d/%s",
@@ -1703,6 +2035,7 @@ def run_chunked_pipeline(
     )
 
     # Transcript artifact (merged, global timeline)
+    _ph = time.monotonic()
     transcript = {
         "schema_version": 1,
         "project_id": project_id,
@@ -1741,8 +2074,10 @@ def run_chunked_pipeline(
     translation_path = os.path.join(cache_dir, "translation.json")
     with open(translation_path, "w", encoding="utf-8") as fh:
         json.dump(translation, fh, ensure_ascii=False)
+    phases["write_artifacts"] = time.monotonic() - _ph
 
     # Subtitle files (reuse the existing SubtitleService generator)
+    _ph = time.monotonic()
     from src.services.subtitle_service import CueSource, SubtitleService  # noqa: PLC0415
 
     segments_out = [
@@ -1768,6 +2103,7 @@ def run_chunked_pipeline(
         fh.write(doc.srt_content)
     with open(subtitle_ass, "w", encoding="utf-8") as fh:
         fh.write(doc.ass_content)
+    phases["generate_subtitles"] = time.monotonic() - _ph
 
     # Voice track — the streaming pipeline already built it in order while
     # processing (per-chunk samples streamed into one PCM file as chunks were
@@ -1775,6 +2111,7 @@ def run_chunked_pipeline(
     # (same location as the concat fallback) before finalize wipes temp.
     voice_track: str | None = None
     if dub:
+        _ph = time.monotonic()
         if scheduler.voice_track_path:
             cache_track = os.path.join(cache_dir, "voice_track.wav")
             shutil.move(scheduler.voice_track_path, cache_track)
@@ -1787,11 +2124,13 @@ def run_chunked_pipeline(
             )
         if on_event:
             on_event("info", "ASSEMBLY_COMPLETED voice track + subtitles")
+        phases["voice_assembly"] = time.monotonic() - _ph
 
     if on_event:
         on_event("info", "ASSEMBLY_COMPLETED")
 
     cleanup.transition("validating")
+    _ph = time.monotonic()
     manifest = manager.manifest(
         job_id=job_id,
         source_video=source_video,
@@ -1805,16 +2144,34 @@ def run_chunked_pipeline(
     os.makedirs(cache_dir, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, ensure_ascii=False, indent=2)
+    phases["write_manifest"] = time.monotonic() - _ph
+
+    # Complete the pipeline performance profile (post-STT phases measured
+    # above) and persist it next to the manifest before cleanup runs.
+    trace["phases"] = {k: round(v, 3) for k, v in phases.items()}
+    trace["phases_wall_s"] = round(sum(phases.values()), 3)
+    trace_path = os.path.join(cache_dir, f"performance_trace_{job_id}.json")
+    with open(trace_path, "w", encoding="utf-8") as fh:
+        json.dump(trace, fh, ensure_ascii=False, indent=2)
 
     cleanup.transition("output_ready")
     manifest["manifest_path"] = manifest_path
     manifest["trace_path"] = trace_path
     manifest["perf"] = {
         "wall_elapsed_s": trace["wall_elapsed_s"],
+        "config": trace["config"],
         "chunk_level": trace["chunk_level"],
         "stages": trace["stages"],
+        "chunks": trace["chunks"],
+        "phases": trace["phases"],
+        "phases_wall_s": trace["phases_wall_s"],
     }
     manifest["total_duration"] = total_duration
+    manifest["stt"] = {
+        "mode": stt_mode,
+        "batch_size": stt_batch_size,
+        "model": stt_model,
+    }
     manifest["artifacts"] = {
         "transcript": transcript_path,
         "translation": translation_path,

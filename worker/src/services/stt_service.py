@@ -57,13 +57,45 @@ _WHISPER_INIT_LOCK = threading.Lock()
 #: ~3 GB RAM plus a HuggingFace revision round-trip per load; the chunk
 #: scheduler runs several chunks concurrently, so each chunk used to load its
 #: own copy (OOM / network flakes on long videos). One instance is loaded per
-#: (model, device, compute_type) and reused — CTranslate2 inference is safe
-#: for concurrent ``transcribe()`` calls on the same model object.
-_WHISPER_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
+#: (model, device, compute_type, cpu_threads) and reused — CTranslate2
+#: inference is safe for concurrent ``transcribe()`` calls on the same model.
+_WHISPER_MODEL_CACHE: dict[tuple[str, str, str, int | None], Any] = {}
 _WHISPER_MODEL_LOCK = threading.Lock()
 
 BACKEND_FASTER_WHISPER = "faster-whisper"
 BACKEND_WHISPER_CPP = "whisper-cpp"
+
+#: STT engine selection (BATCHED_STT task). ``auto`` resolves at runtime to
+#: ``batched`` only when a CUDA device is present AND the VRAM head-room is
+#: safe; otherwise it stays ``regular`` (safe default). Calling ``batched``
+#: while ``regular`` still works means a batched failure or an unsafe runtime
+#: silently falls back to ``regular`` — never to a half-written transcript.
+STT_MODE_AUTO = "auto"
+STT_MODE_REGULAR = "regular"
+STT_MODE_BATCHED = "batched"
+VALID_STT_MODES = (STT_MODE_AUTO, STT_MODE_REGULAR, STT_MODE_BATCHED)
+
+#: Supported ``batch_size`` values for BatchedInferencePipeline (measured:
+#: 1/2/4 monotone latency wins on the 4 GB benchmark rig; 4 is NOT the default
+#: because mid-RAM GPUs (2 GB) still fit batch=2 comfortably).
+DEFAULT_BATCH_SIZE = 2
+SUPPORTED_BATCH_SIZES = (1, 2, 4)
+
+#: Conservative VRAM head-room the auto selector requires ON TOP of the model's
+#: int8 footprint before it stays ``batched`` (measured: ``small`` single-pass
+#: ~482 MB vs batched batch=4 peak ~738 MB, so a fixed margin covers the extra
+#: encoder activations + reconstruction buffers for any model).
+BATCHED_VRAM_MARGIN_MB = 400.0
+
+#: Reconstruction governs segments AFTER of the batched inference returns coarse
+#: 30s window segments: we split raw word timestamps into sentence/phrase
+#: segments again (purely offline, no re-inference). Constants are configurable,
+#: never experimental conclusions.
+RECON_SENTENCE_ENDERS = frozenset(".!?。！？…")
+RECON_MAX_SEGMENT_SECONDS = 8.0
+RECON_GAP_THRESHOLD_SECONDS = 1.0
+RECON_SENTENCE_MIN_CHARS = 8
+RECON_MAX_CHARS_FALLBACK = 96
 
 #: Approximate int8 VRAM footprint per model (MASTER_PLAN §5 / §14.2).
 MODEL_VRAM_REQUIREMENTS_MB: dict[str, float] = {
@@ -113,6 +145,10 @@ class TranscribeResult:
     transcript: dict[str, Any]
     model_used: str
     device_used: str
+    #: Which engine actually produced the transcript (regular vs batched, or
+    #: ``batched→regular`` meaning a fallback happened). Needed by the chunk
+    #: pipeline's ``[STT]`` automation logging.
+    engine: str = STT_MODE_REGULAR
 
 
 def resolve_device(requested: str) -> str:
@@ -189,16 +225,22 @@ def _is_cuda_library_error(exc: Exception) -> bool:
     return any(marker in lowered for marker in _CUDA_LIB_ERROR_MARKERS)
 
 
-def _load_whisper_model(model_name: str, device: str, compute_type: str) -> Any:
+def _load_whisper_model(
+    model_name: str,
+    device: str,
+    compute_type: str,
+    cpu_threads: int | None = None,
+) -> Any:
     """Lazy-import faster-whisper and load ``model_name`` on ``device``.
 
-    Instances are **shared** (module-level cache keyed by model/device/compute):
-    the chunked pipeline runs several chunks concurrently, and loading a fresh
-    ~3 GB large-v3 per chunk exhausted RAM and added a HuggingFace revision
-    round-trip per load. ``local_files_only`` skips that network check when the
-    model is already cached locally (falls back to a normal load otherwise).
+    Instances are **shared** (module-level cache keyed by model/device/compute/
+    cpu_threads): the chunked pipeline runs several chunks concurrently, and
+    loading a fresh ~3 GB large-v3 per chunk exhausted RAM and added a
+    HuggingFace revision round-trip per load. ``local_files_only`` skips that
+    network check when the model is already cached locally (falls back to a
+    normal load otherwise).
     """
-    key = (model_name, device, compute_type)
+    key = (model_name, device, compute_type, cpu_threads)
     cached = _WHISPER_MODEL_CACHE.get(key)
     if cached is not None:
         return cached
@@ -219,15 +261,19 @@ def _load_whisper_model(model_name: str, device: str, compute_type: str) -> Any:
                 "faster-whisper is not installed; cannot run STT.",
             ) from exc
         try:
+            # Only pass cpu_threads when set — leaving it out keeps the
+            # faster-whisper default (all cores) for non-chunked callers.
+            kwargs = {"cpu_threads": cpu_threads} if cpu_threads is not None else {}
             try:
                 model = WhisperModel(
                     model_name,
                     device=device,
                     compute_type=compute_type,
                     local_files_only=True,
+                    **kwargs,
                 )
             except Exception:  # noqa: BLE001 - not cached yet → allow download
-                model = WhisperModel(model_name, device=device, compute_type=compute_type)
+                model = WhisperModel(model_name, device=device, compute_type=compute_type, **kwargs)
             _WHISPER_MODEL_CACHE[key] = model
             return model
         except Exception as exc:  # noqa: BLE001 - map every load failure to a code
@@ -237,12 +283,371 @@ def _load_whisper_model(model_name: str, device: str, compute_type: str) -> Any:
             raise STTError(E_STT_FAILED, "Failed to load the STT model.") from exc
 
 
+def resolve_stt_mode(
+    requested: str,
+    *,
+    device: str,
+    model_name: str,
+    batch_size: int,
+    vram_mb: float | None,
+) -> tuple[str, str]:
+    """Resolve ``auto`` to ``batched``/``regular`` or validate an explicit mode.
+
+    Returns ``(mode, reason)``. ``auto`` picks ``batched`` only when the three
+    constraints hold together: CUDA device present, model supports batching
+    (every faster-whisper model here does), and free VRAM has comfortable
+    head-room over the model's footprint. Any miss → ``regular`` (safe default).
+    """
+    if requested not in VALID_STT_MODES:
+        raise STTError(E_STT_FAILED, f"Unsupported stt_mode: {requested!r}.")
+    if batch_size not in SUPPORTED_BATCH_SIZES:
+        raise STTError(
+            E_STT_FAILED,
+            f"Unsupported batch_size {batch_size!r}; must be one of {SUPPORTED_BATCH_SIZES}.",
+        )
+    if requested == STT_MODE_REGULAR:
+        return STT_MODE_REGULAR, "explicit regular"
+    if requested == STT_MODE_BATCHED:
+        return STT_MODE_BATCHED, "explicit batched"
+    # --- auto --------------------------------------------------------------
+    if device != "cuda":
+        return STT_MODE_REGULAR, f"auto → regular (device={device} not cuda)"
+    if vram_mb is None:
+        return STT_MODE_REGULAR, "auto → regular (free VRAM unknown)"
+    required = MODEL_VRAM_REQUIREMENTS_MB.get(
+        model_name, MODEL_VRAM_REQUIREMENTS_MB["large-v3"]
+    )
+    headroom = required + BATCHED_VRAM_MARGIN_MB
+    if vram_mb < headroom:
+        return (
+            STT_MODE_REGULAR,
+            f"auto → regular (VRAM {vram_mb:.0f}MB < required {required:.0f}MB + margin {BATCHED_VRAM_MARGIN_MB:.0f}MB)",
+        )
+    return STT_MODE_BATCHED, "auto → batched (cuda + VRAM safe)"
+
+
+def validate_segment_timestamps(
+    segments: list[dict[str, Any]], *, tolerance_s: float = 0.001
+) -> list[str]:
+    """Post-condition the batched engine MUST satisfy before a transcript is
+    accepted (RECON/fallback contract). Returns issues, not raises.
+
+    Enforces (without inventing repairs): monotonic ``start``, ``end >= start``,
+    no negative timestamps, no duplicate segments, no unexplained overlaps.
+    Overlaps within ``tolerance_s`` are accepted (rounding at reconstruct
+    boundaries); real overlaps that hide dropped/corrupted words are issues.
+    """
+    issues: list[str] = []
+    prev_start: float | None = None
+    prev_end: float | None = None
+    seen: set[tuple[float, float, str]] = set()
+    for i, seg in enumerate(segments):
+        start = float(seg.get("start", 0.0) or 0.0)
+        end = float(seg.get("end", start) or start)
+        if start < 0.0 or end < 0.0:
+            issues.append(f"segment {i}: negative timestamp (start={start}, end={end})")
+        if end < start:
+            issues.append(f"segment {i}: end {end} < start {start}")
+        key = (round(start, 2), round(end, 2), str(seg.get("text", "")))
+        if key in seen:
+            issues.append(f"segment {i}: duplicate [{key}]")
+        else:
+            seen.add(key)
+        if prev_start is not None and start < prev_start - tolerance_s:
+            issues.append(f"segment {i}: non-monotonic start {start} < {prev_start}")
+        if prev_end is not None and start < prev_end - tolerance_s:
+            issues.append(f"segment {i}: overlap start {start} < prev_end {prev_end}")
+        prev_start = start
+        prev_end = max(prev_end or 0.0, end)
+    return issues
+
+
+def _char_cap(language: str) -> int:
+    from src.services.subtitle_service import default_style  # noqa: PLC0415 - lazy
+
+    try:
+        return default_style(language).max_chars_per_line * 2
+    except Exception:  # noqa: BLE001 - conservative fallback cap
+        return RECON_MAX_CHARS_FALLBACK
+
+
+def _flatten_word_timestamps(segments: Any) -> list[dict[str, Any]]:
+    """Flatten batched segment word timestamps into a sorted word list.
+
+    Preserves every word's start/end/probability; sorting is by ``(start, end)``
+    so downstream reconstruction is deterministic regardless of segment order.
+    """
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        for w in list(getattr(seg, "words", None) or []):
+            start = float(getattr(w, "start", 0.0) or 0.0)
+            end = float(getattr(w, "end", start) or start)
+            text = (getattr(w, "word", "") or "").strip()
+            if not text:
+                continue
+            out.append(
+                {
+                    "start": start,
+                    "end": max(start, end),
+                    "text": text,
+                    "probability": getattr(w, "probability", None),
+                }
+            )
+    out.sort(key=lambda w: (w["start"], w["end"]))
+    return out
+
+
+def reconstruct_segments_from_words(
+    words: list[dict[str, Any]],
+    *,
+    language: str,
+) -> list[dict[str, Any]]:
+    """Offline rule-based reconstruction of sentence/phrase segments from the
+    batched pipeline's word timestamps (no re-inference).
+
+    Splits at (1) sentence punctuation, (2) a real inter-word silence gap, and
+    caps (3) span seconds and (4) char count. Pure function over the word list
+    — deterministic, unit-testable, and produces the same normalized segment
+    shape (start/end/text/language/confidence/words) as single-pass output.
+    """
+    cap = _char_cap(language)
+    segments_out: list[dict[str, Any]] = []
+    cur_words: list[dict[str, Any]] = []
+    cur_text = ""
+    cur_start: float | None = None
+    cur_end: float | None = None
+
+    def flush() -> None:
+        nonlocal cur_words, cur_text, cur_start, cur_end
+        if not cur_words:
+            return
+        seg_words = list(cur_words)
+        first, last = seg_words[0], seg_words[-1]
+        probs = [w["probability"] for w in seg_words if w["probability"] is not None]
+        conf = round(sum(probs) / len(probs), 4) if probs else 0.0
+        start = max(0.0, float(cur_start or first["start"]))
+        end = max(start, float(cur_end or last["end"]))
+        segments_out.append(
+            {
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": cur_text,
+                "language": language,
+                "confidence": conf,
+                "words": [
+                    {
+                        "word": w["text"],
+                        "start": round(max(start, w["start"]), 3),
+                        "end": round(min(end, w["end"]), 3),
+                        "probability": w["probability"],
+                    }
+                    for w in seg_words
+                ],
+            }
+        )
+        cur_words = []
+        cur_text = ""
+        cur_start = None
+        cur_end = None
+
+    for w in words:
+        text = (w["text"] or "").strip()
+        if not text:
+            continue
+        start = float(w["start"])
+        end = max(start, float(w["end"]))
+        if cur_words:
+            # Split on (2) a real silence gap or (3) a hard cap — both are
+            # evaluated *before* appending so the overflowing word starts the
+            # next segment instead of being swallowed by the current one.
+            gap = start - (cur_end if cur_end is not None else start)
+            prospective_span = end - (cur_start if cur_start is not None else start)
+            prospective_chars = len(cur_text) + 1 + len(text)
+            if (
+                gap > RECON_GAP_THRESHOLD_SECONDS
+                or prospective_span > RECON_MAX_SEGMENT_SECONDS
+                or prospective_chars > cap
+            ):
+                flush()
+        if cur_words:
+            cur_text += " "
+        cur_text += text
+        cur_words.append(w)
+        if cur_start is None:
+            cur_start = start
+        cur_end = max(cur_end if cur_end is not None else start, end)
+        # Split at (1) sentence punctuation.
+        is_sentence_end = text.endswith(tuple(RECON_SENTENCE_ENDERS))
+        if is_sentence_end and len(cur_text) >= RECON_SENTENCE_MIN_CHARS:
+            flush()
+
+    flush()
+    return segments_out
+
+
+class STTEngine:
+    """Base contract shared by every STT engine.
+
+    Every engine normalizes its raw inference output into the SAME transcript
+    shape (via ``build_transcript``), so Translation/TTS/Subtitle/Assembly never
+    learn *which* engine produced a segment (BATCHED_STT task contract).
+    """
+
+    name: str = STT_MODE_REGULAR
+
+    def transcribe(
+        self,
+        model: Any,
+        audio_path: str,
+        *,
+        project_id: str,
+        model_name: str,
+        language: str | None,
+        total_duration_seconds: float | None,
+        cancel: CancellationToken | None,
+        on_progress: ProgressCallback | None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    # -- shared helpers ------------------------------------------------------
+
+    @staticmethod
+    def _consume(result: Any) -> tuple[list[Any], Any]:
+        segments, info = result if isinstance(result, tuple) else (result, None)
+        return list(segments), info
+
+    @staticmethod
+    def _build(
+        segments: list[Any],
+        info: Any,
+        *,
+        project_id: str,
+        model_name: str,
+        language: str | None,
+        total_duration_seconds: float | None,
+        cancel: CancellationToken | None,
+        on_progress: ProgressCallback | None,
+    ) -> dict[str, Any]:
+        detected = getattr(info, "language", None) if info is not None else None
+        duration = total_duration_seconds
+        if duration is None and info is not None:
+            info_duration = getattr(info, "duration", None)
+            if info_duration is not None:
+                duration = float(info_duration)
+        return build_transcript(
+            segments,
+            project_id=project_id,
+            model_name=model_name,
+            language_override=language,
+            detected_language=detected,
+            total_duration_seconds=duration,
+            cancel=cancel,
+            on_progress=on_progress,
+        )
+
+
+class RegularSTTEngine(STTEngine):
+    """The existing production engine: single-pass faster-whisper
+    ``transcribe(vad_filter=True, beam_size=5)`` producing sentence segments.
+
+    This is the untouched baseline — identical behavior to what shipped before
+    the batched engine existed (backwards compatibility is a hard DoD).
+    """
+
+    name = STT_MODE_REGULAR
+
+    def transcribe(self, model, audio_path, *, project_id, model_name, language, total_duration_seconds, cancel, on_progress):
+        result = model.transcribe(
+            audio_path,
+            language=language,
+            vad_filter=True,
+            beam_size=5,
+        )
+        segments, info = self._consume(result)
+        return self._build(
+            segments,
+            info,
+            project_id=project_id,
+            model_name=model_name,
+            language=language,
+            total_duration_seconds=total_duration_seconds,
+            cancel=cancel,
+            on_progress=on_progress,
+        )
+
+
+class BatchedSTTEngine(STTEngine):
+    """batched faster-whisper ``BatchedInferencePipeline`` + offline word-time
+    reconstruction into the same normalized segment contract as regular mode.
+
+    ``beam_size=5`` and ``vad_filter=True`` mirror the regular engine; batch
+    size is 1/2/4. Raw 30s-window segments are re-split on word timestamps, then
+    validated before acceptance (invalid output → caller falls back to regular).
+    """
+
+    name = STT_MODE_BATCHED
+
+    def __init__(self, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
+        if batch_size not in SUPPORTED_BATCH_SIZES:
+            raise STTError(
+                E_STT_FAILED,
+                f"Unsupported batch_size {batch_size!r}; must be one of {SUPPORTED_BATCH_SIZES}.",
+            )
+        self.batch_size = batch_size
+
+    def transcribe(self, model, audio_path, *, project_id, model_name, language, total_duration_seconds, cancel, on_progress):
+        from faster_whisper.transcribe import BatchedInferencePipeline  # noqa: PLC0415
+
+        pipeline = BatchedInferencePipeline(model)
+        result = pipeline.transcribe(
+            audio_path,
+            language=language,
+            vad_filter=True,
+            beam_size=5,
+            batch_size=self.batch_size,
+            word_timestamps=True,
+        )
+        segments_raw, info = self._consume(result)
+        words = _flatten_word_timestamps(segments_raw)
+        resolved_language = language or getattr(info, "language", None) or "und"
+        reconstructed = reconstruct_segments_from_words(words, language=resolved_language)
+        if not reconstructed:
+            raise STTError(E_STT_NO_SPEECH, "Batched transcription produced no speech.")
+        issues = validate_segment_timestamps(reconstructed)
+        if issues:
+            raise STTError(
+                E_STT_FAILED,
+                "Batched output rejected by timestamp validation: " + "; ".join(issues),
+            )
+        # Reconstructed segments are dicts already in the normalized shape;
+        # build_transcript consumes segment *objects*, so wrap them.
+        wrapped = [SimpleNamespace(**seg) for seg in reconstructed]
+        return self._build(
+            wrapped,
+            info,
+            project_id=project_id,
+            model_name=model_name,
+            language=language,
+            total_duration_seconds=total_duration_seconds,
+            cancel=cancel,
+            on_progress=on_progress,
+        )
+
+
 def _segment_language(segment: Any, fallback: str) -> str:
     lang = getattr(segment, "language", None)
     return lang or fallback
 
 
 def _segment_confidence(segment: Any) -> float:
+    # Batched reconstruction stores the average word probability directly in
+    # ``confidence``; regular faster-whisper segments carry ``avg_logprob``.
+    direct = getattr(segment, "confidence", None)
+    if direct is not None:
+        try:
+            return round(max(0.0, min(1.0, float(direct))), 4)
+        except (TypeError, ValueError):
+            return 0.0
     avg_logprob = getattr(segment, "avg_logprob", None)
     if avg_logprob is None:
         return 0.0
@@ -280,6 +685,30 @@ def build_transcript(
             continue
         start = max(0.0, float(getattr(segment, "start", 0.0) or 0.0))
         end = max(start, float(getattr(segment, "end", start) or start))
+        words = getattr(segment, "words", None)
+        words_out = None
+        if words is not None:
+            normalized = []
+            for w in words:
+                if isinstance(w, dict):
+                    w_start = float(w.get("start", start) or start)
+                    w_end = float(w.get("end", end) or end)
+                    w_word = w.get("word", "") or ""
+                    w_prob = w.get("probability", None)
+                else:
+                    w_start = float(getattr(w, "start", start) or start)
+                    w_end = float(getattr(w, "end", end) or end)
+                    w_word = getattr(w, "word", "") or ""
+                    w_prob = getattr(w, "probability", None)
+                normalized.append(
+                    {
+                        "word": w_word,
+                        "start": round(max(start, min(end, w_start)), 3),
+                        "end": round(max(start, min(end, w_end)), 3),
+                        "probability": w_prob,
+                    }
+                )
+            words_out = [w for w in normalized if w["word"]]
         segments_out.append(
             {
                 "id": f"seg_{idx}",
@@ -291,6 +720,8 @@ def build_transcript(
                 "confidence": _segment_confidence(segment),
             }
         )
+        if words_out:
+            segments_out[-1]["words"] = words_out
         if on_progress is not None and total_duration_seconds and total_duration_seconds > 0:
             on_progress(max(0.0, min(1.0, end / total_duration_seconds)))
 
@@ -313,6 +744,7 @@ def transcribe(
     model_name: str = "large-v3",
     device: str = "auto",
     compute_type: str | None = None,
+    cpu_threads: int | None = None,
     language: str | None = None,
     total_duration_seconds: float | None = None,
     cancel: CancellationToken | None = None,
@@ -325,12 +757,19 @@ def transcribe(
     num_threads: int | None = None,
     beam_size: int | None = 5,
     no_flash_attn: bool = False,
+    stt_mode: str = STT_MODE_AUTO,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    on_stt_log: Callable[[str], None] | None = None,
 ) -> TranscribeResult:
     """Transcribe ``audio_path`` into a canonical Transcript.
 
     ``whisper_model`` is a test seam: when provided the guard/load steps are
     skipped and it is used as-is (it must expose ``transcribe(audio, ...)``
     returning ``(segments, info)`` like faster-whisper 1.x).
+
+    ``cpu_threads`` bounds the faster-whisper worker threads per call — the
+    chunked pipeline passes ``cores // stt_workers`` so concurrent chunks share
+    the CPU instead of each claiming every core (see ``stt_thread_budget``).
 
     ``backend`` selects the engine (TASK-015): ``faster-whisper`` (default),
     ``whisper-cpp`` (AMD/Intel/CPU fallback), or ``auto`` which defers to the
@@ -368,6 +807,7 @@ def transcribe(
     if whisper_model is not None:
         model = whisper_model
         effective_model = model_name
+        vram = available_vram_mb() if resolved_device == "cuda" else None
     else:
         vram = available_vram_mb() if resolved_device == "cuda" else None
         effective_model = guard_model_tier(model_name, vram)
@@ -378,70 +818,106 @@ def transcribe(
                 effective_model,
                 vram or 0.0,
             )
-        model = _load_whisper_model(effective_model, resolved_device, resolved_compute)
+        model = _load_whisper_model(effective_model, resolved_device, resolved_compute, cpu_threads)
 
-    def _run_and_build(mdl: Any) -> dict[str, Any]:
-        """Transcribe + consume the lazy generator + build the transcript.
+    mode, mode_reason = resolve_stt_mode(
+        stt_mode,
+        device=resolved_device,
+        model_name=effective_model,
+        batch_size=batch_size,
+        vram_mb=vram,
+    )
+    logger.info("[STT] Mode resolution: %s (%s)", mode, mode_reason)
+    if on_stt_log is not None:
+        on_stt_log(f"[STT] Mode: {mode}")
 
-        All real inference happens here — faster-whisper returns a generator
-        from ``transcribe()`` and encodes lazily as ``build_transcript``
-        iterates it, so CUDA runtime errors surface inside this call.
-        """
-        result = mdl.transcribe(
+    def _emit(msg: str) -> None:
+        logger.info("%s", msg)
+        if on_stt_log is not None:
+            on_stt_log(msg)
+
+    def _run_regular(mdl: Any) -> TranscribeResult:
+        engine = RegularSTTEngine()
+        transcript = engine.transcribe(
+            mdl,
             audio_path,
-            language=language,
-            vad_filter=True,
-            beam_size=5,
-        )
-        segments, info = result if isinstance(result, tuple) else (result, None)
-        detected = getattr(info, "language", None) if info is not None else None
-        duration = total_duration_seconds
-        if duration is None and info is not None:
-            info_duration = getattr(info, "duration", None)
-            if info_duration is not None:
-                duration = float(info_duration)
-        return build_transcript(
-            segments,
             project_id=project_id,
             model_name=effective_model,
-            language_override=language,
-            detected_language=detected,
-            total_duration_seconds=duration,
+            language=language,
+            total_duration_seconds=total_duration_seconds,
             cancel=cancel,
             on_progress=on_progress,
         )
-
-    try:
-        transcript = _run_and_build(model)
-    except CancelledError:
-        raise
-    except STTError:
-        raise
-    except RuntimeError as exc:
-        # CUDA runtime library missing/broken (e.g. cublas64_12.dll absent):
-        # retry once on CPU instead of failing the job with a 500.
-        if resolved_device != "cuda" or not _is_cuda_library_error(exc):
-            raise STTError(E_STT_FAILED, "Transcription failed.") from exc
-        logger.warning("CUDA runtime library failure (%s); retrying STT on CPU", exc)
-        ensure_cuda_libraries()
-        try:
-            transcript = _run_and_build(_load_whisper_model(effective_model, "cpu", "int8"))
-        except STTError:
-            raise
-        except Exception as cpu_exc:  # noqa: BLE001 - map CPU fallback failure
-            raise STTError(E_STT_FAILED, "Transcription failed (CPU fallback also failed).") from cpu_exc
         return TranscribeResult(
             transcript=transcript,
             model_used=effective_model,
-            device_used="cpu",
+            device_used=resolved_device,
+            engine=STT_MODE_REGULAR,
         )
-    except Exception as exc:  # noqa: BLE001 - map every transcription failure
-        raise STTError(E_STT_FAILED, "Transcription failed.") from exc
-    return TranscribeResult(
-        transcript=transcript,
-        model_used=effective_model,
-        device_used=resolved_device,
-    )
+
+    def _run_batched(mdl: Any) -> TranscribeResult:
+        engine = BatchedSTTEngine(batch_size=batch_size)
+        transcript = engine.transcribe(
+            mdl,
+            audio_path,
+            project_id=project_id,
+            model_name=effective_model,
+            language=language,
+            total_duration_seconds=total_duration_seconds,
+            cancel=cancel,
+            on_progress=on_progress,
+        )
+        return TranscribeResult(
+            transcript=transcript,
+            model_used=effective_model,
+            device_used=resolved_device,
+            engine=STT_MODE_BATCHED,
+        )
+
+    # Choose engine with fallback. ``batched`` never hard-fails the job: any
+    # failure (runtime exception, OOM, unsupported model at runtime, invalid
+    # output, timestamp corruption) drops to ``regular`` and the job continues
+    # safely. CUDA-lib RuntimeErrors are still retried on CPU at the end.
+    transcript_result: TranscribeResult | None = None
+
+    def _run_with_cpu_retry(build: Callable[[Any], TranscribeResult]) -> TranscribeResult:
+        """Mirror the pre-existing single-pass try/except (CUDA lib -> CPU)."""
+        try:
+            return build(model)
+        except CancelledError:
+            raise
+        except STTError:
+            raise
+        except RuntimeError as exc:  # noqa: BLE001 - see below
+            if resolved_device != "cuda" or not _is_cuda_library_error(exc):
+                raise STTError(E_STT_FAILED, "Transcription failed.") from exc
+            logger.warning("CUDA runtime library failure (%s); retrying STT on CPU", exc)
+            ensure_cuda_libraries()
+            try:
+                return build(_load_whisper_model(effective_model, "cpu", "int8"))
+            except STTError:
+                raise
+            except Exception as cpu_exc:  # noqa: BLE001 - map CPU fallback failure
+                raise STTError(E_STT_FAILED, "Transcription failed (CPU fallback also failed).") from cpu_exc
+        except Exception as exc:  # noqa: BLE001 - map every transcription failure
+            raise STTError(E_STT_FAILED, "Transcription failed.") from exc
+
+    if mode == STT_MODE_BATCHED:
+        try:
+            transcript_result = _run_batched(model)
+        except CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - fallback, not a hard failure
+            _emit("[BATCHED_STT] Failed")
+            reason = str(exc) or exc.__class__.__name__
+            _emit(f"[BATCHED_STT] Reason: {reason}")
+            _emit("[STT] Falling back to regular mode")
+            logger.exception("Batched STT failed; falling back to regular")
+            transcript_result = _run_with_cpu_retry(_run_regular)
+    else:
+        transcript_result = _run_with_cpu_retry(_run_regular)
+
+    return transcript_result
 
 
 def _transcribe_whisper_cpp(

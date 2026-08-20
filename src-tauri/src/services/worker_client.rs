@@ -645,6 +645,8 @@ pub struct ChunkedAutomationRequest {
     pub tts_engine: String,
     pub stt_model: String,
     pub stt_device: String,
+    pub stt_mode: String,
+    pub stt_batch_size: u32,
     pub chunk_duration: f64,
     pub overlap: f64,
     pub max_concurrency: u32,

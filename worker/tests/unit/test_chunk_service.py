@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import struct
 import time
 import wave
 
@@ -30,7 +31,11 @@ from src.services.chunk_service import (
     ChunkScheduler,
     StreamingChunkPipeline,
     _append_chunk_voice,
+    _ensure_translation_provider,
+    _large_interior_gaps,
     _pcm_to_wav,
+    _segment_gap_has_speech,
+    _stop_translation_provider,
     assemble_translations,
     build_chunks,
     build_performance_trace,
@@ -38,6 +43,7 @@ from src.services.chunk_service import (
     concat_voice_tracks,
     merge_cues,
     merge_segments,
+    stt_thread_budget,
     validate_chunk_order,
     validate_chunk_result,
     validate_timeline,
@@ -475,6 +481,68 @@ class TestCleanupManager:
         assert temp.exists()  # artifacts survive for debugging/retry
 
 
+class TestSharedTranslationProvider:
+    """One translation provider per pipeline run — never one per chunk.
+
+    Building a provider per chunk re-spawns a llama-server per chunk for
+    local/free models (and creates a throwaway client for cloud ones); the run
+    shares a single lazily-created instance, stopped exactly once afterwards.
+    """
+
+    def _ctx(self) -> ChunkPipelineContext:
+        return ChunkPipelineContext(
+            project_id="p",
+            project_dir="/tmp/p",
+            source_audio="/tmp/p/a.wav",
+            source_language="en",
+            target_language="vi",
+            provider="mock",
+            provider_config=None,
+            api_key=None,
+            model="mock",
+            glossary_ver="0",
+            glossary=None,
+            characters=None,
+            rules=None,
+            dub=False,
+            voice=None,
+            tts_engine="piper",
+            workdir="/tmp/p/temp",
+        )
+
+    def test_builds_once_and_reuses_the_same_instance(self, monkeypatch):
+        built = []
+
+        def fake_build(name, config, api_key):
+            built.append(name)
+            return object()
+
+        import src.api.pipeline as pipeline_mod
+
+        monkeypatch.setattr(pipeline_mod, "build_translation_provider", fake_build)
+        ctx = self._ctx()
+        assert _ensure_translation_provider(ctx) is _ensure_translation_provider(ctx)
+        assert len(built) == 1
+
+    def test_stops_the_shared_provider_exactly_once(self):
+        stopped = []
+
+        class _Provider:
+            def stop(self):
+                stopped.append(1)
+
+        ctx = self._ctx()
+        ctx.translation_provider = _Provider()
+        _stop_translation_provider(ctx)
+        _stop_translation_provider(ctx)
+        assert stopped == [1]
+
+    def test_stop_tolerates_a_provider_without_stop(self):
+        ctx = self._ctx()
+        ctx.translation_provider = object()
+        _stop_translation_provider(ctx)  # must not raise
+
+
 class TestSharedWhisperModel:
     """Phase 24 fix: chunked pipeline must not reload the ~3 GB model per chunk.
 
@@ -489,9 +557,10 @@ class TestSharedWhisperModel:
 
         # Prime the cache directly (the real loader would download a ~3 GB
         # model); then a call with the same key must return that instance
-        # without ever invoking faster-whisper.
+        # without ever invoking faster-whisper. The cache key includes
+        # cpu_threads (None = faster-whisper default thread count).
         sentinel = object()
-        key = ("large-v3", "cpu", "int8")
+        key = ("large-v3", "cpu", "int8", None)
         stt._WHISPER_MODEL_CACHE[key] = sentinel
 
         monkeypatch.setattr(stt, "ensure_cuda_libraries", lambda: None)
@@ -593,6 +662,42 @@ class TestPerformanceTrace:
         assert trace["stages"]["stt"]["peak_active"] == 2
         assert trace["stages"]["stt"]["avg_active"] == pytest.approx(8 / 5, abs=0.01)
 
+    def test_reports_queue_wait_per_stage(self):
+        c1 = {
+            "wall_start_s": 0.0, "wall_end_s": 5.0,
+            "slice_start_s": 0.0, "slice_s": 1.0,
+            "stt_start_s": 1.0, "stt_s": 4.0,
+            "translate_start_s": 0.0, "translate_s": 0.0,
+            "tts_start_s": 0.0, "tts_s": 0.0,
+            "queue_wait_s": {"stt": 0.5, "translate": 2.0, "tts": 0.0},
+        }
+        c2 = {
+            "wall_start_s": 1.0, "wall_end_s": 6.0,
+            "slice_start_s": 0.0, "slice_s": 0.0,
+            "stt_start_s": 2.0, "stt_s": 4.0,
+            "translate_start_s": 1.0, "translate_s": 1.0,
+            "tts_start_s": 0.0, "tts_s": 0.0,
+            "queue_wait_s": {"stt": 1.0, "translate": 0.0, "tts": 0.0},
+        }
+        trace = build_performance_trace(
+            [self._art(1, c1), self._art(2, c2)],
+            job_id="j",
+            total_duration=60.0,
+            chunk_duration=30.0,
+            overlap=2.0,
+            max_concurrency=4,
+            max_retries=2,
+        )
+        rows = {r["index"]: r for r in trace["chunks"]}
+        assert rows[1]["queue_wait_stt_ms"] == 500
+        assert rows[1]["queue_wait_translate_ms"] == 2000
+        assert rows[2]["queue_wait_stt_ms"] == 1000
+        # Only the translate period of chunk 2 counts as "ran" (dur > 0); but
+        # queue waits are recorded regardless of the stage having work, so sums
+        # include waits on stages whose chunk ran.
+        assert trace["stages"]["stt"]["total_queue_ms"] == 1500
+        assert trace["stages"]["stt"]["avg_queue_ms"] == pytest.approx(750.0)
+
     def test_rows_relative_to_earliest_start(self):
         c1 = {
             "wall_start_s": 2.0, "wall_end_s": 5.0,
@@ -649,6 +754,37 @@ class TestPerformanceTrace:
 # ---------------------------------------------------------------------------
 # Streaming pipeline — stage-decoupled pools + ordered assembly buffer.
 # ---------------------------------------------------------------------------
+
+
+class TestSttThreadBudget:
+    """Per-STT-call ``cpu_threads`` budget so concurrent chunks share the CPU.
+
+    faster-whisper defaults to *all* cores per ``transcribe()`` call; with N
+    chunks transcribing at once the machine is oversubscribed N× and wall time
+    barely drops. Budgeting ``cores // stt_workers`` per call gives real
+    parallelism (one worker keeps every core — no regression).
+    """
+
+    def test_single_worker_keeps_all_cores(self):
+        assert stt_thread_budget(1) == os.cpu_count()
+
+    def test_two_workers_halve_the_cores(self):
+        assert stt_thread_budget(2) == os.cpu_count() // 2
+
+    def test_many_workers_floor_at_one(self):
+        cores = os.cpu_count() or 4
+        assert stt_thread_budget(cores * 4) == 1
+        assert stt_thread_budget(1000) == 1
+
+    def test_explicit_cpu_count(self):
+        assert stt_thread_budget(1, cpu_count=8) == 8
+        assert stt_thread_budget(2, cpu_count=8) == 4
+        assert stt_thread_budget(3, cpu_count=7) == 2  # 7 // 3
+
+    def test_fallback_when_cpu_count_unknown(self, monkeypatch):
+        monkeypatch.setattr(chunk_service.os, "cpu_count", lambda: None)
+        assert stt_thread_budget(1) == 4  # ``os.cpu_count() or 4`` fallback
+        assert stt_thread_budget(8) == 1  # 4 // 8 → floored at 1
 
 
 class TestVoiceStreaming:
@@ -888,3 +1024,116 @@ class TestStreamingPipeline:
         ctx = self._ctx(tmp_path)
         with pytest.raises(ValueError):
             StreamingChunkPipeline(manager=manager, ctx=ctx, stt_workers=0, translate_workers=1, tts_workers=1)
+
+    def test_stt_stage_forwards_cpu_threads_to_transcribe(self, tmp_path, monkeypatch):
+        # ``_run_stt_stage`` imports ``transcribe as stt_transcribe`` from
+        # src.services.stt_service AT CALL TIME, so the seam must be patched on
+        # that module, not on any local reference.
+        import src.services.stt_service as stt_service
+
+        captured: dict = {}
+
+        def fake_slice(src_wav, dst_wav, start, duration, *, ffmpeg_bin=None):  # noqa: ARG001
+            os.makedirs(os.path.dirname(dst_wav), exist_ok=True)
+            with open(dst_wav, "wb") as fh:
+                fh.write(b"\x00" * 100)
+            return dst_wav
+
+        def fake_transcribe(audio_path, **kwargs):
+            captured["audio_path"] = audio_path
+            captured.update(kwargs)
+            return stt_service.TranscribeResult(
+                transcript={
+                    "segments": [
+                        {"start": 0.0, "end": 1.0, "text": "hello", "language": "en"},
+                    ]
+                },
+                model_used="large-v3",
+                device_used="cpu",
+            )
+
+        monkeypatch.setattr(chunk_service, "slice_audio", fake_slice)
+        monkeypatch.setattr(stt_service, "transcribe", fake_transcribe)
+
+        ctx = self._ctx(tmp_path)
+        ctx.stt_cpu_threads = stt_thread_budget(2)
+        chunk = build_chunks(6.0, chunk_duration=2.0, overlap=0.0)[0]
+        state = chunk_service._StageState(chunk=chunk)
+        chunk_service._run_stt_stage(state, ctx)
+
+        assert captured["cpu_threads"] == ctx.stt_cpu_threads
+        assert captured["audio_path"] == state.audio_path
+        assert state.segments and state.segments[0]["text"] == "hello"
+        assert state.silent is False
+
+
+# ---------------------------------------------------------------------------
+# P1 STT quality guard — batched early-EOS collapse recovery
+# ---------------------------------------------------------------------------
+
+
+def _write_test_wav(path, seconds: float, *, rate: int = 16000, noise_amp: int = 0):
+    """16 kHz mono pcm_s16le. ``noise_amp > 0`` fills real (speech-like)
+    energy so the acoustic guard measures RMS, else silent zeros."""
+    import array
+
+    nframes = int(seconds * rate)
+    if noise_amp:
+        samples = array.array("h")
+        for i in range(nframes):
+            samples.append(noise_amp * ((i * 7) % 3 - 1))
+    else:
+        samples = array.array("h", bytes(nframes * 2))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(samples.tobytes())
+    return str(path)
+
+
+class TestSttQualityGuard:
+    def test_large_interior_gaps_basic(self):
+        segs = [
+            {"start": 0.0, "end": 2.0},
+            {"start": 10.0, "end": 12.0},
+            {"start": 13.0, "end": 14.0},
+        ]
+        assert _large_interior_gaps(segs, 0, 20) == [(2.0, 10.0)]  # 8s hole
+        assert _large_interior_gaps(segs, 0, 20, min_gap=9.0) == []
+
+    def test_hole_touching_logical_edge_is_ignored(self):
+        # Leading/trailing silence within the window is a normal pause.
+        segs = [{"start": 5.0, "end": 6.0}]
+        assert len(segs) < 2
+        assert _large_interior_gaps(segs, 0, 10) == []
+
+    def test_speech_carrying_gap_returns_true(self, tmp_path):
+        # Chunk slice is [10, 40)s: 30s of speech energy, chunks mapped with
+        # time_offset=10. Segment times carry source-timeline values.
+        audio = _write_test_wav(tmp_path / "audio.wav", 30.0, noise_amp=4000)
+        segs = [
+            {"start": 15.0, "end": 18.0},
+            {"start": 38.0, "end": 40.0},
+        ]  # big hole [18,38] the collapsed decode left empty
+        assert _segment_gap_has_speech(audio, 12, 40, segs, time_offset=10.0)
+
+    def test_silent_gap_returns_false(self, tmp_path):
+        audio = _write_test_wav(tmp_path / "audio.wav", 30.0, noise_amp=0)
+        segs = [
+            {"start": 15.0, "end": 18.0},
+            {"start": 38.0, "end": 40.0},
+        ]
+        assert _segment_gap_has_speech(audio, 12, 40, segs, time_offset=10.0) is False
+
+    def test_no_large_hole_returns_false_without_audio_io(self, tmp_path, monkeypatch):
+        audio = _write_test_wav(tmp_path / "audio.wav", 10.0, noise_amp=4000)
+        segs = [{"start": 0.0, "end": 3.0}, {"start": 3.5, "end": 6.0}, {"start": 6.5, "end": 9.0}]
+        called = []
+
+        import src.services.chunk_service as cs
+
+        monkeypatch.setattr(cs, "wave", None)
+        # With no large hole the function must return False WITHOUT touching wave
+        assert _segment_gap_has_speech(audio, 0, 10, segs, time_offset=0.0) is False
+        assert called == []

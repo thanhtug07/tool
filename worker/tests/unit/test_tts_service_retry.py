@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 import types
 import wave
+from collections import OrderedDict
 
 import pytest
 
@@ -96,3 +97,86 @@ def test_raises_tts_error_after_max_attempts(fake_edge, tmp_path):
     assert excinfo.value.code == "E_TTS_FAILED"
     assert "edge-tts synthesis failed" in excinfo.value.message
     assert fake.calls == tts_service._EDGE_MAX_ATTEMPTS
+
+
+class _FakePiperMessage:
+    def __init__(self, index_data, output_bytes=0):
+        self._chunk = bytes(index_data)
+        self._output_bytes = output_bytes
+
+
+class _FakePiperVoice:
+    """Fake ``piper.PiperVoice`` counting ``load`` calls (single process-wide
+    cache must hit, not reload, on repeat voices)."""
+
+    loads = 0
+
+    def __init__(self, model_path: str):
+        self.model_path = model_path
+
+    @classmethod
+    def load(cls, model_path: str) -> "_FakePiperVoice":
+        cls.loads += 1
+        return cls(model_path)
+
+    def synthesize(
+        self,
+        text: str,
+        sink,  # noqa: ANN001 - file-like (legacy rhasspy API)
+        synthesize_kwargs=None,  # noqa: ANN001
+    ) -> None:
+        # A valid 44.1k mono 16-bit WAV (0.2 s of silence) so the real
+        # `_normalize_to_wav` + wave reader succeed.
+        frames = bytearray(b"\x00\x00" * int(44100 * 0.2))
+        with wave.open(sink, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes(bytes(frames))
+
+
+@pytest.fixture
+def fake_piper(monkeypatch):
+    """Install a fake ``piper`` module and stub model resolution/voice cache."""
+    import sys
+
+    pip_voice = _FakePiperVoice
+    pip_voice.loads = 0
+    mod = types.ModuleType("piper")
+    mod.PiperVoice = pip_voice
+    monkeypatch.setitem(sys.modules, "piper", mod)
+
+    cached = {}
+
+    cache = OrderedDict()
+    monkeypatch.setattr(tts_service, "_PIPER_VOICE_CACHE", cache)
+    monkeypatch.setattr(tts_service, "_PIPER_VOICE_CACHE_MAX", 2)
+    monkeypatch.setattr(
+        tts_service,
+        "_piper_model_path",
+        lambda voice: (f"/models/{voice}.onnx", f"/models/{voice}.json"),
+    )
+
+    yield pip_voice
+    monkeypatch.delitem(sys.modules, "piper", raising=False)
+
+
+def _call_piper(text: str, voice: str, out_wav: str) -> float:
+    return tts_service._synthesize_piper(text, voice, out_wav)
+
+
+def test_piper_voice_loaded_once_across_cues(fake_piper, tmp_path):
+    fake_piper.loads = 0
+    _call_piper("Xin chào", "vi-VN-vais1000-medium", str(tmp_path / "a.wav"))
+    _call_piper("Xin chào thế giới", "vi-VN-vais1000-medium", str(tmp_path / "b.wav"))
+    _call_piper("Hello", "vi-VN-vais1000-medium", str(tmp_path / "c.wav"))
+    assert fake_piper.loads == 1  # one ONNX parse for the whole run, not per cue
+
+
+def test_piper_voice_cache_evicts_to_max(fake_piper, tmp_path):
+    fake_piper.loads = 0
+    _call_piper("a", "voice-a", str(tmp_path / "a.wav"))
+    _call_piper("b", "voice-b", str(tmp_path / "b.wav"))
+    _call_piper("c", "voice-c", str(tmp_path / "c.wav"))  # evicts voice-a (LRU cap 2)
+    _call_piper("a", "voice-a", str(tmp_path / "d.wav"))
+    assert fake_piper.loads == 4  # voice-a reloaded after eviction

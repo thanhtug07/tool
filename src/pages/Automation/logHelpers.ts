@@ -33,6 +33,19 @@ export function appendLogEntry(entries: LogEntry[], entry: LogEntry, max: number
 }
 
 /**
+ * True when the incoming line is an exact repeat of the newest line already on
+ * the console. The Rust core already forwards a worker detail message once per
+ * *change* within a stage call, but the stage-decoupled worker pool can
+ * re-publish an identical detail line non-consecutively — at the UI surface an
+ * exact repeat adds noise, not information. (Distinct repeats are kept; only
+ * an immediate identical re-emission is dropped.)
+ */
+export function isConsecutiveDuplicate(entries: LogEntry[], entry: LogEntry): boolean {
+  const last = entries[entries.length - 1];
+  return last !== undefined && last.level === entry.level && last.message === entry.message;
+}
+
+/**
  * Estimate remaining time from *real* progress velocity.
  * Returns `null` (so the UI hides ETA) whenever there is not enough data:
  * before meaningful progress, after completion, or on a stalled pipeline.

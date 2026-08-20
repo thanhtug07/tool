@@ -25,6 +25,8 @@ export type StudioSessionOptions = {
   logoRemoval?: LogoRemovalConfig;
   /** Chunked parallel pipeline (TASK_AUTOMATION_PINELINE) — default off. */
   chunked?: boolean;
+  /** Directory the rendered video is auto-exported into on success ('' = none). */
+  outputFolder?: string;
 };
 
 const planKey = (projectId: string) => `studio.plan.${projectId}`;
@@ -141,7 +143,8 @@ function isOptions(value: unknown): value is StudioSessionOptions {
     isRecord(value.watermark) &&
     (value.overlay === undefined || isOverlay(value.overlay)) &&
     (value.logoRemoval === undefined || isLogoRemoval(value.logoRemoval)) &&
-    (value.chunked === undefined || typeof value.chunked === "boolean")
+    (value.chunked === undefined || typeof value.chunked === "boolean") &&
+    (value.outputFolder === undefined || typeof value.outputFolder === "string")
   );
 }
 

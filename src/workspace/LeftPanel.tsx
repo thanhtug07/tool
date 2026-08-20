@@ -99,6 +99,20 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             <FolderOpen className="size-3.5" aria-hidden="true" /> Output
           </Button>
         )}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => ctx.actions.pickOutputFolder()}
+          data-role="automation-output-folder"
+          title={options.outputFolder || "Choose the folder the video is saved to on success"}
+          className="max-w-[220px] gap-1.5"
+        >
+          <FolderOpen className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">
+            {options.outputFolder ? `Save to: ${fileBaseName(options.outputFolder)}` : "Save to…"}
+          </span>
+        </Button>
         {project ? (
           <span className="min-w-0 truncate" title={project.source_video_path}>
             {fileBaseName(project.source_video_path)}
@@ -322,6 +336,23 @@ function MoreOptionsPanel({ ctx, onClose }: { ctx: WorkspaceContext; onClose: ()
         </button>
         {advanced === "export" && (
           <div className="space-y-2 rounded border border-border bg-background/60 p-2">
+            <div className="flex items-center gap-2">
+              <span
+                className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
+                title={options.outputFolder || undefined}
+              >
+                {options.outputFolder ? fileBaseName(options.outputFolder) : "No output folder"}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-role="more-options-output-folder"
+                onClick={() => ctx.actions.pickOutputFolder()}
+              >
+                Choose folder
+              </Button>
+            </div>
             <Button
               type="button"
               size="sm"

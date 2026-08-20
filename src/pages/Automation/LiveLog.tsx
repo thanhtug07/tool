@@ -28,6 +28,7 @@ import {
   computeEta,
   formatEta,
   isAtBottom,
+  isConsecutiveDuplicate,
   toLogEntry,
   type LogEntry,
 } from "./logHelpers";
@@ -105,13 +106,11 @@ export default function LiveLog({
       if (cancelled) return;
       if (!planJobIds.has(event.jobId)) return;
       const id = nextId.current++;
-      setEntries((current) =>
-        appendLogEntry(
-          current,
-          toLogEntry(event, id, Date.now()),
-          Math.max(1, Math.min(2000, maxLogs)),
-        ),
-      );
+      setEntries((current) => {
+        const entry = toLogEntry(event, id, Date.now());
+        if (isConsecutiveDuplicate(current, entry)) return current;
+        return appendLogEntry(current, entry, Math.max(1, Math.min(2000, maxLogs)));
+      });
     }).then((stop) => {
       if (cancelled) stop();
       else unlisten = stop;

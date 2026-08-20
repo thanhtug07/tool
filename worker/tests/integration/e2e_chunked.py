@@ -38,6 +38,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+import analyze_trace  # noqa: E402  (pure trace analysis for the perf report)
 import e2e_pipeline  # noqa: E402  (sibling runner: fixture + worker helpers)
 
 
@@ -90,6 +91,32 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=float, default=300.0, help="target fixture seconds")
     parser.add_argument("--stt-model", default="small")
+    parser.add_argument("--chunk-duration", type=float, default=30.0, help="logical chunk seconds")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="STT/translate/TTS pool sizes (benchmark concurrency)",
+    )
+    parser.add_argument(
+        "--stt-device",
+        default="cpu",
+        choices=("cpu", "cuda", "auto"),
+        help="faster-whisper device for the chunked STT stage",
+    )
+    parser.add_argument(
+        "--stt-mode",
+        default="auto",
+        choices=("auto", "regular", "batched"),
+        help="STT engine selection for the chunked stage (regular/batched/auto)",
+    )
+    parser.add_argument(
+        "--stt-batch-size",
+        type=int,
+        default=2,
+        choices=(1, 2, 4),
+        help="batched-pipeline batch size (1/2/4), ignored unless batched/auto",
+    )
     parser.add_argument("--port", type=int, default=8801)
     parser.add_argument("--dub", action="store_true", help="enable TTS + voice-track assembly")
     parser.add_argument("--voice", default="vi-VN-HoaiMyNeural")
@@ -126,6 +153,8 @@ def main() -> int:
     report: dict = {
         "fixture_duration_s": args.duration,
         "stt_model": args.stt_model,
+        "stt_mode": args.stt_mode,
+        "stt_batch_size": args.stt_batch_size,
         "dub": args.dub,
         "stages": {},
         "identity": None,
@@ -178,20 +207,30 @@ def main() -> int:
             "provider_config": provider_config,
             "glossary_ver": "0",
             "stt_model": args.stt_model,
-            "stt_device": "cpu",
-            "chunk_duration": 30.0,
+            "stt_device": args.stt_device,
+            "stt_mode": args.stt_mode,
+            "stt_batch_size": args.stt_batch_size,
+            "chunk_duration": args.chunk_duration,
             "overlap": 2.0,
             "max_concurrency": 4,
+            "stt_workers": args.workers,
+            "translate_workers": args.workers,
+            "tts_workers": args.workers,
             "max_retries": 2,
             "duration_tolerance": 0.5,
         }
         if args.dub:
             body.update({"dub": True, "voice": args.voice, "tts_engine": args.tts_engine})
         manifest = e2e_pipeline.http(args.port, "POST", "/v1/automation/chunked", body)
+        chunked_seconds = round(time.monotonic() - t0, 2)
         report["stages"]["chunked"] = {
-            "seconds": round(time.monotonic() - t0, 2),
+            "seconds": chunked_seconds,
+            "rtf": round(chunked_seconds / args.duration, 3),
             **chunk_stats(manifest),
         }
+        # Real per-stage concurrency utilization recorded by the pipeline
+        # (peak/avg active workers per stage from build_performance_trace).
+        report["perf"] = manifest.get("perf")
 
         # 5) FIX #1 identity invariant: transcript ids == translation ids
         identity = check_segment_identity(manifest["artifacts"])
@@ -236,7 +275,15 @@ def main() -> int:
         if sampler is not None:
             report["metrics_peaks"] = sampler.close()
 
+        # Real execution-timeline analysis (overlap / windows / concurrency):
+        # derived purely from the pipeline's own measured perf trace.
+        if report.get("perf"):
+            report["trace_analysis"] = analyze_trace.summarize(
+                report["perf"], report.get("metrics_peaks")
+            )
+
         # 9) Finalize (final validation + cleanup of the temp tree)
+        t0 = time.monotonic()
         finalize = e2e_pipeline.http(args.port, "POST", "/v1/automation/finalize", {
             "job_id": "e2e-chunked",
             "project_dir": str(project_dir),
@@ -244,15 +291,28 @@ def main() -> int:
             "source_duration": args.duration,
             "duration_tolerance": 0.5,
         })
-        report["finalize"] = finalize
+        report["stages"]["finalize"] = {
+            "seconds": round(time.monotonic() - t0, 2),
+            "validation": finalize.get("validation"),
+            "verification": finalize.get("verification"),
+        }
 
         report["total_seconds"] = round(time.monotonic() - t_start, 2)
         report["workdir"] = str(workdir)
         report["final_mp4"] = str(output)
 
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        report_path = workdir / "report.json"
+        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"\nEVIDENCE_DIR={workdir}")
+        print(f"REPORT_JSON={report_path}")
         print(f"FINAL_MP4={output}")
+        if report.get("trace_analysis"):
+            print("\nTRACE ANALYSIS")
+            print("=" * 78)
+            for line in report["trace_analysis"]["gantt"]:
+                print("  " + line)
+            print("=" * 78)
         problems = []
         if not identity["pass"]:
             problems.append("identity")

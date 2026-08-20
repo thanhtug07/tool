@@ -27,10 +27,12 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import wave
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from src.core.ffmpeg import resolve_ffmpeg
 from src.core.job import CancelledError, CancellationToken
@@ -52,6 +54,13 @@ TRACK_SAMPLE_WIDTH = 2
 
 #: Speech that overflows its cue window is sped up; never beyond this factor.
 MAX_FIT_ATEMPO = 1.5
+
+#: Reused ``piper.PiperVoice`` handles keyed by ONNX model path. Loading the
+#: model once per voice (instead of per cue) is the difference between a few
+#: hundred MB of `onnx` parse per line and one parse per voice per process.
+_PIPER_VOICE_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_PIPER_VOICE_CACHE_LOCK = threading.Lock()
+_PIPER_VOICE_CACHE_MAX = 8
 
 #: Voice registry: ``{voice_id: label}``. These are REAL Microsoft neural
 #: voices served by edge-tts (the ``edge`` engine) — every id is a voice the
@@ -417,11 +426,22 @@ def _piper_model_path(voice: str) -> tuple[str, str]:
 
 
 def _synthesize_piper(text: str, voice: str, out_wav: str) -> float:
-    from piper import PiperVoice  # noqa: PLC0415 - lazy, heavy
-
     model_path, _json = _piper_model_path(voice)
+    # PiperVoice.load parses the whole ONNX model on every call; cue-level
+    # synthesis would reload it per line (per chunk, per run). Cache one
+    # handle per ONNX path, bounded LRU — voices are not free RAM. PiperVoice
+    # is thread-safe for concurrent synthesis (onnxruntime session), and the
+    # cache itself is lock-guarded for the TTS worker pool.
+    with _PIPER_VOICE_CACHE_LOCK:
+        v = _PIPER_VOICE_CACHE.get(model_path)
+        if v is None:
+            from piper import PiperVoice  # noqa: PLC0415 - lazy, heavy
+
+            v = PiperVoice.load(model_path)
+            _PIPER_VOICE_CACHE[model_path] = v
+            while len(_PIPER_VOICE_CACHE) > _PIPER_VOICE_CACHE_MAX:
+                _PIPER_VOICE_CACHE.popitem(last=False)
     try:
-        v = PiperVoice.load(model_path)
         synthesize_wav = getattr(v, "synthesize_wav", None)
         if synthesize_wav is not None:
             # New chunk-based piper API (>=1.6): writes the WAV header itself.

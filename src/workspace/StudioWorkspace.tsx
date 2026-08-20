@@ -139,6 +139,8 @@ export default function StudioWorkspace({
   // Chunked parallel pipeline (TASK_AUTOMATION_PINELINE) — the whole chain
   // runs inside one job in 30s chunks; off by default (existing behavior).
   const [chunked, setChunked] = useState(false);
+  // Directory the rendered video is auto-exported into on success ('' = none).
+  const [outputFolder, setOutputFolder] = useState("");
   const [watermark, setWatermark] = useState<WatermarkConfigType>(DEFAULT_WATERMARK);
   const [voiceOptions, setVoiceOptions] = useState<{ value: string; label: string }[]>([]);
   const [logoRemoval, setLogoRemoval] = useState<LogoRemovalConfig>(DEFAULT_LOGO_REMOVAL);
@@ -225,6 +227,7 @@ export default function StudioWorkspace({
       if (savedOptions.voice && !savedOptions.dubAudio) setDubAudio(true);
       setTtsEngine(savedOptions.ttsEngine);
       if (savedOptions.chunked !== undefined) setChunked(savedOptions.chunked);
+      if (savedOptions.outputFolder !== undefined) setOutputFolder(savedOptions.outputFolder);
       setWatermark(savedOptions.watermark);
       if (savedOptions.overlay) setOverlay(savedOptions.overlay);
       if (savedOptions.logoRemoval) setLogoRemoval(savedOptions.logoRemoval);
@@ -259,6 +262,7 @@ export default function StudioWorkspace({
       overlay,
       logoRemoval,
       chunked,
+      outputFolder,
     });
   }, [
     project,
@@ -274,6 +278,7 @@ export default function StudioWorkspace({
     overlay,
     logoRemoval,
     chunked,
+    outputFolder,
   ]);
 
   // Persist the running plan so a mid-run remount resumes instead of stalling.
@@ -329,6 +334,7 @@ export default function StudioWorkspace({
     subtitleStyle: overlay,
     logoRemoval,
     chunked,
+    outputFolder,
   });
   optionsRef.current = {
     sourceLanguage,
@@ -342,6 +348,7 @@ export default function StudioWorkspace({
     subtitleStyle: overlay,
     logoRemoval,
     chunked,
+    outputFolder,
   };
 
   // Seed provider selection from the configured default once the registry loads.
@@ -489,6 +496,32 @@ export default function StudioWorkspace({
       cancelled = true;
     };
   }, [project, stages]);
+
+  // When the run succeeds and an output folder was chosen before starting,
+  // copy the rendered video there (with QC) once per run. Re-mounts and
+  // re-runs are guarded by the run key so a video is never exported twice.
+  const autoExportedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (phase !== "succeeded" || !project || !outputFolder || !artifacts || plan.startedAt === null)
+      return;
+    const runKey = `${project.id}:${plan.startedAt}`;
+    if (autoExportedRef.current === runKey) return;
+    autoExportedRef.current = runKey;
+    void (async () => {
+      try {
+        const exp = await exportVideo(artifacts.renderedVideo, outputFolder, {
+          name: fileBaseName(project.source_video_path),
+          runQc: true,
+        });
+        toast.push(
+          `Video saved to ${exp.path} — QC ${exp.qc.passed ? "passed" : "failed"}.`,
+          exp.qc.passed ? "success" : "error",
+        );
+      } catch (e) {
+        setRunError(String(e));
+      }
+    })();
+  }, [phase, project, outputFolder, artifacts, plan.startedAt]);
 
   // ---- video import (dialog + webview drag-drop) -----------------------------
 
@@ -897,6 +930,16 @@ export default function StudioWorkspace({
     }
   }
 
+  /** Pick the folder the rendered video is auto-exported into on success. */
+  async function handlePickOutputFolder() {
+    try {
+      const picked = await pickFile({ directory: true, multiple: false });
+      if (typeof picked === "string") setOutputFolder(picked);
+    } catch (e) {
+      setRunError(String(e));
+    }
+  }
+
   /** Show the rendered output right in the Result preview tab and play it. */
   const handlePreviewResult = useCallback(() => {
     if (!resultReady || !artifacts) return;
@@ -972,6 +1015,8 @@ export default function StudioWorkspace({
     setLogoRemoval,
     chunked,
     setChunked,
+    outputFolder,
+    setOutputFolder,
   };
 
   const ctx: WorkspaceContext = {
@@ -998,6 +1043,7 @@ export default function StudioWorkspace({
       export: () => void handleExport(),
       copyPath: () => void handleCopyPath(),
       openOutputFolder: () => void handleOpenOutputFolder(),
+      pickOutputFolder: () => void handlePickOutputFolder(),
       openProviderSettings: () => onNavigate("settings"),
       openTool: (tool, projectId) => onOpenTool(tool, projectId),
     },
@@ -1122,6 +1168,8 @@ export default function StudioWorkspace({
               meta={meta}
               artifacts={artifacts}
               resultReady={resultReady}
+              outputFolder={outputFolder}
+              onPickOutputFolder={() => void handlePickOutputFolder()}
               onOpenVideo={() => void pickVideo()}
               onOpenOutputFolder={() => void handleOpenOutputFolder()}
               onPreviewResult={handlePreviewResult}

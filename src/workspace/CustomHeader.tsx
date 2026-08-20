@@ -26,6 +26,8 @@ export default function CustomHeader({
   meta,
   artifacts,
   resultReady,
+  outputFolder,
+  onPickOutputFolder,
   onOpenVideo,
   onOpenOutputFolder,
   onPreviewResult,
@@ -36,6 +38,8 @@ export default function CustomHeader({
   meta: VideoMeta | null;
   artifacts: ArtifactPaths | null;
   resultReady: boolean;
+  outputFolder: string;
+  onPickOutputFolder: () => void;
   onOpenVideo: () => void;
   onOpenOutputFolder: () => void;
   /** Show the rendered output in the Result preview tab and play it. */
@@ -49,6 +53,14 @@ export default function CustomHeader({
 
   const actions: { label: string; icon: typeof Plus; onClick: () => void }[] = [
     { label: "Reset Current Tool", icon: RotateCcw, onClick: () => setConfirming("reset") },
+    {
+      label: "Output Folder",
+      icon: FolderOpen,
+      onClick: () => {
+        setOpen(false);
+        onPickOutputFolder();
+      },
+    },
     { label: "Clear Project", icon: Trash2, onClick: () => setConfirming("clear") },
   ];
 
@@ -166,6 +178,16 @@ export default function CustomHeader({
             )}
             {meta && meta.duration > 0 && (
               <span className="shrink-0 tabular-nums">{formatDuration(meta.duration)}</span>
+            )}
+            {outputFolder && (
+              <span
+                data-role="custom-output-folder-readout"
+                className="min-w-0 max-w-[180px] truncate"
+                title={outputFolder}
+              >
+                <FolderOpen className="mr-1 inline size-3" aria-hidden="true" />
+                {fileBaseName(outputFolder)}
+              </span>
             )}
           </>
         ) : (

@@ -441,6 +441,22 @@ impl PipelineRunner {
         }
     }
 
+    /// Read a string settings value with a fallback.
+    fn setting_str(&self, key: &str, fallback: &str) -> String {
+        match self.settings.get(key) {
+            Ok(Value::String(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    fallback.to_string()
+                } else {
+                    t.to_string()
+                }
+            }
+            Ok(Value::Number(n)) => n.to_string(),
+            _ => fallback.to_string(),
+        }
+    }
+
     fn setting_or(
         &self,
         params: &Value,
@@ -1345,6 +1361,8 @@ impl PipelineRunner {
         let source_language = param_str(p, "source_language").filter(|v| !v.trim().is_empty());
         let stt_model = self.setting_or(p, "model", "ai.model", "large-v3")?;
         let stt_device = self.setting_or(p, "device", "ai.device", "auto")?;
+        let stt_mode = self.setting_str("automation.stt_mode", "auto");
+        let stt_batch_size = self.setting_u32("automation.stt_batch_size", 2);
         let characters = param_object(p, "characters");
         let rules = param_string_array(p, "rules");
 
@@ -1376,6 +1394,8 @@ impl PipelineRunner {
             tts_engine: engine.clone(),
             stt_model,
             stt_device,
+            stt_mode,
+            stt_batch_size,
             chunk_duration,
             overlap,
             max_concurrency,

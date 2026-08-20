@@ -31,6 +31,7 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -285,9 +286,17 @@ class LocalLLMProvider:
             model_path=model_path, server_url=server_url
         )
         self._started_here = False
+        # The same provider instance is shared across the translate worker pool
+        # (one controller per pipeline run, not one per chunk); cold-starting
+        # llama-server must never run twice concurrently.
+        self._start_lock = threading.Lock()
 
     def ensure_started(self) -> None:
-        if not self._controller.ready:
+        if self._controller.ready:
+            return
+        with self._start_lock:
+            if self._controller.ready:
+                return
             self._controller.start()
             self._started_here = True
 

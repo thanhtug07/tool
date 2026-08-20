@@ -8,6 +8,7 @@ import {
   buildTimeline,
   computeEta,
   formatEta,
+  isConsecutiveDuplicate,
   stageLabel,
   toLogEntry,
   type LogEntry,
@@ -89,6 +90,38 @@ describe("toLogEntry", () => {
   it("maps a job:log event preserving level", () => {
     const e = toLogEntry({ jobId: "j", level: "success", message: "done" }, 7, 123);
     expect(e).toEqual({ id: 7, time: 123, level: "success", message: "done" });
+  });
+});
+
+describe("isConsecutiveDuplicate", () => {
+  const entry = (message: string, level: LogEntry["level"] = "info"): LogEntry => ({
+    id: 0,
+    time: 0,
+    level,
+    message,
+  });
+
+  it("drops an exact repeat of the newest line", () => {
+    expect(isConsecutiveDuplicate([entry("segment 3/9")], entry("segment 3/9"))).toBe(true);
+  });
+
+  it("keeps a distinct line after the newest line", () => {
+    expect(isConsecutiveDuplicate([entry("segment 3/9")], entry("segment 4/9"))).toBe(false);
+  });
+
+  it("keeps the same message at a different level", () => {
+    expect(
+      isConsecutiveDuplicate([entry("segment 3/9", "info")], entry("segment 3/9", "warn")),
+    ).toBe(false);
+  });
+
+  it("keeps a repeated message that is not the newest line", () => {
+    const prev = [entry("segment 1/9"), entry("segment 2/9")];
+    expect(isConsecutiveDuplicate(prev, entry("segment 1/9"))).toBe(false);
+  });
+
+  it("is false on an empty console", () => {
+    expect(isConsecutiveDuplicate([], entry("segment 3/9"))).toBe(false);
   });
 });
 
