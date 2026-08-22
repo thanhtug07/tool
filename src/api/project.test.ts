@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
+vi.mock("@/api/invoke", () => ({
+  safeInvoke: vi.fn(),
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 import {
   createProject,
   deleteProject,
@@ -14,7 +14,7 @@ import {
   type Project,
 } from "./project";
 
-const mockedInvoke = vi.mocked(invoke);
+const mockedInvoke = vi.mocked(safeInvoke);
 
 const PROJECT: Project = {
   id: "00000000-0000-4000-8000-000000000001",

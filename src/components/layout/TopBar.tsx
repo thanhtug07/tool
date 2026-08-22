@@ -58,24 +58,24 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
   return (
     <header
       data-role="top-bar"
-      className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card px-4 shadow-[var(--shadow-xs)]"
+      className="glass-panel flex h-14 shrink-0 items-center gap-3 border-b border-border/60 bg-card/80 px-4 shadow-[var(--shadow-xs)] backdrop-blur-md"
     >
       {/* Brand */}
       <div className="flex items-center gap-2.5 pr-2">
-        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-[11px] font-bold text-accent-foreground">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 text-[12px] font-extrabold text-slate-950 shadow-sm shadow-amber-500/20 ring-1 ring-amber-300/30">
           AT
         </span>
-        <p className="hidden text-sm font-semibold tracking-tight text-foreground sm:block">
+        <p className="hidden text-sm font-bold tracking-tight text-foreground sm:block">
           AutoTranslate
         </p>
       </div>
 
-      <span className="h-5 w-px bg-border" aria-hidden="true" />
+      <span className="h-5 w-px bg-border/60" aria-hidden="true" />
 
       {/* Project Selector */}
       <select
         data-role="project-select"
-        className="h-8 max-w-[200px] rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:border-border-strong focus:outline-2 focus:outline-offset-1 focus:outline-[var(--accent)]"
+        className="h-8 max-w-[200px] rounded-lg border border-border/60 bg-background/60 px-3 text-xs font-medium text-foreground transition-all hover:border-border hover:bg-background focus:outline-none focus:ring-2 focus:ring-primary/40"
         value={project?.id ?? ""}
         onChange={(event) => {
           const id = event.target.value;
@@ -93,7 +93,7 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
       </select>
 
       {/* Navigation */}
-      <nav aria-label="Workspace" className="flex items-center gap-1">
+      <nav aria-label="Workspace" className="flex items-center gap-1.5 pl-2">
         {NAV_AREAS.map(({ key, label }) => {
           const selected = key === active;
           return (
@@ -104,15 +104,15 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
               aria-current={selected ? "page" : undefined}
               onClick={() => onNavigate(key)}
               className={cn(
-                "relative rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                "relative rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all duration-200",
                 selected
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted",
+                  ? "bg-accent/80 text-accent-foreground shadow-sm ring-1 ring-accent/40"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
               )}
             >
               {label}
               {selected && (
-                <span className="absolute -bottom-[9px] left-1/2 h-0.5 w-4 -translate-x-1/2 rounded-full bg-accent" />
+                <span className="absolute -bottom-[11px] left-1/2 h-[3px] w-5 -translate-x-1/2 rounded-full bg-primary shadow-[0_0_8px_var(--primary)] animate-fade-in" />
               )}
             </button>
           );

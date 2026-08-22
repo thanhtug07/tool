@@ -64,7 +64,7 @@ describe("computeEta", () => {
 
   it("shows ETA at 10% threshold", () => {
     // 10% at 60s → 540s remaining (9 min)
-    expect(computeEta(0.10, 60_000)).toBe(540_000);
+    expect(computeEta(0.1, 60_000)).toBe(540_000);
   });
 
   it("hides ETA after completion", () => {
@@ -75,7 +75,7 @@ describe("computeEta", () => {
     // Stale startedAt: 1527 min (91,620,000ms) at 5% → 29,016 min
     // But 10% threshold already blocks this. Test with valid fraction
     // but extreme elapsed time: 10% at 15 hours → ETA = 135h (>24h cap)
-    expect(computeEta(0.10, 15 * 60 * 60 * 1000)).toBeNull();
+    expect(computeEta(0.1, 15 * 60 * 60 * 1000)).toBeNull();
   });
 
   it("computes ETA from real progress velocity", () => {

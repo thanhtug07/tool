@@ -37,125 +37,170 @@ export default function HomePage({ onOpenAutomation, onOpenProcessing }: HomePag
   return (
     <section
       aria-labelledby="home-heading"
-      className="mx-auto h-full max-w-5xl overflow-y-auto px-5 py-4"
+      className="relative mx-auto h-full max-w-5xl overflow-y-auto px-6 py-6 bg-radial-gradient"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 id="home-heading" className="text-lg font-semibold tracking-tight">
-          Home
-        </h1>
-        <Button type="button" data-role="new-automation" onClick={() => onOpenAutomation(null)}>
+      {/* Header section */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/40 bg-card/60 p-5 shadow-sm backdrop-blur-md">
+        <div>
+          <h1 id="home-heading" className="text-xl font-bold tracking-tight text-foreground">
+            Project Dashboard
+          </h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Manage your auto-translation workflows and recent media projects
+          </p>
+        </div>
+        <Button
+          type="button"
+          data-role="new-automation"
+          onClick={() => onOpenAutomation(null)}
+          className="bg-primary text-primary-foreground shadow-md shadow-primary/20 hover:bg-primary/90"
+        >
           <Plus className="size-4" aria-hidden="true" /> New Automation
         </Button>
       </div>
 
+      {/* System Status section */}
       <section
         aria-labelledby="system-status-heading"
-        className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-border pb-3 text-sm"
+        className="mt-5 flex flex-wrap items-center gap-3 rounded-lg border border-border/40 bg-card/40 px-4 py-2.5 text-xs shadow-xs"
       >
         <h2 id="system-status-heading" className="sr-only">
           System status
         </h2>
-        <StatusLine tone={worker.tone} label={`Worker · ${worker.label}`} />
+        <span className="font-semibold uppercase tracking-wider text-muted-foreground text-[10px] mr-2">
+          System Status:
+        </span>
+        <StatusLine tone={worker.tone} label={`Worker: ${worker.label}`} />
+        <span className="text-border/60">|</span>
         <StatusLine
           tone={gpuReady ? "ok" : "muted"}
-          label={`GPU · ${gpuReady ? "Available" : "CPU"}`}
+          label={`GPU Acceleration: ${gpuReady ? "Active" : "CPU Fallback"}`}
         />
       </section>
 
-      <section aria-labelledby="realtime-heading" className="mt-4">
+      {/* Realtime processing section */}
+      <section aria-labelledby="realtime-heading" className="mt-6">
         <h2
           id="realtime-heading"
-          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+          className="text-xs font-bold uppercase tracking-wider text-muted-foreground/80 px-1"
         >
-          Processing
+          Current Processing Job
         </h2>
         {activeJob ? (
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <StatusDot tone="info" />
+          <div className="glass-card mt-2.5 flex flex-wrap items-center gap-4 rounded-xl p-4 shadow-md">
+            <StatusDot tone="info" className="size-3 animate-pulse" />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{projectName(activeJob.project_id)}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="truncate text-sm font-semibold text-foreground">
+                {projectName(activeJob.project_id)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
                 {stageLabel(activeJob.stage)} · {jobTypeLabel(activeJob.type)} ·{" "}
-                {Math.round(activeJob.progress * 100)}%
+                <span className="font-medium text-foreground">
+                  {Math.round(activeJob.progress * 100)}%
+                </span>
               </p>
             </div>
-            <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
+            <div className="h-2 w-36 overflow-hidden rounded-full bg-muted/60 p-0.5 shadow-inner">
               <div
-                className="h-full rounded-full bg-primary transition-all"
+                className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-500 transition-all duration-300 shadow-sm"
                 style={{ width: `${Math.round(activeJob.progress * 100)}%` }}
               />
             </div>
-            <Button variant="ghost" size="sm" onClick={() => onOpenAutomation(null)}>
-              Open
+            <Button variant="outline" size="sm" onClick={() => onOpenAutomation(null)}>
+              View Status
             </Button>
           </div>
         ) : (
-          <p className="mt-2 text-sm text-muted-foreground">No active job.</p>
-        )}
-      </section>
-
-      <section aria-labelledby="recent-heading" className="mt-5">
-        <h2
-          id="recent-heading"
-          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-        >
-          Recent projects
-        </h2>
-        {projects.length === 0 ? (
-          <p className="mt-3 text-sm text-muted-foreground">
-            No projects yet — open Automation and choose a video.
-          </p>
-        ) : (
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <th className="py-2 pr-3 font-medium">Name</th>
-                  <th className="py-2 pr-3 font-medium">Status</th>
-                  <th className="py-2 pr-3 font-medium">Time</th>
-                  <th className="py-2 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {projects.slice(0, 8).map((p) => {
-                  const latest = latestJob(jobs, p.id);
-                  return (
-                    <tr key={p.id}>
-                      <td className="max-w-64 py-2 pr-3">
-                        <p className="truncate font-medium" title={p.source_video_path}>
-                          {p.name}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {fileBaseName(p.source_video_path)}
-                        </p>
-                      </td>
-                      <td className="py-2 pr-3">
-                        <StatusBadge tone={statusTone(latest?.status)}>
-                          {latest ? statusLabel(latest.status) : "Draft"}
-                        </StatusBadge>
-                      </td>
-                      <td className="py-2 pr-3 tabular-nums text-muted-foreground">
-                        {latest ? formatDateTime(latest.created_at) : formatDateTime(p.updated_at)}
-                      </td>
-                      <td className="py-2">
-                        <Button variant="outline" size="sm" onClick={() => onOpenAutomation(p)}>
-                          Open <ArrowUpRight className="size-3.5" aria-hidden="true" />
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="mt-2.5 rounded-xl border border-dashed border-border/60 bg-card/20 p-4 text-center">
+            <p className="text-xs text-muted-foreground">No active background jobs processing.</p>
           </div>
         )}
       </section>
 
-      <div className="mt-5 flex flex-wrap gap-2 pb-4">
-        <Button type="button" variant="outline" onClick={() => onOpenProcessing(null)}>
-          Custom workflow
-        </Button>
-      </div>
+      {/* Recent projects section */}
+      <section aria-labelledby="recent-heading" className="mt-7">
+        <div className="flex items-center justify-between px-1">
+          <h2
+            id="recent-heading"
+            className="text-xs font-bold uppercase tracking-wider text-muted-foreground/80"
+          >
+            Recent projects
+          </h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onOpenProcessing(null)}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Custom workflow <ArrowUpRight className="size-3 ml-1" />
+          </Button>
+        </div>
+
+        {projects.length === 0 ? (
+          <div className="mt-3 rounded-xl border border-border/50 bg-card/30 p-8 text-center shadow-xs">
+            <p className="text-sm font-medium text-foreground">No projects created yet</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Click &quot;New Automation&quot; above to select a video and start translating.
+            </p>
+          </div>
+        ) : (
+          <div className="glass-card mt-2.5 overflow-hidden rounded-xl border border-border/50 shadow-md">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-border/60 bg-muted/30 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    <th className="py-3 px-4 font-semibold">Project Name</th>
+                    <th className="py-3 px-4 font-semibold">Status</th>
+                    <th className="py-3 px-4 font-semibold">Last Modified</th>
+                    <th className="py-3 px-4 font-semibold text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40 bg-card/20">
+                  {projects.slice(0, 8).map((p) => {
+                    const latest = latestJob(jobs, p.id);
+                    return (
+                      <tr key={p.id} className="transition-colors hover:bg-muted/30">
+                        <td className="max-w-64 py-3 px-4">
+                          <p
+                            className="truncate font-semibold text-foreground text-sm"
+                            title={p.source_video_path}
+                          >
+                            {p.name}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground/80">
+                            {fileBaseName(p.source_video_path)}
+                          </p>
+                        </td>
+                        <td className="py-3 px-4">
+                          <StatusBadge tone={statusTone(latest?.status)}>
+                            {latest ? statusLabel(latest.status) : "Draft"}
+                          </StatusBadge>
+                        </td>
+                        <td className="py-3 px-4 tabular-nums text-xs text-muted-foreground">
+                          {latest
+                            ? formatDateTime(latest.created_at)
+                            : formatDateTime(p.updated_at)}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onOpenAutomation(p)}
+                            className="hover:border-primary/50 hover:text-primary"
+                          >
+                            Open <ArrowUpRight className="size-3.5 ml-1" aria-hidden="true" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
     </section>
   );
 }

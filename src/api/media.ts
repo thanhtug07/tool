@@ -1,29 +1,11 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
-
 import { safeInvoke } from "@/api/invoke";
 
-export const MEDIA_SCHEME = "media";
-
 /**
- * Build a loadable URL for an absolute local file path.
- *
- * Inside the Tauri shell this uses the official `asset://` protocol
- * (enabled + runtime-scoped in Rust), which is the supported way to stream
- * local video in WebView2 — custom schemes are not reliably served to the
- * media pipeline. The Rust core restricts the asset scope to registered
- * project source videos and project working directories, so arbitrary local
- * files are still refused.
- *
- * Outside the Tauri shell (e.g. the browser dev preview) there is no asset
- * protocol; the raw path is returned so the player attempts it and reports
- * an honest load error instead of throwing.
+ * Build a loadable URL for a local file path or web media URL.
  */
 export function toMediaUrl(path: string): string {
   const trimmed = path?.trim() ?? "";
-  if (!trimmed) return "";
-  const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  if (!hasTauri) return trimmed;
-  return convertFileSrc(trimmed);
+  return trimmed;
 }
 
 /** Real ffprobe metadata for a local media file (Rust `media.probe`). */

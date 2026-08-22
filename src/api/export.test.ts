@@ -1,13 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
+vi.mock("@/api/invoke", () => ({
+  safeInvoke: vi.fn(),
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 import { exportSubtitles, exportVideo, type ExportVideoResult } from "./export";
 
-const mockedInvoke = vi.mocked(invoke);
+const mockedInvoke = vi.mocked(safeInvoke);
 
 const VIDEO_RESULT: ExportVideoResult = {
   path: "C:\\out\\final.mp4",

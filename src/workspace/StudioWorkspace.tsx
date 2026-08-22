@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { RotateCcw, X } from "lucide-react";
 
 import { pickFile } from "@/api/dialog";
@@ -317,7 +316,9 @@ export default function StudioWorkspace({
     // Don't persist terminal-state plans — they'd poison the next session
     // with a stale startedAt (causing bogus Elapsed/ETA like 1527m/29016:45).
     // Derive phase inline (stages/phase not yet defined at this point)
-    const jobStatuses = plan.stages.map((s) => s.jobId ? jobs.find((j) => j.id === s.jobId)?.status : undefined);
+    const jobStatuses = plan.stages.map((s) =>
+      s.jobId ? jobs.find((j) => j.id === s.jobId)?.status : undefined,
+    );
     if (jobStatuses.some((s) => s === "failed" || s === "cancelled")) return;
     saveStudioPlan(project.id, plan);
   }, [project, hydratedProjectId, plan, jobs]);
@@ -628,26 +629,23 @@ export default function StudioWorkspace({
   );
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const stop = await getCurrentWebview().onDragDropEvent((event) => {
-          if (cancelled) return;
-          if (event.payload.type === "drop") {
-            const path = event.payload.paths[0];
-            if (path) void handleVideoPath(path);
-          }
-        });
-        if (cancelled) stop();
-        else unlisten = stop;
-      } catch {
-        // Drag-drop is unavailable outside the Tauri shell.
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        if (file && file.name) {
+          void handleVideoPath(file.name);
+        }
       }
-    })();
+    };
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("drop", handleDrop);
     return () => {
-      cancelled = true;
-      unlisten?.();
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("drop", handleDrop);
     };
   }, [handleVideoPath]);
 

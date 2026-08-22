@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
+vi.mock("@/api/invoke", () => ({
+  safeInvoke: vi.fn(),
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 import { cancelJob, listJobs, retryJob, submitJob, type Job } from "./job";
 
-const mockedInvoke = vi.mocked(invoke);
+const mockedInvoke = vi.mocked(safeInvoke);
 
 const JOB: Job = {
   id: "job_0001",

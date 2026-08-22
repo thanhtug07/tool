@@ -1,10 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
+vi.mock("@/api/invoke", () => ({
+  safeInvoke: vi.fn(),
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 import {
   deleteApiKey,
   getApiKeyMasked,
@@ -14,7 +14,7 @@ import {
   type SettingsSnapshot,
 } from "./settings";
 
-const mockedInvoke = vi.mocked(invoke);
+const mockedInvoke = vi.mocked(safeInvoke);
 
 const SNAPSHOT: SettingsSnapshot = {
   "ai.model": "large-v3",

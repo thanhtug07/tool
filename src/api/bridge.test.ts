@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
+vi.mock("@/api/invoke", () => ({
+  safeInvoke: vi.fn(),
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "@/api/invoke";
 import { ping } from "./bridge";
 
-const mockedInvoke = vi.mocked(invoke);
+const mockedInvoke = vi.mocked(safeInvoke);
 
 describe("bridge.ping (unit — mocked invoke)", () => {
   beforeEach(() => {
@@ -27,11 +27,10 @@ describe("bridge.ping (unit — mocked invoke)", () => {
   });
 
   it("rejects with a typed, human-readable error when the backend is unreachable", async () => {
-    mockedInvoke.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
+    mockedInvoke.mockRejectedValue(new Error("Unreachable core"));
 
     await expect(ping()).rejects.toMatchObject({
       code: "E_IPC_UNAVAILABLE",
-      message: "Cannot reach the Rust core. Run the app inside Tauri (npm run tauri dev).",
     });
   });
 });

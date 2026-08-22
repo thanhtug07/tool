@@ -53,8 +53,8 @@ export function isConsecutiveDuplicate(entries: LogEntry[], entry: LogEntry): bo
  */
 export function computeEta(fraction: number, elapsedMs: number): number | null {
   if (!Number.isFinite(fraction) || !Number.isFinite(elapsedMs)) return null;
-  // Below 10% progress, ETA estimates are unreliable — show 'Calculating...' instead.
-  if (fraction < 0.10 || fraction >= 0.999) return null;
+  // Below 10% progress, ETA estimates are unreliable ï¿½ show 'Calculating...' instead.
+  if (fraction < 0.1 || fraction >= 0.999) return null;
   if (elapsedMs <= 0) return null;
   const eta = Math.round(elapsedMs * ((1 - fraction) / fraction));
   // Sanity cap: ETA >24h is clearly wrong for any reasonable video.

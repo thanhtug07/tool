@@ -1,25 +1,38 @@
-import { open as openDialog, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
-
-import { isTauri } from "@/lib/env";
+export interface OpenDialogOptions {
+  title?: string;
+  directory?: boolean;
+  multiple?: boolean;
+  filters?: Array<{ name: string; extensions: string[] }>;
+  defaultPath?: string;
+}
 
 /**
- * Native file / directory picker.
- *
- * Outside the Tauri webview (browser dev server, the Preview tab, tests) the
- * dialog plugin has no backend — `open()` rejects with the cryptic
- * `TypeError: Cannot read properties of undefined (reading 'invoke')`. This
- * wrapper converts that into a clear, catchable error so the calling page can
- * show a meaningful message instead of a raw stack trace.
+ * Web browser file picker fallback.
  */
 export async function pickFile(options: OpenDialogOptions): Promise<string | string[] | null> {
-  if (!isTauri()) {
-    throw new Error(
-      "Cannot open the file picker: this page is running outside the Tauri window. Run the app with `npm run tauri dev`.",
-    );
-  }
-  try {
-    return await openDialog(options);
-  } catch (error) {
-    throw new Error("The file picker failed to open.", { cause: error });
-  }
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    if (options.multiple) input.multiple = true;
+    if (options.filters && options.filters.length > 0) {
+      const exts = options.filters.flatMap((f) => f.extensions.map((ext) => `.${ext}`));
+      input.accept = exts.join(",");
+    }
+
+    input.onchange = () => {
+      if (!input.files || input.files.length === 0) {
+        resolve(null);
+        return;
+      }
+      if (options.multiple) {
+        const paths = Array.from(input.files).map((f) => f.name);
+        resolve(paths);
+      } else {
+        resolve(input.files[0].name);
+      }
+    };
+
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
 }
