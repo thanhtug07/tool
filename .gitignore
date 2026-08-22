@@ -66,3 +66,6 @@ src-tauri/_patch_*.py
 
 # Test fixtures (generated media, not committed)
 test_assets/
+
+# Removed plan/audit docs (not project content)
+docs/

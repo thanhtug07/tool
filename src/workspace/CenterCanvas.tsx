@@ -110,23 +110,36 @@ export default function CenterCanvas({
       >
         <div
           data-role="center-empty"
-          className="grid h-full min-h-[320px] place-items-center border border-dashed border-border bg-card/40"
+          className="dropzone-dash grid h-full min-h-[360px] place-items-center rounded-2xl m-4 p-8 text-center shadow-inner"
         >
-          <div className="space-y-3 text-center">
-            <Upload className="mx-auto size-9 text-muted-foreground" aria-hidden="true" />
+          <div className="max-w-md space-y-4">
+            <div className="mx-auto flex size-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-lg shadow-amber-500/10">
+              <Upload className="size-8 stroke-[2]" aria-hidden="true" />
+            </div>
             <div>
-              <p className="text-sm font-medium">Drop video here</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Drag &amp; drop your video — MP4, MKV, MOV, AVI, WebM, M4V
+              <p className="text-base font-bold text-foreground">Drag &amp; Drop Video Here</p>
+              <p className="mt-1 text-xs font-medium text-muted-foreground/80">
+                Or choose a local file from your device to start translating
               </p>
+            </div>
+            <div className="flex flex-wrap justify-center gap-1.5 pt-1">
+              {["MP4", "MKV", "MOV", "AVI", "WEBM"].map((fmt) => (
+                <span
+                  key={fmt}
+                  className="rounded-md bg-zinc-900 border border-zinc-800 px-2 py-0.5 font-mono text-[10px] font-bold text-zinc-400"
+                >
+                  {fmt}
+                </span>
+              ))}
             </div>
             <Button
               type="button"
               data-role="choose-video"
               disabled={busy}
               onClick={() => ctx.actions.pickVideo()}
+              className="cta-gold h-10 px-6 font-bold tracking-wide rounded-xl active:scale-[0.98] shadow-md shadow-amber-500/20 mt-2"
             >
-              Choose Video
+              Choose Video File
             </Button>
           </div>
         </div>
@@ -336,10 +349,10 @@ function FloatingRun({ ctx }: { ctx: WorkspaceContext }) {
         onClick={() => (running ? ctx.actions.cancel() : ctx.actions.automate())}
         title={running ? `Cancel — ${pct}%` : finished ? "Re-run pipeline" : "Run pipeline"}
         className={cn(
-          "pointer-events-auto gap-1.5 shadow-lg shadow-black/50",
+          "pointer-events-auto gap-1.5 shadow-lg rounded-xl h-9 px-4 font-bold tracking-wide active:scale-[0.98]",
           running
-            ? "border-red-400/40 bg-red-500/90 text-white hover:bg-red-500"
-            : "bg-gold text-gold-foreground hover:bg-gold/90",
+            ? "border-red-400/40 bg-red-500/90 text-white hover:bg-red-500 animate-pulse"
+            : "cta-gold shadow-amber-500/20",
         )}
       >
         {running ? (

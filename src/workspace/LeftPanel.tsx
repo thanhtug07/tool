@@ -193,7 +193,7 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
           disabled={running || ctx.busy}
           onClick={() => ctx.actions.automate()}
           className={cn(
-            "h-9 min-w-[140px] font-bold tracking-wide rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 shadow-md shadow-amber-500/20 hover:from-amber-300 hover:to-amber-400 active:scale-[0.98] disabled:opacity-50 ring-1 ring-amber-300/40",
+            "cta-gold h-9 min-w-[150px] font-bold tracking-wide rounded-xl active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-amber-500/20",
             running && "animate-pulse",
           )}
         >
@@ -204,7 +204,7 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             </>
           ) : (
             <>
-              <Zap className="size-4 fill-current" aria-hidden="true" /> Automate
+              <Zap className="size-4 fill-current text-slate-950" aria-hidden="true" /> Automate
             </>
           )}
         </Button>

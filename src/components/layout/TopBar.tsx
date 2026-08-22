@@ -60,14 +60,17 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
       data-role="top-bar"
       className="glass-panel flex h-14 shrink-0 items-center gap-3 border-b border-border/60 bg-card/80 px-4 shadow-[var(--shadow-xs)] backdrop-blur-md"
     >
-      {/* Brand */}
+      {/* Brand & Project */}
       <div className="flex items-center gap-2.5 pr-2">
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 text-[12px] font-extrabold text-slate-950 shadow-sm shadow-amber-500/20 ring-1 ring-amber-300/30">
+        <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-[12px] font-extrabold text-slate-950 shadow-md shadow-amber-500/20 ring-1 ring-amber-300/40">
           AT
         </span>
-        <p className="hidden text-sm font-bold tracking-tight text-foreground sm:block">
-          AutoTranslate
-        </p>
+        <div className="hidden flex-col sm:flex">
+          <p className="text-xs font-bold tracking-tight text-foreground leading-none">
+            AutoTranslate
+          </p>
+          <span className="text-[10px] text-muted-foreground/80 font-medium">Studio v0.1</span>
+        </div>
       </div>
 
       <span className="h-5 w-px bg-border/60" aria-hidden="true" />
@@ -75,7 +78,7 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
       {/* Project Selector */}
       <select
         data-role="project-select"
-        className="h-8 max-w-[200px] rounded-lg border border-border/60 bg-background/60 px-3 text-xs font-medium text-foreground transition-all hover:border-border hover:bg-background focus:outline-none focus:ring-2 focus:ring-primary/40"
+        className="h-8 max-w-[180px] rounded-lg border border-border/60 bg-background/80 px-2.5 text-xs font-semibold text-foreground transition-all hover:border-amber-500/50 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
         value={project?.id ?? ""}
         onChange={(event) => {
           const id = event.target.value;
@@ -84,7 +87,7 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
         }}
         aria-label="Project"
       >
-        <option value="">{project ? project.name : "No project"}</option>
+        <option value="">{project ? project.name : "Select Project"}</option>
         {projects.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name}
@@ -92,8 +95,11 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
         ))}
       </select>
 
-      {/* Navigation */}
-      <nav aria-label="Workspace" className="flex items-center gap-1.5 pl-2">
+      {/* Navigation Segmented Control */}
+      <nav
+        aria-label="Workspace"
+        className="flex items-center gap-1 rounded-xl border border-border/50 bg-background/60 p-1 shadow-inner"
+      >
         {NAV_AREAS.map(({ key, label }) => {
           const selected = key === active;
           return (
@@ -104,16 +110,13 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
               aria-current={selected ? "page" : undefined}
               onClick={() => onNavigate(key)}
               className={cn(
-                "relative rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all duration-200",
+                "relative rounded-lg px-3 py-1 text-xs font-semibold transition-all duration-150",
                 selected
-                  ? "bg-accent/80 text-accent-foreground shadow-sm ring-1 ring-accent/40"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  ? "bg-amber-500/15 text-amber-300 shadow-2xs ring-1 ring-amber-500/30 font-bold"
+                  : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
               )}
             >
               {label}
-              {selected && (
-                <span className="absolute -bottom-[11px] left-1/2 h-[3px] w-5 -translate-x-1/2 rounded-full bg-primary shadow-[0_0_8px_var(--primary)] animate-fade-in" />
-              )}
             </button>
           );
         })}
@@ -126,19 +129,33 @@ export default function TopBar({ active, onNavigate, project, onOpenProject }: T
       >
         <StatusDot tone={status.tone} className="size-2" />
         {status.label}
-        {running && <span className="tabular-nums font-medium">{pct}%</span>}
+        {running && <span className="tabular-nums font-semibold text-amber-400">{pct}%</span>}
       </span>
 
-      {/* Right Actions */}
-      <div className="ml-auto flex items-center gap-2">
-        <div className="hidden items-center gap-3 text-xs text-muted-foreground xl:flex">
-          <span className="flex items-center gap-1.5" data-role="worker-status">
-            <StatusDot tone={worker.tone} className="size-2" />
-            Worker
+      {/* Right Actions & Live Status Pills */}
+      <div className="ml-auto flex items-center gap-2.5">
+        <div className="hidden items-center gap-2 text-xs font-medium xl:flex">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-[11px]"
+            data-role="worker-status"
+          >
+            <StatusDot tone={worker.tone} className="size-1.5" />
+            Worker: <span className="font-semibold text-foreground">{worker.label}</span>
           </span>
-          <span data-role="gpu-status" className="flex items-center gap-1.5">
-            <StatusDot tone={gpuReady ? "ok" : "muted"} className="size-2" />
-            GPU
+          <span
+            data-role="gpu-status"
+            className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-[11px]"
+          >
+            <StatusDot tone={gpuReady ? "ok" : "muted"} className="size-1.5" />
+            GPU:{" "}
+            <span
+              className={cn(
+                "font-semibold",
+                gpuReady ? "text-emerald-400" : "text-muted-foreground",
+              )}
+            >
+              {gpuReady ? "RTX Active" : "CPU Fallback"}
+            </span>
           </span>
         </div>
 

@@ -40,22 +40,22 @@ export default function HomePage({ onOpenAutomation, onOpenProcessing }: HomePag
       className="relative mx-auto h-full max-w-5xl overflow-y-auto px-6 py-6 bg-radial-gradient"
     >
       {/* Header section */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/40 bg-card/60 p-5 shadow-sm backdrop-blur-md">
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border/60 bg-card/80 p-6 shadow-lg backdrop-blur-md">
         <div>
-          <h1 id="home-heading" className="text-xl font-bold tracking-tight text-foreground">
-            Project Dashboard
+          <h1 id="home-heading" className="text-2xl font-extrabold tracking-tight text-foreground">
+            AutoTranslate Dashboard
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Manage your auto-translation workflows and recent media projects
+          <p className="text-xs font-medium text-muted-foreground mt-1">
+            Automated video localization powered by AI speech-to-text, translation, and neural TTS
           </p>
         </div>
         <Button
           type="button"
           data-role="new-automation"
           onClick={() => onOpenAutomation(null)}
-          className="bg-primary text-primary-foreground shadow-md shadow-primary/20 hover:bg-primary/90"
+          className="cta-gold h-10 px-5 font-bold tracking-wide rounded-xl active:scale-[0.98] shadow-md shadow-amber-500/20"
         >
-          <Plus className="size-4" aria-hidden="true" /> New Automation
+          <Plus className="size-4 stroke-[3]" aria-hidden="true" /> New Automation
         </Button>
       </div>
 
