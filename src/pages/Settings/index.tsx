@@ -136,20 +136,20 @@ export default function SettingsPage({
   return (
     <section
       aria-labelledby="settings-heading"
-      className="mx-auto flex h-full max-w-6xl gap-6 px-6 py-6"
+      className="relative mx-auto flex h-full max-w-6xl gap-8 px-6 py-6 bg-radial-gradient"
     >
       {/* Sidebar */}
-      <nav aria-label="Settings" className="w-48 shrink-0">
-        <div className="mb-4 flex items-center gap-2">
-          <SettingsIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-          <h1
-            id="settings-heading"
-            className="text-sm font-semibold tracking-tight text-foreground"
-          >
+      <nav
+        aria-label="Settings"
+        className="w-52 shrink-0 rounded-xl border border-border/40 bg-card/40 p-3 shadow-xs backdrop-blur-md"
+      >
+        <div className="mb-4 flex items-center gap-2 px-2 pt-1">
+          <SettingsIcon className="size-4 text-primary" aria-hidden="true" />
+          <h1 id="settings-heading" className="text-sm font-bold tracking-tight text-foreground">
             Settings
           </h1>
         </div>
-        <div className="space-y-0.5">
+        <div className="space-y-1">
           {SETTINGS_NAV.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -157,13 +157,19 @@ export default function SettingsPage({
               data-role={"settings-nav-" + key}
               onClick={() => setActive(key)}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors",
+                "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-semibold transition-all duration-150",
                 active === key
-                  ? "bg-accent text-accent-foreground shadow-[var(--shadow-xs)]"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-accent/80 text-foreground shadow-xs ring-1 ring-accent/60"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
               )}
             >
-              <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+              <Icon
+                className={cn(
+                  "size-4 shrink-0 transition-colors",
+                  active === key ? "text-primary" : "text-muted-foreground",
+                )}
+                aria-hidden="true"
+              />
               {label}
             </button>
           ))}

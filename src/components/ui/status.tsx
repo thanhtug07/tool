@@ -24,11 +24,11 @@ export function StatusDot({ tone, className }: { tone: StatusTone; className?: s
 }
 
 const BADGE_TONES: Record<StatusTone, string> = {
-  ok: "bg-emerald-400/10 text-emerald-400",
-  warn: "bg-amber-400/10 text-amber-400",
-  bad: "bg-red-500/10 text-red-400",
-  muted: "bg-muted text-muted-foreground",
-  info: "bg-sky-400/10 text-sky-400",
+  ok: "bg-emerald-400/10 text-emerald-400 ring-1 ring-emerald-500/20",
+  warn: "bg-amber-400/10 text-amber-400 ring-1 ring-amber-500/20",
+  bad: "bg-red-500/10 text-red-400 ring-1 ring-red-500/20",
+  muted: "bg-muted/60 text-muted-foreground ring-1 ring-border/40",
+  info: "bg-sky-400/10 text-sky-400 ring-1 ring-sky-500/20",
 };
 
 /** Compact status pill. */

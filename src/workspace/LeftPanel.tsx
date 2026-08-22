@@ -51,9 +51,12 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
   const outputReady = Boolean(ctx.resultUrl && ctx.artifacts);
 
   return (
-    <div data-role="automation-bar" className="shrink-0 border-t border-border bg-panel">
+    <div
+      data-role="automation-bar"
+      className="glass-panel shrink-0 border-t border-border/60 bg-card/80 backdrop-blur-lg"
+    >
       {/* Compact video / open row */}
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/40 bg-muted/20 px-3.5 py-2 text-xs text-muted-foreground">
         <Button
           type="button"
           size="sm"
@@ -61,17 +64,19 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
           disabled={ctx.busy}
           onClick={onPickVideo}
           data-role="open-video"
+          className="h-7 border-border/60 bg-background/50 hover:bg-muted font-medium"
         >
           {project ? (
             <>
-              <FileVideo className="size-3.5" aria-hidden="true" /> Replace
+              <FileVideo className="size-3.5 text-primary" aria-hidden="true" /> Replace
             </>
           ) : (
             <>
-              <Upload className="size-3.5" aria-hidden="true" /> Open Video
+              <Upload className="size-3.5 text-primary" aria-hidden="true" /> Open Video
             </>
           )}
         </Button>
+
         {outputReady && (
           <Button
             type="button"
@@ -80,12 +85,13 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             onClick={onPreviewResult}
             data-role="automation-output-video"
             title={ctx.artifacts?.renderedVideo}
-            className="max-w-[220px] gap-1.5 text-gold"
+            className="h-7 max-w-[200px] gap-1.5 border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
           >
-            <Play className="size-3.5 shrink-0 fill-current" aria-hidden="true" />
+            <Play className="size-3 shrink-0 fill-current" aria-hidden="true" />
             <span className="truncate">{fileBaseName(ctx.artifacts?.renderedVideo ?? "")}</span>
           </Button>
         )}
+
         {project && (
           <Button
             type="button"
@@ -95,10 +101,12 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             onClick={() => ctx.actions.openOutputFolder()}
             data-role="automation-output"
             title={outputReady ? ctx.artifacts?.renderedVideo : "Output is not ready yet"}
+            className="h-7 border-border/60"
           >
-            <FolderOpen className="size-3.5" aria-hidden="true" /> Output
+            <FolderOpen className="size-3.5 text-muted-foreground" aria-hidden="true" /> Output
           </Button>
         )}
+
         <Button
           type="button"
           size="sm"
@@ -106,25 +114,31 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
           onClick={() => ctx.actions.pickOutputFolder()}
           data-role="automation-output-folder"
           title={options.outputFolder || "Choose the folder the video is saved to on success"}
-          className="max-w-[220px] gap-1.5"
+          className="h-7 max-w-[200px] gap-1.5 border-border/60"
         >
-          <FolderOpen className="size-3.5 shrink-0" aria-hidden="true" />
+          <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span className="truncate">
             {options.outputFolder ? `Save to: ${fileBaseName(options.outputFolder)}` : "Save to…"}
           </span>
         </Button>
+
         {project ? (
-          <span className="min-w-0 truncate" title={project.source_video_path}>
+          <span
+            className="min-w-0 truncate font-mono text-[11px] text-foreground/80 pl-1"
+            title={project.source_video_path}
+          >
             {fileBaseName(project.source_video_path)}
           </span>
         ) : (
-          <span>Choose a video to start</span>
+          <span className="text-muted-foreground/70 italic text-[11px] pl-1">
+            Choose a video to start
+          </span>
         )}
       </div>
 
       {/* Primary controls */}
-      <div className="flex flex-wrap items-end gap-2 px-3 py-2">
-        <div className="min-w-[110px] flex-1">
+      <div className="flex flex-wrap items-end gap-2.5 px-3.5 py-2.5">
+        <div className="min-w-[120px] flex-1">
           <LabeledSelect
             label="Language"
             value={options.targetLanguage}
@@ -140,7 +154,7 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             options={options.providerOptions.map((p) => ({ value: p.id, label: p.name }))}
           />
         </div>
-        <div className="min-w-[140px] flex-1">
+        <div className="min-w-[150px] flex-1">
           <VoicePickerButton
             label="Voice"
             value={options.dubAudio ? options.voice : ""}
@@ -148,8 +162,6 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             disabled={options.voiceOptions.length === 0}
             onSelect={(voiceId, engine) => {
               if (!voiceId) {
-                // "No dubbing": clear the voice so state stays consistent
-                // (a voice without dubbing would resurrect on next seed).
                 options.setVoice("");
                 options.setDubAudio(false);
                 return;
@@ -168,6 +180,7 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             variant="outline"
             data-role="more-options"
             onClick={() => setMoreOpen((o) => !o)}
+            className="h-9 border-border/60"
           >
             <Settings2 className="size-3.5" aria-hidden="true" /> More
           </Button>
@@ -180,7 +193,8 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
           disabled={running || ctx.busy}
           onClick={() => ctx.actions.automate()}
           className={cn(
-            "min-w-[140px] bg-gold text-gold-foreground hover:bg-gold/90 disabled:opacity-60",
+            "h-9 min-w-[140px] font-bold tracking-wide rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 shadow-md shadow-amber-500/20 hover:from-amber-300 hover:to-amber-400 active:scale-[0.98] disabled:opacity-50 ring-1 ring-amber-300/40",
+            running && "animate-pulse",
           )}
         >
           {running ? (
@@ -190,7 +204,7 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
             </>
           ) : (
             <>
-              <Zap className="size-4" aria-hidden="true" /> Automate
+              <Zap className="size-4 fill-current" aria-hidden="true" /> Automate
             </>
           )}
         </Button>

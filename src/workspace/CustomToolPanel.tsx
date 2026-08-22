@@ -96,31 +96,44 @@ export default function CustomToolPanel({
                     disabled={running}
                     onClick={() => setConfiguring(tool.id)}
                     className={cn(
-                      "flex items-center gap-2 rounded-md border px-2 py-2 text-left transition-colors",
+                      "group flex flex-col justify-between rounded-xl border p-2.5 text-left transition-all duration-200",
                       active
-                        ? "border-gold/50 bg-gold-soft/30"
-                        : "border-border bg-card hover:bg-accent/40",
+                        ? "border-amber-500/60 bg-amber-500/10 shadow-sm shadow-amber-500/10 ring-1 ring-amber-500/20"
+                        : "border-border/60 bg-card/60 hover:bg-accent/60 hover:border-border",
                       running && "opacity-60",
                     )}
                   >
-                    <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{tool.name}</span>
-                    {active && (
-                      <Check className="size-3 shrink-0 text-emerald-400" aria-hidden="true" />
-                    )}
+                    <div className="flex items-center justify-between w-full gap-1 mb-1">
+                      <Icon
+                        className={cn(
+                          "size-4 shrink-0 transition-colors",
+                          active
+                            ? "text-amber-400"
+                            : "text-muted-foreground group-hover:text-foreground",
+                        )}
+                        aria-hidden="true"
+                      />
+                      {active && (
+                        <Check className="size-3.5 shrink-0 text-emerald-400" aria-hidden="true" />
+                      )}
+                    </div>
+                    <span className="min-w-0 truncate text-xs font-semibold text-foreground">
+                      {tool.name}
+                    </span>
                   </button>
                 );
               })}
             </div>
 
             {tools.length > 0 && (
-              <div className="mt-3 space-y-1">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Active
+              <div className="mt-4 space-y-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80 px-1">
+                  Active Workflow Steps
                 </p>
-                {tools.map((tool) => (
+                {tools.map((tool, idx) => (
                   <ActiveToolRow
                     key={tool.id}
+                    index={idx}
                     tool={tool}
                     onEdit={() => setConfiguring(tool.id)}
                     onRemove={() => onRemove(tool.id)}
@@ -130,14 +143,14 @@ export default function CustomToolPanel({
             )}
 
             {pipeline.length > 0 && (
-              <div className="mt-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Pipeline
+              <div className="mt-4 rounded-xl border border-border/40 bg-card/40 p-3 shadow-xs">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80 mb-1">
+                  Pipeline Execution Graph
                 </p>
                 <PipelinePreview ctx={ctx} stages={pipeline} tools={tools} />
                 {tools.length > 1 && (
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    Stages are merged &amp; deduplicated — one run, dependency order.
+                  <p className="mt-2 text-[10px] text-muted-foreground/70">
+                    Stages are merged &amp; deduplicated in system dependency order.
                   </p>
                 )}
               </div>
@@ -146,13 +159,16 @@ export default function CustomToolPanel({
         )}
       </div>
 
-      <div className="shrink-0 space-y-1.5 border-t border-border bg-panel p-3">
+      <div className="shrink-0 space-y-2 border-t border-border/60 bg-card/80 p-3.5 backdrop-blur-md">
         <Button
           type="button"
           data-role="custom-run"
           disabled={running || ctx.busy || tools.length === 0}
           onClick={() => ctx.actions.automate()}
-          className="w-full bg-gold text-gold-foreground hover:bg-gold/90 disabled:opacity-60"
+          className={cn(
+            "w-full h-9 font-bold tracking-wide rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 shadow-md shadow-amber-500/20 hover:from-amber-300 hover:to-amber-400 active:scale-[0.98] disabled:opacity-50 ring-1 ring-amber-300/40",
+            running && "animate-pulse",
+          )}
         >
           {running ? (
             <>
@@ -161,7 +177,7 @@ export default function CustomToolPanel({
             </>
           ) : (
             <>
-              <Play className="size-4" aria-hidden="true" /> Run
+              <Play className="size-4 fill-current" aria-hidden="true" /> Run Workflow
             </>
           )}
         </Button>
@@ -290,10 +306,12 @@ function PipelinePreview({
 
 function ActiveToolRow({
   tool,
+  index = 0,
   onEdit,
   onRemove,
 }: {
   tool: ActiveCustomTool;
+  index?: number;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -302,11 +320,14 @@ function ActiveToolRow({
   return (
     <div
       data-role={`active-tool-${tool.id}`}
-      className="flex items-center gap-1.5 rounded border border-border px-2 py-1.5"
+      className="glass-card flex items-center gap-2 rounded-lg border border-border/60 bg-card/60 px-2.5 py-2 shadow-2xs"
     >
+      <span className="font-mono text-[9px] font-bold tracking-wider text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded ring-1 ring-amber-500/20">
+        0{index + 1}
+      </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-medium">{def.name}</p>
-        {summary && <p className="truncate text-[10px] text-muted-foreground">{summary}</p>}
+        <p className="truncate text-xs font-semibold text-foreground">{def.name}</p>
+        {summary && <p className="truncate text-[10px] text-muted-foreground/80">{summary}</p>}
       </div>
       <button
         type="button"

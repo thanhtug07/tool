@@ -63,3 +63,6 @@ vendor/llama/
 .kimchi/
 pnpm-lock.yaml
 src-tauri/_patch_*.py
+
+# Test fixtures (generated media, not committed)
+test_assets/

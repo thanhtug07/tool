@@ -461,14 +461,16 @@ export function ProvidersPanel() {
       </div>
 
       {/* Cards — Name / Status / Default; click opens configure */}
-      <ul className="divide-y divide-border rounded-md border border-border">
+      <ul className="space-y-2">
         {providers.map((p) => {
           const isDefault = defaults.translation === p.id;
+          const isConnected = p.enabled && (!p.needs_key || p.api_key_configured);
+          const isKeyMissing = p.enabled && p.needs_key && !p.api_key_configured;
           return (
             <li
               key={p.id}
               data-role={`provider-card-${p.id}`}
-              className="flex items-center gap-2 px-3 py-2"
+              className="glass-card flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-card/60 p-3.5 shadow-2xs"
             >
               <button
                 type="button"
@@ -478,24 +480,40 @@ export function ProvidersPanel() {
                   setForm(formFromProvider(p));
                 }}
               >
-                <span className="text-sm font-medium">{p.name}</span>
-                <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                  {p.enabled ? "Enabled" : "Disabled"}
-                  {p.needs_key && !p.api_key_configured ? " · key missing" : ""}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-foreground">{p.name}</span>
+                  {isDefault && (
+                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-400 ring-1 ring-amber-500/20">
+                      Default
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs">
+                  {isConnected ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                      <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />{" "}
+                      Connected
+                    </span>
+                  ) : isKeyMissing ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400">
+                      <span className="size-1.5 rounded-full bg-amber-400" /> Key Missing
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                      <span className="size-1.5 rounded-full bg-muted-foreground/60" /> Disabled
+                    </span>
+                  )}
+                </div>
               </button>
-              {isDefault && (
-                <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
-                  Default
-                </span>
-              )}
+
               <Button
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 onClick={() => {
                   setEditing(p);
                   setForm(formFromProvider(p));
                 }}
+                className="hover:border-primary/50"
               >
                 Configure
               </Button>

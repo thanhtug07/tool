@@ -563,33 +563,38 @@ export function LiveLogView({
             </div>
           </div>
 
-          <div className="relative mt-2">
+          <div className="relative mt-2.5">
             <div
               data-role="console"
               onScroll={onConsoleScroll}
-              className="overflow-y-auto rounded border border-border bg-background p-2 font-mono text-[11px] leading-relaxed"
-              style={{ height: Math.min(height, 200) }}
+              className="overflow-y-auto rounded-xl border border-slate-800/80 bg-slate-950/90 p-3 font-mono text-[11px] leading-relaxed shadow-inner"
+              style={{ height: Math.min(height, 240) }}
             >
               {entries.length === 0 ? (
-                <p className="text-muted-foreground">Waiting for the first job event…</p>
+                <p className="text-slate-500 italic">Waiting for initial job log stream…</p>
               ) : (
                 entries.map((e) => (
-                  <div key={e.id} className="flex gap-2">
-                    <span className="shrink-0 tabular-nums text-muted-foreground/70">
+                  <div
+                    key={e.id}
+                    className="flex items-start gap-2.5 py-0.5 hover:bg-slate-900/60 rounded px-1"
+                  >
+                    <span className="shrink-0 tabular-nums text-slate-500 text-[10px]">
                       {new Date(e.time).toLocaleTimeString()}
                     </span>
                     <span
                       className={cn(
-                        "shrink-0 font-semibold uppercase",
-                        e.level === "info" && "text-sky-400",
-                        e.level === "success" && "text-emerald-400",
-                        e.level === "warn" && "text-amber-400",
-                        e.level === "error" && "text-red-400",
+                        "shrink-0 font-bold uppercase text-[10px] px-1.5 py-0.2 rounded ring-1",
+                        e.level === "info" && "text-sky-300 bg-sky-500/10 ring-sky-500/20",
+                        e.level === "success" &&
+                          "text-emerald-400 bg-emerald-500/10 ring-emerald-500/20",
+                        e.level === "warn" && "text-amber-400 bg-amber-500/10 ring-amber-500/20",
+                        e.level === "error" &&
+                          "text-rose-400 bg-rose-500/10 ring-rose-500/20 font-bold",
                       )}
                     >
                       {e.level}
                     </span>
-                    <span className="min-w-0 break-words">{e.message}</span>
+                    <span className="min-w-0 break-words text-slate-200">{e.message}</span>
                   </div>
                 ))
               )}
@@ -599,7 +604,7 @@ export function LiveLogView({
                 data-role="new-logs"
                 type="button"
                 onClick={onScrollToBottom}
-                className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background px-3 py-1 text-[11px] font-medium shadow"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300 backdrop-blur-md px-3.5 py-1 text-[11px] font-semibold shadow-lg hover:bg-amber-500/20"
               >
                 ↓ New logs
               </button>
