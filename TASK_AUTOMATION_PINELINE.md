@@ -1249,10 +1249,11 @@ existing Rust tests FAIL
 # PHASE 26 — CLEANUP CODE
 
 > ✅ **PHASE 26 — PASS** — audit streaming pipeline: không xoá gì. `ChunkScheduler`
-> + `process_one_chunk` + `merge_cues` vẫn được **test tham chiếu**
-> (`test_chunk_service.py`) — theo AGENTS.md "không xoá code chỉ vì trông giống
-> không dùng", giữ làm historic/regression path. `scripts/perf_report.py` còn
-> dùng để render trace. Không còn debug print / script tạm / import chết.
+>
+> - `process_one_chunk` + `merge_cues` vẫn được **test tham chiếu**
+>   (`test_chunk_service.py`) — theo AGENTS.md "không xoá code chỉ vì trông giống
+>   không dùng", giữ làm historic/regression path. `scripts/perf_report.py` còn
+>   dùng để render trace. Không còn debug print / script tạm / import chết.
 
 Chỉ cleanup sau khi pipeline PASS.
 

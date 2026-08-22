@@ -52,6 +52,7 @@ const FALLBACK_SETTINGS: SettingsSnapshot = {
   "privacy.telemetry": false,
   "tts.engine": "edge",
   "tts.voice": "vi-VN-HoaiMyNeural",
+  "automation.orchestrator_v2": false,
 };
 
 type SettingsNavKey = "general" | "providers" | "ai" | "subtitle" | "video" | "storage" | "about";
@@ -71,7 +72,6 @@ export default function SettingsPage({
 }: {
   initialSection?: SettingsNavKey | "voice" | "processing";
 }) {
-  // Map legacy section keys (voice/processing) onto the merged AI group.
   const resolvedInitial: SettingsNavKey =
     initialSection === "voice" || initialSection === "processing" ? "ai" : initialSection;
   const toast = useToast();
@@ -103,7 +103,7 @@ export default function SettingsPage({
       try {
         const updated = await setSetting(key, value);
         setSettings(updated);
-        toast.push(`Saved ${key}`, "success");
+        toast.push("Saved " + key, "success");
       } catch (error) {
         toast.push(String(error), "error");
       }
@@ -134,33 +134,43 @@ export default function SettingsPage({
   }, [toast]);
 
   return (
-    <section aria-labelledby="settings-heading" className="mx-auto flex max-w-5xl gap-4">
-      <nav aria-label="Settings" className="w-40 shrink-0 space-y-0.5">
-        <div className="mb-2 flex items-center gap-2">
+    <section
+      aria-labelledby="settings-heading"
+      className="mx-auto flex h-full max-w-6xl gap-6 px-6 py-6"
+    >
+      {/* Sidebar */}
+      <nav aria-label="Settings" className="w-48 shrink-0">
+        <div className="mb-4 flex items-center gap-2">
           <SettingsIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-          <h1 id="settings-heading" className="text-sm font-semibold tracking-tight">
+          <h1
+            id="settings-heading"
+            className="text-sm font-semibold tracking-tight text-foreground"
+          >
             Settings
           </h1>
         </div>
-        {SETTINGS_NAV.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            data-role={`settings-nav-${key}`}
-            onClick={() => setActive(key)}
-            className={cn(
-              "flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs transition-colors",
-              active === key
-                ? "bg-accent font-medium text-accent-foreground"
-                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-            )}
-          >
-            <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-            {label}
-          </button>
-        ))}
+        <div className="space-y-0.5">
+          {SETTINGS_NAV.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              type="button"
+              data-role={"settings-nav-" + key}
+              onClick={() => setActive(key)}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors",
+                active === key
+                  ? "bg-accent text-accent-foreground shadow-[var(--shadow-xs)]"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
       </nav>
 
+      {/* Content */}
       <div className="min-w-0 flex-1 space-y-4">
         {active === "general" && (
           <SettingsGroup id="group-general" title="General" description="App-wide preferences.">
@@ -206,6 +216,9 @@ export default function SettingsPage({
                   onSaveGpu={(v) => void saveSetting("gpu.override", v)}
                   onRestartWorker={() => void handleRestartWorker()}
                   restarting={restarting}
+                  onSaveOrchestrator={(v) =>
+                    void saveSetting("automation.orchestrator_v2", String(v))
+                  }
                 />
                 <SecuritySection />
               </>
@@ -262,18 +275,15 @@ export default function SettingsPage({
 }
 
 export function ConnectionStatus({ state }: { state: ConnectionState }) {
-  if (state.status === "idle") {
+  if (state.status === "idle")
     return <p className="text-sm text-muted-foreground">Not tested yet.</p>;
-  }
-  if (state.status === "testing") {
-    return <p className="text-sm text-muted-foreground">Testing connection…</p>;
-  }
-  if (state.status === "success") {
+  if (state.status === "testing")
+    return <p className="text-sm text-muted-foreground">Testing connection...</p>;
+  if (state.status === "success")
     return (
       <p className="text-sm text-emerald-400">
         {state.result.response} ({state.result.latencyMs} ms)
       </p>
     );
-  }
   return <p className="text-sm text-destructive">{state.error.message}</p>;
 }

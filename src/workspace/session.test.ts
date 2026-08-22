@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadStudioOptions, saveStudioOptions, type StudioSessionOptions } from "./session";
+import {
+  loadStudioOptions,
+  loadStudioPlan,
+  saveStudioOptions,
+  saveStudioPlan,
+  type StudioSessionOptions,
+} from "./session";
 
 function makeStorage(): Storage {
   const store = new Map<string, string>();
@@ -72,5 +78,46 @@ describe("studio session (localStorage stub)", () => {
     const invalid = { ...BASE_OPTIONS, outputFolder: 42 };
     localStorage.setItem("studio.options.p1", JSON.stringify(invalid));
     expect(loadStudioOptions("p1")).toBeNull();
+  });
+});
+
+describe("studio plan persistence", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", makeStorage());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("round-trips a plan with stages and startedAt", () => {
+    const plan = {
+      stages: [
+        { key: "transcribe" as const, jobId: "job_1" },
+        { key: "translate" as const, jobId: null },
+      ],
+      startedAt: Date.now(),
+    };
+    saveStudioPlan("p1", plan);
+    const restored = loadStudioPlan("p1");
+    expect(restored).toEqual(plan);
+  });
+
+  it("restores plan with startedAt — component must clear it on mount", () => {
+    // Regression: a stale startedAt from a failed run would cause
+    // Elapsed 1527m / ETA 29016:45 on remount.
+    const stalePlan = {
+      stages: [{ key: "chunk" as const, jobId: "job_old" }],
+      startedAt: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
+    };
+    saveStudioPlan("p1", stalePlan);
+    const restored = loadStudioPlan("p1");
+    // loadStudioPlan preserves startedAt — the StudioWorkspace useEffect
+    // is responsible for clearing it to { ...plan, startedAt: null }.
+    expect(restored?.startedAt).toBe(stalePlan.startedAt);
+  });
+
+  it("returns null for unknown project", () => {
+    expect(loadStudioPlan("nonexistent")).toBeNull();
   });
 });

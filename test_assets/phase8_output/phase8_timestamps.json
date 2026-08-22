@@ -1,0 +1,41 @@
+{
+  "stages": [
+    {
+      "name": "health",
+      "elapsed": 0.13,
+      "status": "OK"
+    },
+    {
+      "name": "extract",
+      "elapsed": 0.22,
+      "status": "OK"
+    },
+    {
+      "name": "stt",
+      "elapsed": 73.98,
+      "status": "OK"
+    },
+    {
+      "name": "translate",
+      "elapsed": 0.02,
+      "status": "OK"
+    },
+    {
+      "name": "subtitle",
+      "elapsed": 0.02,
+      "status": "OK"
+    },
+    {
+      "name": "tts",
+      "elapsed": 4.08,
+      "status": "OK"
+    },
+    {
+      "name": "render",
+      "elapsed": 12.44,
+      "status": "OK"
+    }
+  ],
+  "total_seconds": 92.91,
+  "result": "PASS"
+}

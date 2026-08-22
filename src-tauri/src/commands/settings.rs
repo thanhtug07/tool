@@ -79,10 +79,12 @@ pub fn tts_preview(
     let preview_dir = data_dir.join("voice-previews");
     std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
     // Asset-scope the preview dir so the returned wav is playable.
-    let _ = app.asset_protocol_scope().allow_directory(&preview_dir, true);
-    let client = manager
-        .worker_client()
-        .ok_or_else(|| "The worker is not running — start it before previewing a voice.".to_string())?;
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(&preview_dir, true);
+    let client = manager.worker_client().ok_or_else(|| {
+        "The worker is not running — start it before previewing a voice.".to_string()
+    })?;
     client
         .tts_preview(&TtsPreviewRequest {
             engine,

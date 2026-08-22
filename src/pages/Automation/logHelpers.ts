@@ -27,7 +27,8 @@ export const MAX_LOG_ENTRIES_OPTIONS = [200, 500, 1000] as const;
  */
 export function appendLogEntry(entries: LogEntry[], entry: LogEntry, max: number): LogEntry[] {
   if (max <= 0) return [];
-  const next = entries.length >= max ? entries.slice(entries.length - max + 1) : entries;
+  // Always return a new array to avoid mutating React state in place.
+  const next = entries.length >= max ? entries.slice(entries.length - max + 1) : [...entries];
   next.push(entry);
   return next;
 }
@@ -52,9 +53,13 @@ export function isConsecutiveDuplicate(entries: LogEntry[], entry: LogEntry): bo
  */
 export function computeEta(fraction: number, elapsedMs: number): number | null {
   if (!Number.isFinite(fraction) || !Number.isFinite(elapsedMs)) return null;
-  if (fraction <= 0.03 || fraction >= 0.999) return null;
+  // Below 10% progress, ETA estimates are unreliable — show 'Calculating...' instead.
+  if (fraction < 0.10 || fraction >= 0.999) return null;
   if (elapsedMs <= 0) return null;
-  return Math.round(elapsedMs * ((1 - fraction) / fraction));
+  const eta = Math.round(elapsedMs * ((1 - fraction) / fraction));
+  // Sanity cap: ETA >24h is clearly wrong for any reasonable video.
+  if (eta > 24 * 60 * 60 * 1000) return null;
+  return eta;
 }
 
 export function formatEta(ms: number): string {

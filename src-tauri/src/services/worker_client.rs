@@ -706,12 +706,31 @@ pub struct CancelResponse {
 /// ``message`` is an optional human-readable detail line (e.g. ``segment
 /// 81/127``) forwarded to the frontend live log as-is; it is always derived
 /// from real stage state.
+/// One log event from the worker's event queue (chunked pipeline).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ProgressEvent {
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TaskProgress {
+    pub task_id: String,
+    pub task_type: String,
+    pub progress: Option<f64>,
+    pub stage: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ProgressResponse {
     pub job_id: String,
     pub progress: Option<f64>,
     pub stage: Option<String>,
     pub message: Option<String>,
+    #[serde(default)]
+    pub events: Vec<ProgressEvent>,
+    #[serde(default)]
+    pub tasks: Vec<TaskProgress>,
 }
 
 impl WorkerClient {

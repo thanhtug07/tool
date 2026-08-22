@@ -198,11 +198,6 @@ export default function LeftPanel({ ctx, onPickVideo, onPreviewResult }: LeftPan
 
       {(phase === "running" || phase === "failed" || phase === "cancelled") && (
         <div className="flex gap-1.5 px-3 pb-2">
-          {phase === "running" && (
-            <Button type="button" variant="outline" size="sm" onClick={() => ctx.actions.cancel()}>
-              <X className="size-3.5" aria-hidden="true" /> Cancel
-            </Button>
-          )}
           {phase === "failed" && (
             <Button type="button" variant="outline" size="sm" onClick={() => ctx.actions.retry()}>
               <RotateCcw className="size-3.5" aria-hidden="true" /> Retry

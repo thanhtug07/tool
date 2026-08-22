@@ -5,7 +5,7 @@ import { RotateCcw, X } from "lucide-react";
 import { pickFile } from "@/api/dialog";
 import { cancelJob, retryJob, submitJob } from "@/api/job";
 import { probeMedia, toMediaUrl } from "@/api/media";
-import { getArtifactPaths } from "@/api/pipeline";
+import { getArtifactPaths, submitPipeline } from "@/api/pipeline";
 import {
   createProject,
   deleteProject,
@@ -53,10 +53,14 @@ import {
   automationPipelineSteps,
   markStageSubmitted,
   pipelineProgress,
+  pipelineProgressFromTasks,
   startPipelineWithSteps,
   type PipelinePlan,
   type StageKey,
+  type StageStatus,
+  type DerivedStageRun,
 } from "@/pages/Automation/automation";
+import { listTasks, type Task } from "@/api/task";
 import CenterCanvas from "./CenterCanvas";
 import LeftPanel from "./LeftPanel";
 import Timeline from "./Timeline";
@@ -147,6 +151,8 @@ export default function StudioWorkspace({
 
   // ---- pipeline + transport --------------------------------------------------
   const [plan, setPlan] = useState<PipelinePlan>(initialPipelinePlan);
+  const [orchestratorV2, setOrchestratorV2] = useState(false);
+  const [v2Tasks, setV2Tasks] = useState<Task[]>([]);
   const [runError, setRunError] = useState<string | null>(null);
   const [workerBanner, setWorkerBanner] = useState(false);
   const [providerBanner, setProviderBanner] = useState(false);
@@ -210,7 +216,12 @@ export default function StudioWorkspace({
     if (!project) return;
     const pid = project.id;
     const savedPlan = loadStudioPlan(pid);
-    if (savedPlan) setPlan(savedPlan);
+    if (savedPlan) {
+      // Selective clearing: don't blindly clear startedAt because it breaks
+      // auto-export for succeeded runs. We'll clear it post-jobs-load if the
+      // pipeline reached a terminal state (failed/cancelled).
+      setPlan(savedPlan);
+    }
     const savedOptions = loadStudioOptions(pid);
     if (savedOptions) {
       setSourceLanguage(savedOptions.sourceLanguage);
@@ -238,6 +249,21 @@ export default function StudioWorkspace({
     setHydratedProjectId(pid);
     sessionRestoredRef.current = true;
   }, [project]);
+
+  // After jobs load, clear startedAt for terminal-state plans to prevent
+  // stale elapsed time (e.g. Elapsed 1527m from a previous failed run).
+  useEffect(() => {
+    if (!project || plan.startedAt === null) return;
+    const allFailedOrCancelled = plan.stages.every((s) => {
+      if (!s.jobId) return false;
+      const job = jobs.find((j) => j.id === s.jobId);
+      if (!job) return false;
+      return job.status === "failed" || job.status === "cancelled";
+    });
+    if (allFailedOrCancelled && plan.stages.some((s) => s.jobId)) {
+      setPlan((current) => ({ ...current, startedAt: null }));
+    }
+  }, [project, plan.startedAt, plan.stages, jobs]);
 
   // Persist the active Custom tools once hydrated (same remount guarantee as
   // the automation options above).
@@ -287,8 +313,14 @@ export default function StudioWorkspace({
   useEffect(() => {
     if (!project || hydratedProjectId !== project.id) return;
     const started = plan.startedAt !== null || plan.stages.some((s) => s.jobId !== null);
-    if (started) saveStudioPlan(project.id, plan);
-  }, [project, hydratedProjectId, plan]);
+    if (!started) return;
+    // Don't persist terminal-state plans — they'd poison the next session
+    // with a stale startedAt (causing bogus Elapsed/ETA like 1527m/29016:45).
+    // Derive phase inline (stages/phase not yet defined at this point)
+    const jobStatuses = plan.stages.map((s) => s.jobId ? jobs.find((j) => j.id === s.jobId)?.status : undefined);
+    if (jobStatuses.some((s) => s === "failed" || s === "cancelled")) return;
+    saveStudioPlan(project.id, plan);
+  }, [project, hydratedProjectId, plan, jobs]);
 
   const originalRef = useRef<VideoPreviewHandle | null>(null);
   const resultRef = useRef<VideoPreviewHandle | null>(null);
@@ -304,9 +336,54 @@ export default function StudioWorkspace({
   }, []);
 
   // ---- derived (real) ---------------------------------------------------------
-  const stages = useMemo(() => deriveStages(plan, jobs), [plan, jobs]);
+  const stages = useMemo(() => {
+    if (orchestratorV2 && v2Tasks.length > 0) {
+      return v2Tasks.map((t) => ({
+        key: t.task_type as StageKey,
+        jobId: t.job_id,
+        status: (t.status === "blocked"
+          ? "failed"
+          : t.status === "ready"
+            ? "queued"
+            : t.status) as StageStatus,
+        progress: t.progress,
+        stage: t.stage,
+        errorCode: t.error_code,
+        errorMessage: t.error_message,
+      }));
+    }
+    return deriveStages(plan, jobs);
+  }, [orchestratorV2, v2Tasks, plan, jobs]);
   const phase = derivePhase(stages, plan.startedAt);
-  const overallProgress = pipelineProgress(stages);
+  const overallProgress = useMemo(() => {
+    if (orchestratorV2 && v2Tasks.length > 0) return pipelineProgressFromTasks(v2Tasks);
+    return pipelineProgress(stages);
+  }, [orchestratorV2, v2Tasks, stages]);
+
+  // v2: poll tasks for the active pipeline job (weighted progress)
+  useEffect(() => {
+    if (!orchestratorV2) return;
+    const active = jobs.find((j) => j.status === "running" || j.status === "queued");
+    if (!active) {
+      setV2Tasks([]);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const t = await listTasks(active.id);
+        if (!cancelled) setV2Tasks(t);
+      } catch {
+        /* ignore */
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [orchestratorV2, jobs]);
 
   // Real processing window: reset when a run starts, snapshot on success.
   useEffect(() => {
@@ -366,10 +443,11 @@ export default function StudioWorkspace({
     let cancelled = false;
     void (async () => {
       try {
-        const snapshot = await getSettings();
+        const snapshot = (await getSettings()) as unknown as Record<string, unknown>;
         if (cancelled) return;
-        setTtsEngine(snapshot["tts.engine"]);
-        setVoice(snapshot["tts.voice"]);
+        setTtsEngine(snapshot["tts.engine"] as string);
+        setVoice(snapshot["tts.voice"] as string);
+        setOrchestratorV2(Boolean(snapshot["automation.orchestrator_v2"]));
         // A default dubbing voice in Settings means dubbing should be on by
         // default for new Automation runs — otherwise the Voice control shows
         // "No dubbing" even though a voice is configured. Never override an
@@ -471,7 +549,7 @@ export default function StudioWorkspace({
   // Result pane loads the freshly written video without an app reload.
   useEffect(() => {
     if (!project) return;
-    const render = stages.find((s) => s.key === "render");
+    const render = stages.find((s: DerivedStageRun) => s.key === "render");
     if (!render || render.status !== "succeeded") return;
     let cancelled = false;
     void getArtifactPaths(project.id)
@@ -606,7 +684,9 @@ export default function StudioWorkspace({
   // The subtitle stage regenerates the cue table (timing-matched merge keeps
   // user edits). Refresh the editor's cue state once it succeeds so a later
   // edit/delete never operates on stale pre-run rows.
-  const subtitleStageDone = stages.some((s) => s.key === "subtitle" && s.status === "succeeded");
+  const subtitleStageDone = stages.some(
+    (s: DerivedStageRun) => s.key === "subtitle" && s.status === "succeeded",
+  );
   useEffect(() => {
     if (!project || !subtitleStageDone) return;
     void refreshCues();
@@ -778,16 +858,18 @@ export default function StudioWorkspace({
     [project, mode, workflowRunnable, workflowSteps, provider],
   );
 
-  // Submit the next stage only after its predecessor succeeded.
+  // Submit the next stage only after its predecessor succeeded (v1).
+  // When orchestrator v2 is ON, Rust owns the DAG — no frontend sequencing.
   useEffect(() => {
+    if (orchestratorV2) return;
     if (phase !== "running") return;
-    const pendingIndex = stages.findIndex((s) => s.jobId === null);
+    const pendingIndex = stages.findIndex((s: DerivedStageRun) => s.jobId === null);
     if (pendingIndex === -1) return;
     if (submitFailedRef.current.has(stages[pendingIndex].key)) return;
     if (pendingIndex === 0 || stages[pendingIndex - 1].status === "succeeded") {
       void submitStage(stages[pendingIndex].key);
     }
-  }, [phase, stages, submitStage]);
+  }, [phase, stages, submitStage, orchestratorV2]);
 
   const ensureWorkerReady = useCallback(async (): Promise<boolean> => {
     const deadline = Date.now() + 15_000;
@@ -850,8 +932,39 @@ export default function StudioWorkspace({
       }),
     );
     submitFailedRef.current = new Set();
-    // Submit the FIRST stage of this plan — Custom tools may not start with
-    // transcribe (e.g. a bare audio/logo tool must not run STT first).
+    if (orchestratorV2) {
+      try {
+        const v2Job = await submitPipeline(project!.id, {
+          dubAudio,
+          logoRemoval,
+          chunked,
+          sourceLanguage,
+          targetLanguage,
+          provider,
+          ttsEngine,
+          voice,
+          steps,
+        });
+        // Update the plan with the real job ID so event subscription works
+        // and derivePhase/deriveStages reflect the actual backend state.
+        setPlan((current) => {
+          const updated = markStageSubmitted(current, steps[0], v2Job.id);
+          return { ...updated, startedAt: updated.startedAt ?? Date.now() };
+        });
+        toast.push(
+          mode === "custom"
+            ? "Tools started (v2) — Rust orchestrates the DAG."
+            : chunked
+              ? "Chunked pipeline started (v2)."
+              : "Automation started (v2) — Rust orchestrates the DAG.",
+          "info",
+        );
+      } catch (e) {
+        setRunError(String(e));
+      }
+      return;
+    }
+    // v1: Submit the FIRST stage — Custom tools may not start with transcribe
     const first = steps[0];
     if (first) void submitStage(first);
     toast.push(
@@ -865,7 +978,9 @@ export default function StudioWorkspace({
   }
 
   async function handleCancel() {
-    const active = stages.find((s) => s.jobId && (s.status === "running" || s.status === "queued"));
+    const active = stages.find(
+      (s: DerivedStageRun) => s.jobId && (s.status === "running" || s.status === "queued"),
+    );
     if (!active?.jobId) return;
     try {
       await cancelJob(active.jobId);
@@ -876,7 +991,7 @@ export default function StudioWorkspace({
   }
 
   async function handleRetry() {
-    const failed = stages.find((s) => s.status === "failed");
+    const failed = stages.find((s: DerivedStageRun) => s.status === "failed");
     if (!failed?.jobId) return;
     try {
       await retryJob(failed.jobId);

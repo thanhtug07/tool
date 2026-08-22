@@ -29,6 +29,7 @@ const SNAPSHOT: SettingsSnapshot = {
   "privacy.telemetry": false,
   "tts.engine": "edge",
   "tts.voice": "vi-VN-HoaiMyNeural",
+  "automation.orchestrator_v2": false,
 };
 
 describe("settings bridge (unit — mocked invoke)", () => {

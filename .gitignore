@@ -60,3 +60,6 @@ golden/results/
 vendor/llama/
 # Agent tool state (not project content).
 .ohmyagent/
+.kimchi/
+pnpm-lock.yaml
+src-tauri/_patch_*.py

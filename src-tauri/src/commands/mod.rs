@@ -14,4 +14,5 @@ pub mod provider;
 pub mod settings;
 pub mod subtitle;
 pub mod system;
+pub mod task;
 pub mod worker;

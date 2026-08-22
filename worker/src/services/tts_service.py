@@ -363,6 +363,10 @@ def _normalize_to_wav(src: str, dst: str, *, atempo: float | None = None) -> flo
 #: backoff turns those blips into successes instead of aborting the whole
 #: dubbing stage.
 _EDGE_MAX_ATTEMPTS = 3
+#: Rate-limit concurrent Edge-TTS requests to avoid service throttling.
+#: Edge-TTS is a free cloud service; too many parallel requests cause
+#: NoAudioReceived errors and service-side rate limiting.
+edge_tts_semaphore = threading.Semaphore(3)
 _EDGE_RETRY_DELAY_S = 1.5
 
 
@@ -374,31 +378,35 @@ def _synthesize_edge(text: str, voice: str, out_wav: str) -> float:
 
     mp3 = out_wav + ".mp3"
     last_exc: Exception | None = None
-    for attempt in range(1, _EDGE_MAX_ATTEMPTS + 1):
-        try:
-            asyncio.run(edge_tts.Communicate(text, voice).save(mp3))
-            last_exc = None
-            break
-        except Exception as exc:  # noqa: BLE001 - network/auth/voice failures
-            last_exc = exc
-            if attempt < _EDGE_MAX_ATTEMPTS:
-                logger.warning(
-                    "edge-tts attempt %d/%d failed for %r: %s — retrying",
-                    attempt,
-                    _EDGE_MAX_ATTEMPTS,
-                    text[:60],
-                    exc,
-                )
-                time.sleep(_EDGE_RETRY_DELAY_S)
-    if last_exc is not None:
-        raise TTSError(E_TTS_FAILED, f"edge-tts synthesis failed: {last_exc}") from last_exc
+    edge_tts_semaphore.acquire()
     try:
-        return _normalize_to_wav(mp3, out_wav)
-    finally:
+        for attempt in range(1, _EDGE_MAX_ATTEMPTS + 1):
+            try:
+                asyncio.run(edge_tts.Communicate(text, voice).save(mp3))
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 - network/auth/voice failures
+                last_exc = exc
+                if attempt < _EDGE_MAX_ATTEMPTS:
+                    logger.warning(
+                        "edge-tts attempt %d/%d failed for %r: %s — retrying",
+                        attempt,
+                        _EDGE_MAX_ATTEMPTS,
+                        text[:60],
+                        exc,
+                    )
+                    time.sleep(_EDGE_RETRY_DELAY_S)
+        if last_exc is not None:
+            raise TTSError(E_TTS_FAILED, f"edge-tts synthesis failed: {last_exc}") from last_exc
         try:
-            Path(mp3).unlink(missing_ok=True)
-        except OSError:
-            pass
+            return _normalize_to_wav(mp3, out_wav)
+        finally:
+            try:
+                Path(mp3).unlink(missing_ok=True)
+            except OSError:
+                pass
+    finally:
+        edge_tts_semaphore.release()
 
 
 def _piper_model_path(voice: str) -> tuple[str, str]:

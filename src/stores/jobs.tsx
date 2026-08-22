@@ -23,7 +23,7 @@ export type JobsContextValue = {
   lastEvent: JobStatusEvent | null;
   loading: boolean;
   error: string | null;
-  refresh: () => Promise<void>;
+  refresh: () => void;
 };
 
 const JobsContext = createContext<JobsContextValue | null>(null);
@@ -43,8 +43,9 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const refreshInFlight = useRef(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refreshImmediate = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
     try {
@@ -60,11 +61,23 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /** Debounced refresh — batches rapid calls into a single IPC round-trip. */
+  const refresh = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      void refreshImmediate();
+    }, 300);
+  }, [refreshImmediate]);
+
   useEffect(() => {
-    void refresh();
+    void refreshImmediate();
     const timer = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    return () => {
+      window.clearInterval(timer);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
+  }, [refresh, refreshImmediate]);
 
   // Event-driven: merge the event into the snapshot immediately, then refresh
   // so the full row (params, timestamps) catches up.
@@ -90,7 +103,17 @@ export function JobsProvider({ children }: { children: ReactNode }) {
             : job,
         );
       });
-      void refresh();
+      // Only do a full IPC refresh on terminal state transitions — the
+      // optimistic merge above already handles progress/stage updates
+      // in-place, avoiding a listAllJobs IPC call every500ms during
+      // progress polling (the primary cause of the "sluggish" UI feel).
+      if (
+        event.status === "succeeded" ||
+        event.status === "failed" ||
+        event.status === "cancelled"
+      ) {
+        void refresh();
+      }
     }).then((stop) => {
       if (cancelled) stop();
       else unlisten = stop;

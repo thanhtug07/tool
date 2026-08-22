@@ -237,18 +237,48 @@ def probe(device_override: str = "auto") -> HardwareProfile:
     )
 
 
+_ctranslate2_cuda_cache: bool | None = None
+
+
+def _ctranslate2_cuda_available() -> bool:
+    """Check if ctranslate2 has CUDA support (independent of torch).
+
+    faster-whisper uses ctranslate2 for inference, which has its own CUDA
+    backend.  torch.cuda is irrelevant when ctranslate2 can use the GPU
+    directly.  Result is cached after the first call.
+    """
+    global _ctranslate2_cuda_cache  # noqa: PLW0603
+    if _ctranslate2_cuda_cache is not None:
+        return _ctranslate2_cuda_cache
+    try:
+        import ctranslate2 as ct  # noqa: PLC0415
+        _ctranslate2_cuda_cache = ct.get_cuda_device_count() > 0
+    except Exception:  # noqa: BLE001
+        _ctranslate2_cuda_cache = False
+    return _ctranslate2_cuda_cache
+
+
 def resolve_strategy(profile: HardwareProfile) -> Strategy:
     """Apply the frozen §14.2 matrix + user override to pick the strategy.
 
-    - NVIDIA + torch.cuda -> faster-whisper on CUDA (int8_float16).
-    - Intel iGPU / AMD GPU  -> whisper.cpp Vulkan (TASK-015); device=CPU in
-      faster-whisper terms.
+    - NVIDIA + (torch.cuda OR ctranslate2 CUDA) -> faster-whisper on CUDA.
+    - Intel iGPU / AMD GPU  -> whisper.cpp Vulkan (TASK-015); device=CPU.
     - CPU-only              -> faster-whisper int8 on CPU.
-    - ``cuda`` override without torch.cuda -> degrade to CPU (logged warning).
+    - ``cuda`` override without GPU -> degrade to CPU (logged warning).
     """
     override = profile.device_override
     vendor = profile.gpu_vendor
     torch_cuda = profile.torch_cuda
+    # ctranslate2 has its own CUDA support — check it when torch is absent.
+    has_gpu = torch_cuda or (vendor == GPU_NVIDIA and _ctranslate2_cuda_available())
+    # Low-end GPUs (<6GB VRAM) are often slower than CPU for large-v3 inference
+    # because the model consumes ~2GB VRAM leaving insufficient headroom.
+    if has_gpu and profile.vram_mb is not None and profile.vram_mb < 6000:
+        logger.info(
+            "GPU VRAM %.0fMB < 6000MB — falling back to CPU (GPU too slow for large-v3)",
+            profile.vram_mb,
+        )
+        has_gpu = False
 
     encoder = _ENCODER_BY_VENDOR.get(vendor, "libx264")
     if encoder != "libx264" and encoder not in profile.ffmpeg_encoders:
@@ -258,12 +288,12 @@ def resolve_strategy(profile: HardwareProfile) -> Strategy:
     if override == "cpu":
         device, backend, vulkan = "cpu", STT_BACKEND_NVIDIA, False
     elif override == "cuda":
-        if torch_cuda:
+        if has_gpu:
             device, backend, vulkan = "cuda", STT_BACKEND_NVIDIA, False
         else:
-            logger.warning("CUDA override requested but torch.cuda is unavailable; using CPU.")
+            logger.warning("CUDA override requested but no GPU detected; using CPU.")
             device, backend, vulkan = "cpu", STT_BACKEND_NVIDIA, False
-    elif torch_cuda and vendor == GPU_NVIDIA:
+    elif has_gpu and vendor == GPU_NVIDIA:
         device, backend, vulkan = "cuda", STT_BACKEND_NVIDIA, False
     elif vendor in (GPU_INTEL, GPU_AMD):
         device, backend, vulkan = "cpu", STT_BACKEND_WHISPER_CPP, True

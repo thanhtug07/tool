@@ -70,10 +70,10 @@ Tối ưu pipeline Automation để xử lý video dài nhanh hơn mà không gi
 
 Mọi số liệu đo thật ngày 2026-08-20, machine i7-10850H 6C/12T · 32 GB RAM · Quadro T1000 4 GB · driver 582.16. Fixture: speech edge-tts/SAPI + testsrc2. STT model `small` (trừ cột model ghi riêng).
 
-| Video length | Total time | STT (chunked) | Translation | TTS | Encoding | RAM peak | VRAM peak | GPU | Speedup vs realtime | Ghi chú |
-| ------------ | ---------- | --- | ----------- | --- | -------- | -------- | --------- | --- | ------- | --- |
-| 60 s (CPU, w4) | 27.5 s | 17.6 s (RTF 0.275) | mock ~0 | — | libx264 | n/a | n/a | — | 2.2× | TEST A |
-| 300 s (GPU, w4 b2, mock) | 62.0 s | 32.4 s (RTF 0.108) | mock | — | libx264 9.0 s | 680 MB | 2660 MB | 100 % | 4.8× | TEST B |
-| 300 s (GPU, w4 b2, local/stub) | 54.4 s | 29.5 s (RTF 0.098) | stub 175 ms tot | — | libx264 10.0 s | n/a | 2660 MB | 100 % | 5.5× | TEST C |
-| 300 s (GPU, w4 b2, dub edge) | 76.0 s | 42.4 s (RTF 0.141) | mock | 91.9 s tot (overlap) | libx264 13.8 s | n/a | n/a | 100 % | 3.9× | TEST D |
-| **3600 s (GPU, w2 b4, mock)** | **590.7 s** | **355.9 s (RTF 0.099)** | mock ~0 | — | libx264 110.5 s | 704 MB | 2628 MB | 100 % | **6.1×** | TEST E 60 phút |
+| Video length                   | Total time  | STT (chunked)           | Translation     | TTS                  | Encoding        | RAM peak | VRAM peak | GPU   | Speedup vs realtime | Ghi chú        |
+| ------------------------------ | ----------- | ----------------------- | --------------- | -------------------- | --------------- | -------- | --------- | ----- | ------------------- | -------------- |
+| 60 s (CPU, w4)                 | 27.5 s      | 17.6 s (RTF 0.275)      | mock ~0         | —                    | libx264         | n/a      | n/a       | —     | 2.2×                | TEST A         |
+| 300 s (GPU, w4 b2, mock)       | 62.0 s      | 32.4 s (RTF 0.108)      | mock            | —                    | libx264 9.0 s   | 680 MB   | 2660 MB   | 100 % | 4.8×                | TEST B         |
+| 300 s (GPU, w4 b2, local/stub) | 54.4 s      | 29.5 s (RTF 0.098)      | stub 175 ms tot | —                    | libx264 10.0 s  | n/a      | 2660 MB   | 100 % | 5.5×                | TEST C         |
+| 300 s (GPU, w4 b2, dub edge)   | 76.0 s      | 42.4 s (RTF 0.141)      | mock            | 91.9 s tot (overlap) | libx264 13.8 s  | n/a      | n/a       | 100 % | 3.9×                | TEST D         |
+| **3600 s (GPU, w2 b4, mock)**  | **590.7 s** | **355.9 s (RTF 0.099)** | mock ~0         | —                    | libx264 110.5 s | 704 MB   | 2628 MB   | 100 % | **6.1×**            | TEST E 60 phút |

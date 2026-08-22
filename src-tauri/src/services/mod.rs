@@ -18,6 +18,7 @@ pub mod project_service;
 pub mod provider_service;
 pub mod settings_service;
 pub mod subtitle_service;
+pub mod task_runner;
 pub mod worker_client;
 pub mod worker_manager;
 

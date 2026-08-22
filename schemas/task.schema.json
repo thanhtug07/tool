@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Task",
+  "description": "A unit of work within a job (task orchestration layer).",
+  "type": "object",
+  "required": ["id", "job_id", "task_type", "stage", "status", "progress", "depends_on", "created_at", "updated_at"],
+  "properties": {
+    "id": { "type": "string", "description": "UUID v4" },
+    "job_id": { "type": "string", "description": "Parent job ID" },
+    "task_type": {
+      "type": "string",
+      "enum": ["transcribe", "translate", "subtitle", "tts", "render", "logo", "chunk"]
+    },
+    "stage": { "type": "string", "description": "Display stage name" },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "ready", "running", "succeeded", "failed", "cancelled", "blocked"],
+      "default": "queued"
+    },
+    "progress": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+    "depends_on": { "type": "string", "description": "JSON array of task IDs" },
+    "params_json": { "type": ["string", "null"], "description": "Task-specific parameters" },
+    "input_fingerprint": { "type": ["string", "null"], "description": "SHA256 for idempotency" },
+    "result_json": { "type": ["string", "null"], "description": "Output artifact metadata" },
+    "error_code": { "type": ["string", "null"] },
+    "error_message": { "type": ["string", "null"] },
+    "retry_count": { "type": "integer", "default": 0 },
+    "max_attempts": { "type": "integer", "default": 3 },
+    "cancel_requested": { "type": "boolean", "default": false },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "started_at": { "type": ["string", "null"], "format": "date-time" },
+    "finished_at": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

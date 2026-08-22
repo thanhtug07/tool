@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 
-import { onJobLog } from "@/api/events";
+import { onJobLog, onTaskLog } from "@/api/events";
 import type { Job } from "@/api/job";
 import { revealInFileManager } from "@/api/system";
 import { Button } from "@/components/ui/button";
@@ -108,6 +108,40 @@ export default function LiveLog({
       const id = nextId.current++;
       setEntries((current) => {
         const entry = toLogEntry(event, id, Date.now());
+        if (isConsecutiveDuplicate(current, entry)) return current;
+        return appendLogEntry(current, entry, Math.max(1, Math.min(2000, maxLogs)));
+      });
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [planJobIds, maxLogs]);
+
+  // Task logs (v2 orchestrator) — same filter, prefix with task suffix
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void onTaskLog((event) => {
+      if (cancelled) return;
+      if (!planJobIds.has(event.jobId)) return;
+      const id = nextId.current++;
+      const msg = event.taskId
+        ? `[${event.taskId.split(":").pop()}] ${event.message}`
+        : event.message;
+      setEntries((current) => {
+        const entry = toLogEntry(
+          {
+            jobId: event.jobId,
+            level: event.level as "info",
+            message: msg,
+          } as unknown as Parameters<typeof toLogEntry>[0],
+          id,
+          Date.now(),
+        );
         if (isConsecutiveDuplicate(current, entry)) return current;
         return appendLogEntry(current, entry, Math.max(1, Math.min(2000, maxLogs)));
       });
@@ -328,7 +362,9 @@ export function LiveLogView({
   const pct = Math.round(overallProgress * 100);
   const statusLabel =
     phase === "running"
-      ? "Processing"
+      ? entries.length === 0
+        ? "Starting"
+        : "Processing"
       : phase === "succeeded"
         ? "Completed"
         : phase === "failed"
@@ -355,23 +391,23 @@ export function LiveLogView({
         </div>
       )}
 
-      {/* Compact status bar — always visible */}
-      <div className="flex items-center gap-2 px-3 py-1.5">
+      {/* Status bar — always visible */}
+      <div className="flex items-center gap-3 px-4 py-2">
         <span
           data-role="live-log-status"
           className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
         >
           {activeRunning ? (
-            <Loader2 className="size-3 animate-spin text-sky-400" aria-hidden="true" />
+            <Loader2 className="size-4 animate-spin text-info" aria-hidden="true" />
           ) : phase === "succeeded" ? (
-            <Check className="size-3 text-emerald-400" aria-hidden="true" />
+            <Check className="size-4 text-success" aria-hidden="true" />
           ) : phase === "failed" ? (
-            <X className="size-3 text-red-400" aria-hidden="true" />
+            <X className="size-4 text-destructive" aria-hidden="true" />
           ) : (
-            <Circle className="size-2.5 text-muted-foreground" aria-hidden="true" />
+            <Circle className="size-3 text-muted-foreground" aria-hidden="true" />
           )}
           <span className="text-foreground">{statusLabel}</span>
-          {(activeRunning || phase === "succeeded") && (
+          {(activeRunning || phase === "succeeded") && entries.length > 0 && (
             <span className="tabular-nums" data-role="overall-pct">
               {pct}%
             </span>
@@ -450,19 +486,21 @@ export function LiveLogView({
                       {lastMessage}
                     </p>
                   )}
-                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
+                  <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted">
                     <div
                       data-role="current-progress"
-                      className="h-full rounded-full bg-primary transition-[width] duration-300"
+                      className="h-full rounded-full bg-info transition-[width] duration-300"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                     <span>
                       Elapsed{" "}
-                      <span className="tabular-nums">{formatProcessingTime(elapsedMs)}</span>
+                      <span className="tabular-nums">
+                        {entries.length === 0 ? "—" : formatProcessingTime(elapsedMs)}
+                      </span>
                     </span>
-                    {etaMs !== null && (
+                    {etaMs !== null && entries.length > 0 && (
                       <span>
                         ETA <span className="tabular-nums">{formatEta(etaMs)}</span>
                       </span>
@@ -488,21 +526,23 @@ export function LiveLogView({
               </p>
               <ol className="mt-1.5 space-y-0.5">
                 {timeline.map((item) => (
-                  <li key={item.key} className="flex items-center gap-2 text-xs">
+                  <li key={item.key} className="flex items-center gap-2.5 py-0.5 text-xs">
                     {item.status === "succeeded" ? (
-                      <Check className="size-3 shrink-0 text-emerald-400" aria-hidden="true" />
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-success/15">
+                        <Check className="size-3 text-success" aria-hidden="true" />
+                      </span>
                     ) : item.status === "running" ? (
-                      <Loader2
-                        className="size-3 shrink-0 animate-spin text-sky-400"
-                        aria-hidden="true"
-                      />
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-info/15">
+                        <Loader2 className="size-3 animate-spin text-info" aria-hidden="true" />
+                      </span>
                     ) : item.status === "failed" ? (
-                      <X className="size-3 shrink-0 text-red-400" aria-hidden="true" />
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-destructive/15">
+                        <X className="size-3 text-destructive" aria-hidden="true" />
+                      </span>
                     ) : (
-                      <Circle
-                        className="size-2.5 shrink-0 text-muted-foreground"
-                        aria-hidden="true"
-                      />
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                        <Circle className="size-2 text-muted-foreground" aria-hidden="true" />
+                      </span>
                     )}
                     <span
                       className={cn(
@@ -566,7 +606,7 @@ export function LiveLogView({
             )}
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             {activeRunning && (
               <Button size="sm" variant="outline" onClick={onCancel} data-role="cancel-automation">
                 <X className="size-3.5" aria-hidden="true" /> Cancel
@@ -590,8 +630,11 @@ export function LiveLogView({
           </div>
 
           {phase === "succeeded" && plan.startedAt && (
-            <div data-role="completed-summary" className="mt-2 text-xs text-muted-foreground">
-              <p className="font-medium text-emerald-400">Automation completed</p>
+            <div
+              data-role="completed-summary"
+              className="mt-3 rounded-lg border border-success/20 bg-success/5 p-3"
+            >
+              <p className="text-sm font-semibold text-success">Automation completed</p>
               <p className="mt-0.5">
                 Total {formatProcessingTime(elapsedMs)}
                 {artifacts?.renderedVideo ? (
@@ -605,8 +648,11 @@ export function LiveLogView({
           )}
 
           {phase === "failed" && failed && (
-            <div data-role="failed-summary" className="mt-2 text-xs text-muted-foreground">
-              <p className="font-medium text-red-400">Automation failed</p>
+            <div
+              data-role="failed-summary"
+              className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3"
+            >
+              <p className="text-sm font-semibold text-destructive">Automation failed</p>
               <p className="mt-0.5">
                 Stage: <span className="text-foreground">{stageLabelOf(failed.key)}</span>
                 {failed.errorMessage ? ` — ${failed.errorMessage}` : ""}

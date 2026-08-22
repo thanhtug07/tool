@@ -199,6 +199,36 @@ pub const MIGRATIONS: &[Migration] = &[
                 ('tts', 'free');
         "#,
     },
+    Migration {
+        version: 9,
+        name: "create tasks table for orchestration",
+        sql: r#"
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,                -- uuid v4
+                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                task_type TEXT NOT NULL,             -- transcribe/translate/subtitle/tts/render/logo/chunk
+                stage TEXT NOT NULL,                 -- display stage name
+                status TEXT NOT NULL DEFAULT 'queued',  -- queued/ready/running/succeeded/failed/cancelled/blocked
+                progress REAL NOT NULL DEFAULT 0.0,  -- 0.0 to 1.0
+                depends_on TEXT NOT NULL DEFAULT '[]',  -- JSON array of task IDs
+                params_json TEXT,                    -- task-specific parameters
+                input_fingerprint TEXT,              -- sha256(input + params + model + pipeline_version)
+                result_json TEXT,                    -- task output metadata (includes artifact fingerprint)
+                error_code TEXT,                     -- structured error code
+                error_message TEXT,                  -- human-readable error
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            );
+            CREATE INDEX idx_tasks_job_id ON tasks(job_id);
+            CREATE INDEX idx_tasks_status ON tasks(status);
+            CREATE INDEX idx_tasks_job_status ON tasks(job_id, status);
+        "#,
+    },
 ];
 
 /// Apply every pending migration (versions greater than `user_version`) in order.

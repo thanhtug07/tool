@@ -4,6 +4,7 @@
 > Không mô tả feature chưa implement. Mỗi claim được định vị bằng `file:line`.
 >
 > Chú thích trạng thái dùng trong tài liệu:
+>
 > - `NOT VERIFIED` — chưa xác minh được trong code hiện tại.
 > - `PARTIAL` — chức năng/component đang được implement một phần.
 > - `IMPLEMENTED BUT NOT ACTIVE` — có code nhưng chưa được wire vào luồng sử dụng.
@@ -86,16 +87,16 @@ Output Video + Subtitles in project dir, export qua worker (`/v1/export/*`)
 
 `schemas/*.json` là **single source of truth** (draft 2020-12), kiểm chứng chéo 3 lớp: Rust contract tests, Python jsonschema/Pydantic, TS types. 8 schema:
 
-| File | Nội dung (`schema` mô tả) |
-|---|---|
-| `api.schema.json` | Container contract HTTP + sidecar lifecycle (`$defs`: HealthStatus, HealthResponse, WorkerState, ErrorEnvelope code `^E_[A-Z0-9_]+$`) |
-| `job.schema.json` | Job status (`id` `^job_[0-9]+$`, type/status enum, progress 0..1) |
-| `media.schema.json` | MediaMetadata từ ffprobe (`schema_version:1`, Rotation 0/90/180/270, Rational) |
-| `model.schema.json` | ModelRegistry entry (`id`, checksum 64-hex hoặc rỗng, `supported_backend` enum) |
-| `project.schema.json` | Project (`id` UUID v4, status draft/analyzed/transcribed/translated/rendered) |
-| `subtitle.schema.json` | Subtitle doc (`style`, `cues`, `output`) |
-| `transcript.schema.json` | Transcript doc (`segments` `seg_[0-9]+`, confidence) |
-| `translation.schema.json` | Translation doc (`blocks`, segment_id `seg_[0-9]+`) |
+| File                      | Nội dung (`schema` mô tả)                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.schema.json`         | Container contract HTTP + sidecar lifecycle (`$defs`: HealthStatus, HealthResponse, WorkerState, ErrorEnvelope code `^E_[A-Z0-9_]+$`) |
+| `job.schema.json`         | Job status (`id` `^job_[0-9]+$`, type/status enum, progress 0..1)                                                                     |
+| `media.schema.json`       | MediaMetadata từ ffprobe (`schema_version:1`, Rotation 0/90/180/270, Rational)                                                        |
+| `model.schema.json`       | ModelRegistry entry (`id`, checksum 64-hex hoặc rỗng, `supported_backend` enum)                                                       |
+| `project.schema.json`     | Project (`id` UUID v4, status draft/analyzed/transcribed/translated/rendered)                                                         |
+| `subtitle.schema.json`    | Subtitle doc (`style`, `cues`, `output`)                                                                                              |
+| `transcript.schema.json`  | Transcript doc (`segments` `seg_[0-9]+`, confidence)                                                                                  |
+| `translation.schema.json` | Translation doc (`blocks`, segment_id `seg_[0-9]+`)                                                                                   |
 
 Examples: `schemas/examples/valid/` (10 file) + `schemas/examples/invalid/` (10 file). Wire table: `worker/tests/unit/test_schema_examples.py:27-38`. Rust contract tests đọc trực tiếp `schemas/examples/valid` (`src-tauri/src/services/contract_tests.rs:16`).
 
@@ -122,37 +123,37 @@ Engine: SQLite qua `rusqlite bundled`; WAL + `foreign_keys` + `busy_timeout` (`s
 
 **8 migrations (v1→v8)** — bảng đầy đủ từ `migrations.rs`:
 
-| # | Bảng | Cột chính (type) |
-|---|---|---|
-| v1 | `projects` | `id` TEXT PK (uuid), `name`, `source_video_path`, `status`, `created_at`, `updated_at`, `settings_json` |
-| v2 | index `idx_projects_updated_at` | — |
-| v3 | `jobs` | `id` TEXT PK (`job_NNNN`), `project_id` FK→projects ON DELETE CASCADE, `type`, `status`, `progress REAL DEFAULT 0`, `stage`, `error_code/message/log`, `params_json DEFAULT '{}'`, `retry_count DEFAULT 0`, `cancel_requested DEFAULT 0`, timestamps; index project_id, status |
-| v4 | `cache_entries` | PK(`project_id`,`key`), `stage`, `file_name`, `size_bytes`, timestamps; index last_access, stage |
-| v5 | `glossary_entries` (+`character_entries`) | PK(`project_id`,`term`) / PK(`project_id`,`name`), `translation`/`description`, `updated_at` |
-| v6 | `subtitle_cues` | `id` TEXT PK (uuid), `project_id` FK, `cue_number`, `start` REAL, `end` REAL, `text`, `speaker`, `source_text`, `status` ('draft'/'translated'/'edited'/'approved'), `style_json`, `updated_at`; UNIQUE(`project_id`,`cue_number`) |
-| v7 | `settings` | `key` TEXT PK, `value`, `updated_at` |
-| v8 | `providers` + `provider_defaults` | providers: `id`,`name`,`provider_type`('translation'),`provider_kind`('free'/'gemini'/'local'/'mock'),`enabled`(INT 1),`base_url`,`model`,`config_json DEFAULT '{}'`,`capabilities_json DEFAULT '[]'`,`last_test_status`,`last_test_at`,timestamps. provider_defaults: PK(`capability`), FK→providers |
-| v8 seed | 4 providers | `free` (capabilities `["translation","stt"]`, base_url `http://127.0.0.1:8080`), `gemini` (model `gemini-flash-lite-latest`, `["translation"]`), `local` (base_url `http://127.0.0.1:8080`), `mock`; defaults: translation→free, stt→free, tts→free (`migrations.rs:182-199`) |
+| #       | Bảng                                      | Cột chính (type)                                                                                                                                                                                                                                                                                      |
+| ------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v1      | `projects`                                | `id` TEXT PK (uuid), `name`, `source_video_path`, `status`, `created_at`, `updated_at`, `settings_json`                                                                                                                                                                                               |
+| v2      | index `idx_projects_updated_at`           | —                                                                                                                                                                                                                                                                                                     |
+| v3      | `jobs`                                    | `id` TEXT PK (`job_NNNN`), `project_id` FK→projects ON DELETE CASCADE, `type`, `status`, `progress REAL DEFAULT 0`, `stage`, `error_code/message/log`, `params_json DEFAULT '{}'`, `retry_count DEFAULT 0`, `cancel_requested DEFAULT 0`, timestamps; index project_id, status                        |
+| v4      | `cache_entries`                           | PK(`project_id`,`key`), `stage`, `file_name`, `size_bytes`, timestamps; index last_access, stage                                                                                                                                                                                                      |
+| v5      | `glossary_entries` (+`character_entries`) | PK(`project_id`,`term`) / PK(`project_id`,`name`), `translation`/`description`, `updated_at`                                                                                                                                                                                                          |
+| v6      | `subtitle_cues`                           | `id` TEXT PK (uuid), `project_id` FK, `cue_number`, `start` REAL, `end` REAL, `text`, `speaker`, `source_text`, `status` ('draft'/'translated'/'edited'/'approved'), `style_json`, `updated_at`; UNIQUE(`project_id`,`cue_number`)                                                                    |
+| v7      | `settings`                                | `key` TEXT PK, `value`, `updated_at`                                                                                                                                                                                                                                                                  |
+| v8      | `providers` + `provider_defaults`         | providers: `id`,`name`,`provider_type`('translation'),`provider_kind`('free'/'gemini'/'local'/'mock'),`enabled`(INT 1),`base_url`,`model`,`config_json DEFAULT '{}'`,`capabilities_json DEFAULT '[]'`,`last_test_status`,`last_test_at`,timestamps. provider_defaults: PK(`capability`), FK→providers |
+| v8 seed | 4 providers                               | `free` (capabilities `["translation","stt"]`, base_url `http://127.0.0.1:8080`), `gemini` (model `gemini-flash-lite-latest`, `["translation"]`), `local` (base_url `http://127.0.0.1:8080`), `mock`; defaults: translation→free, stt→free, tts→free (`migrations.rs:182-199`)                         |
 
 **Repositories** (`src/db/repo/`): `project.rs` (CRUD + `find_by_source_path` dedup), `job.rs` (state machine `can_transition`, monotonic `job_NNNN`, resume `queued`/`running` sau crash), `subtitle.rs`, `glossary.rs` (fingerprint FNV-1a), `characters.rs`.
 
 ## 4.3 Services
 
-| Service | Trách nhiệm |
-|---|---|
-| `ProjectService` (`project_service.rs`) | CRUD + thư mục `projects/{uuid}/{video,cache,output}`; id UUID chống path traversal; rollback dir khi insert fail |
-| `JobService` (`job_service.rs`) | Orchestrator FIFO (1 worker chạy 1 job); state machine guard; cancel (queued→cancelled, running→flag); retry transient 1s/5s/30s max 3; resume sau crash; emit `job:status`/`job:log` |
-| `PipelineRunner` (`pipeline_runner.rs`) | Xem §5 |
-| `CacheService` (`cache_service.rs`) | Content-addressed (`audio:/stt:/tr:/render:` + SHA-256 streaming, mirror Python `worker/src/services/cache.py:10-18`); quota LRU 10 GB default (`settings_service.rs:25`); cascade invalidation; crash-safe rename + sweep `*.tmp-*` |
-| `WorkerManager` (`worker_manager.rs`) | §4.4 |
-| `WorkerClient` (`worker_client.rs`) | §4.5 |
-| `HardwareProbe` (`hardware_probe.rs`) | nvidia-smi → WMI → `ffmpeg -encoders`; timeout 8s/probe; cached |
-| `ProviderService` (`provider_service.rs`) | Registry providers + defaults theo capability; FREE bất biến (không xóa/disable/đổi kind); xóa default → heal về FREE; `resolve_translation` cần enabled+capability |
-| `SettingsService` (`settings_service.rs`) | Whitelist 17 key (`settings_service.rs:28-46`), validate enum/range; defaults (`settings_service.rs:49-69`): `ai.model=large-v3`, `ai.device=auto`, `ai.preset=balanced`, `gpu.override=auto`, `api.gemini.model=gemini-flash-lite-latest`, `api.local.base_url=http://127.0.0.1:8080`, `cache.quota_bytes=10GB`, `privacy.mode=local`, `tts.engine=edge`, `tts.voice=vi-VN-HoaiMyNeural`, `automation.chunked=false`, `automation.chunk_duration=30`, `chunk_overlap=2`, `chunk_concurrency=4`, `chunk_retries=2` |
-| `SubtitleService` (`subtitle_service.rs`) | `replace_project` atomic + `update_cue` patch validate |
-| `DictionaryService` (`dictionary_service.rs`) | Glossary (term lowercase) + characters, fingerprint |
-| `SecretStore` (`security/secret_store.rs`) | §7 |
-| `JobEventSink` (`lib.rs:39-46`) | Emit `job:status`/`job:log` lên frontend |
+| Service                                       | Trách nhiệm                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ProjectService` (`project_service.rs`)       | CRUD + thư mục `projects/{uuid}/{video,cache,output}`; id UUID chống path traversal; rollback dir khi insert fail                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `JobService` (`job_service.rs`)               | Orchestrator FIFO (1 worker chạy 1 job); state machine guard; cancel (queued→cancelled, running→flag); retry transient 1s/5s/30s max 3; resume sau crash; emit `job:status`/`job:log`                                                                                                                                                                                                                                                                                                                              |
+| `PipelineRunner` (`pipeline_runner.rs`)       | Xem §5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `CacheService` (`cache_service.rs`)           | Content-addressed (`audio:/stt:/tr:/render:` + SHA-256 streaming, mirror Python `worker/src/services/cache.py:10-18`); quota LRU 10 GB default (`settings_service.rs:25`); cascade invalidation; crash-safe rename + sweep `*.tmp-*`                                                                                                                                                                                                                                                                               |
+| `WorkerManager` (`worker_manager.rs`)         | §4.4                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `WorkerClient` (`worker_client.rs`)           | §4.5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `HardwareProbe` (`hardware_probe.rs`)         | nvidia-smi → WMI → `ffmpeg -encoders`; timeout 8s/probe; cached                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `ProviderService` (`provider_service.rs`)     | Registry providers + defaults theo capability; FREE bất biến (không xóa/disable/đổi kind); xóa default → heal về FREE; `resolve_translation` cần enabled+capability                                                                                                                                                                                                                                                                                                                                                |
+| `SettingsService` (`settings_service.rs`)     | Whitelist 17 key (`settings_service.rs:28-46`), validate enum/range; defaults (`settings_service.rs:49-69`): `ai.model=large-v3`, `ai.device=auto`, `ai.preset=balanced`, `gpu.override=auto`, `api.gemini.model=gemini-flash-lite-latest`, `api.local.base_url=http://127.0.0.1:8080`, `cache.quota_bytes=10GB`, `privacy.mode=local`, `tts.engine=edge`, `tts.voice=vi-VN-HoaiMyNeural`, `automation.chunked=false`, `automation.chunk_duration=30`, `chunk_overlap=2`, `chunk_concurrency=4`, `chunk_retries=2` |
+| `SubtitleService` (`subtitle_service.rs`)     | `replace_project` atomic + `update_cue` patch validate                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `DictionaryService` (`dictionary_service.rs`) | Glossary (term lowercase) + characters, fingerprint                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `SecretStore` (`security/secret_store.rs`)    | §7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `JobEventSink` (`lib.rs:39-46`)               | Emit `job:status`/`job:log` lên frontend                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## 4.4 Worker process lifecycle (`worker_manager.rs`)
 
@@ -184,6 +185,7 @@ Engine: SQLite qua `rusqlite bundled`; WAL + `foreign_keys` + `busy_timeout` (`s
 ### 5.1.1 Chunk stage (Rust orchestration) (`pipeline_runner.rs:1216-1556`)
 
 `run_chunk` (1 job chạy cả chuỗi):
+
 1. Extract audio → verify WAV (`:1234-1262`).
 2. Đọc settings tunable: `automation.chunk_duration` (default 30), `chunk_overlap` (2), `chunk_concurrency` (4), `chunk_retries` (2) (`:1333-1337`).
 3. `POST /v1/automation/chunked` (`ChunkedAutomationRequest`) trong retry wrapper, progress 0.05→0.9 (`:1358-1401`).
@@ -196,28 +198,28 @@ Engine: SQLite qua `rusqlite bundled`; WAL + `foreign_keys` + `busy_timeout` (`s
 
 20 endpoints (đầy đủ từ `worker/src/api/routes.py` + `pipeline.py`):
 
-| Method | Path | File:line |
-|---|---|---|
-| GET | `/health` | `routes.py:63` |
-| POST | `/v1/stt/transcribe` | `routes.py:87` |
-| POST | `/v1/export/video` | `routes.py:175` |
-| POST | `/v1/export/subtitles` | `routes.py:204` |
-| POST | `/v1/audio/extract` | `pipeline.py:409` |
-| POST | `/v1/translate` | `pipeline.py:436` |
-| POST | `/v1/providers/test` | `pipeline.py:485` |
-| POST | `/v1/subtitle` | `pipeline.py:581` |
-| POST | `/v1/tts/synthesize` | `pipeline.py:628` |
-| GET | `/v1/tts/voices` | `pipeline.py:673` |
-| POST | `/v1/tts/preview` | `pipeline.py:727` |
-| POST | `/v1/render` | `pipeline.py:769` |
-| POST | `/v1/automation/chunked` | `pipeline.py:876` |
-| POST | `/v1/automation/finalize` | `pipeline.py:927` |
-| POST | `/v1/logo/remove` | `pipeline.py:973` |
-| POST | `/v1/audio/process` | `pipeline.py:1006` |
-| GET | `/v1/models/catalog` | `pipeline.py:1050` |
-| POST | `/v1/models/download` | `pipeline.py:1081` |
-| POST | `/v1/jobs/{id}/cancel` | `pipeline.py:1178` |
-| GET | `/v1/progress/{job_id}` | `pipeline.py:1187` |
+| Method | Path                      | File:line          |
+| ------ | ------------------------- | ------------------ |
+| GET    | `/health`                 | `routes.py:63`     |
+| POST   | `/v1/stt/transcribe`      | `routes.py:87`     |
+| POST   | `/v1/export/video`        | `routes.py:175`    |
+| POST   | `/v1/export/subtitles`    | `routes.py:204`    |
+| POST   | `/v1/audio/extract`       | `pipeline.py:409`  |
+| POST   | `/v1/translate`           | `pipeline.py:436`  |
+| POST   | `/v1/providers/test`      | `pipeline.py:485`  |
+| POST   | `/v1/subtitle`            | `pipeline.py:581`  |
+| POST   | `/v1/tts/synthesize`      | `pipeline.py:628`  |
+| GET    | `/v1/tts/voices`          | `pipeline.py:673`  |
+| POST   | `/v1/tts/preview`         | `pipeline.py:727`  |
+| POST   | `/v1/render`              | `pipeline.py:769`  |
+| POST   | `/v1/automation/chunked`  | `pipeline.py:876`  |
+| POST   | `/v1/automation/finalize` | `pipeline.py:927`  |
+| POST   | `/v1/logo/remove`         | `pipeline.py:973`  |
+| POST   | `/v1/audio/process`       | `pipeline.py:1006` |
+| GET    | `/v1/models/catalog`      | `pipeline.py:1050` |
+| POST   | `/v1/models/download`     | `pipeline.py:1081` |
+| POST   | `/v1/jobs/{id}/cancel`    | `pipeline.py:1178` |
+| GET    | `/v1/progress/{job_id}`   | `pipeline.py:1187` |
 
 Auth: bearer token (session sidecar → `WORKER_AUTH_TOKEN` → `"dev-placeholder-token"`), `secrets.compare_digest` (`routes.py:22-60`). Router `pipeline.py` dùng dependency `require_bearer` (`pipeline.py:48`).
 
@@ -271,10 +273,10 @@ Auth: bearer token (session sidecar → `WORKER_AUTH_TOKEN` → `"dev-placeholde
 
 ### Provider implementations
 
-| Provider | Trạng thái | Chi tiết |
-|---|---|---|
-| `mock_provider.py` | ACTIVE (default test) | Map deterministic `{target_language: {source: translated}}`, confidence 1.0; `fail_mode` cho test lỗi |
-| `gemini_provider.py` | ACTIVE | Model default `gemini-flash-lite-latest` (`:49-51`); dùng **google-genai SDK** (`genai.Client`) generate_content với `response_schema` mirror `schemas/translation.schema.json` (`:61-87,195-223`); retry 3 backoff (1,2,4)s; `E_API_AUTH` 401/403, retryable 409/429/5xx; repair JSON fence; `estimate_cost` chars/1000*0.0001 USD |
+| Provider                | Trạng thái                                                 | Chi tiết                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mock_provider.py`      | ACTIVE (default test)                                      | Map deterministic `{target_language: {source: translated}}`, confidence 1.0; `fail_mode` cho test lỗi                                                                                                                                                                                                                                                                       |
+| `gemini_provider.py`    | ACTIVE                                                     | Model default `gemini-flash-lite-latest` (`:49-51`); dùng **google-genai SDK** (`genai.Client`) generate_content với `response_schema` mirror `schemas/translation.schema.json` (`:61-87,195-223`); retry 3 backoff (1,2,4)s; `E_API_AUTH` 401/403, retryable 409/429/5xx; repair JSON fence; `estimate_cost` chars/1000*0.0001 USD                                         |
 | `local_llm_provider.py` | ACTIVE (local/cloud qua base_url hoặc llama-server binary) | Cho `kind=local`; llama-server spawn (allowlist `{"llama-server","llama-server.exe"}`, env `LLAMA_SERVER_BIN`), port ngẫu nhiên 127.0.0.1, `--n-gpu-layers` theo VRAM (`:99-103`); hoặc gọi `POST {base_url}/v1/chat/completions` model `"local"` (`:306-319`); `GET {base_url}/health`; Bearer từ settings; retry 3; `E_LOCAL_LLM_START`/`E_LOCAL_LLM_NOT_FOUND`/`E_API_*` |
 
 ## 6.3 TTS (`tts_service.py`)
@@ -437,18 +439,19 @@ Data từ worker registry (`settings.voices` → engines edge/piper + voices + d
 
 # 12. TEST STRUCTURE
 
-| Layer | Config | Nội dung |
-|---|---|---|
-| Frontend | Vitest `node` env, `renderToStaticMarkup` | 28 file test (`src/**/*.test.{ts,tsx}`): api bridge/job/project/media/subtitle/settings/export/dictionary, stores, pages, components, workspace. `npm run test` |
-| Rust | inline `#[cfg(test)]`; `cargo test` | 100+ test: migrations, db, repo, services (cache 18+, pipeline_runner 19+, worker_manager, worker_client, secret_store 7, project_service 9, provider_service 7, hardware_probe 8), contract_tests (5, validate `schemas/examples/valid`), commands |
-| Worker | `pytest` (từ `worker/`) — không có config pytest trong repo, cần `pip install pytest` | Unit (10 file): schema_examples (validate mọi example), chunk_service (29 tests), render_ass, render_audio_codec, render_fixes, logo_audio_service, tts_service_retry, tts_voice_library, translation_memory, ffmpeg_progress. Integration (chạy script trực tiếp, 4 file): `e2e_pipeline.py` (pipeline thật loopback+ffprobe), `e2e_chunked.py`, `e2e_providers.py` (OpenAI-compat stub), `e2e_ui.py` (CDP WebView2) |
-| CI | `.github/workflows/ci.yml` | worker job **chỉ smoke import** (`python -c "import src.main"`), không pytest; `PARTIAL` |
+| Layer    | Config                                                                                | Nội dung                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend | Vitest `node` env, `renderToStaticMarkup`                                             | 28 file test (`src/**/*.test.{ts,tsx}`): api bridge/job/project/media/subtitle/settings/export/dictionary, stores, pages, components, workspace. `npm run test`                                                                                                                                                                                                                                                       |
+| Rust     | inline `#[cfg(test)]`; `cargo test`                                                   | 100+ test: migrations, db, repo, services (cache 18+, pipeline_runner 19+, worker_manager, worker_client, secret_store 7, project_service 9, provider_service 7, hardware_probe 8), contract_tests (5, validate `schemas/examples/valid`), commands                                                                                                                                                                   |
+| Worker   | `pytest` (từ `worker/`) — không có config pytest trong repo, cần `pip install pytest` | Unit (10 file): schema_examples (validate mọi example), chunk_service (29 tests), render_ass, render_audio_codec, render_fixes, logo_audio_service, tts_service_retry, tts_voice_library, translation_memory, ffmpeg_progress. Integration (chạy script trực tiếp, 4 file): `e2e_pipeline.py` (pipeline thật loopback+ffprobe), `e2e_chunked.py`, `e2e_providers.py` (OpenAI-compat stub), `e2e_ui.py` (CDP WebView2) |
+| CI       | `.github/workflows/ci.yml`                                                            | worker job **chỉ smoke import** (`python -c "import src.main"`), không pytest; `PARTIAL`                                                                                                                                                                                                                                                                                                                              |
 
 ---
 
 # 13. TRẠNG THÁI & LƯU Ý (từ code thực tế)
 
 ## IMPLEMENTED BUT NOT ACTIVE
+
 - whisper-cpp STT backend (`stt_service.py:447-528`) — không route kích hoạt.
 - `media://` custom scheme handler (`lib.rs:56`) — frontend dùng `asset://` (`api/media.ts:26`).
 - `glossaryFingerprint`, `project.open`, `providers.get`, `secrets.*` API, `groupVoices` — export nhưng không consumer runtime.
@@ -457,6 +460,7 @@ Data từ worker registry (`settings.voices` → engines edge/piper + voices + d
 - Model stack `model_registry|download|cache|verifier` — tất cả entry `models/manifest.json` **UNPINNED** (`expected_size_bytes:0, checksum:""`) → `resolve()` trả rỗng; nhưng `LocalModelManager` (UI) dùng `models.catalog`/`download` (GGUF catalog hard-coded 1 entry Qwen2.5-3B, `pipeline.py:1038-1047`). `PARTIAL` khi kể cả cụm này là một phần hệ thống kích hoạt.
 
 ## PARTIAL
+
 - Worker pytest không có config trong repo; CI worker không chạy pytest.
 - Settings Video/Subtitle/General/Security sections là static InfoRow ("Not available in this build").
 - STT/TTS capabilities providers: stored, only Translation active.
@@ -464,27 +468,29 @@ Data từ worker registry (`settings.voices` → engines edge/piper + voices + d
 - docs/AI_PIPELINE.md ghi translation default `gemini`, nhưng seed DB v8 default translation = `free` (`migrations.rs:196-199`) — UI resolve default qua `defaultFor("translation")`; giá trị thật khi fresh install là `free`. `NOT VERIFIED` đối với hành vi UI cuối khi user đổi.
 
 ## NOT IMPLEMENTED
+
 - Exe/installer/updater packaging (ngoài scope per DEVELOPMENT.md; `bundle.active:false`).
 - OCR service (`worker/src/services/providers/ocr/` chỉ có `.gitkeep`).
 - Voice cloning / separation ML / timeline / billing / cloud backend (ngoài MVP scope per AGENTS.md).
 
 ## NOT VERIFIED
+
 - Hành vi endpoint `/v1/export/*` khi `run_qc=true` tại tầng frontend ExportView (QC verdict render) — đã có code worker QC, UI workspace truyền `runQc:true`.
 
 ---
 
 # 14. TÀI LIỆU HIỆN CÓ & MỨC KHỚP CODE
 
-| File | Khớp code? |
-|---|---|
-| `DEVELOPMENT.md` | Khớp (local-only, bundle inactive, WORKER_PYTHON, cuda install) |
-| `docs/VIDEO_PIPELINE.md`, `docs/AI_PIPELINE.md`, `docs/CHUNKED_PIPELINE_*.md` | Khớp (minor: default provider) |
-| `docs/FINAL_FUNCTIONAL_AUDIT.md` | Bản ghi lịch sử (base commit `6bc5d58`, test counts outdated) |
-| `DATABASE.md` | **Outdated** — ghi "Schema current version 7" nhưng code có 8 migrations (v8 providers); thiếu bảng providers/provider_defaults; trỏ `SECURITY.md` không tồn tại |
-| `API.md` | **Outdated** — thiếu ~11 worker routes + ~15 IPC commands (providers.*, models.*, media.probe, worker.*, system.hardware/reveal, settings.voices/ttsPreview, project.findBySourceVideo/rename/updateSettings, job.list_all) |
-| `deny.toml` | Reference README "TODO" — README không tồn tại |
-| `.prettierignore` | Liệt kê doc đã không còn tồn tại (MASTER_PLAN/ARCHITECTURE_DECISION/...) |
-| `AGENTS.md` | Khớp hiện trạng (no EXE, local-only) |
+| File                                                                          | Khớp code?                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEVELOPMENT.md`                                                              | Khớp (local-only, bundle inactive, WORKER_PYTHON, cuda install)                                                                                                                                                             |
+| `docs/VIDEO_PIPELINE.md`, `docs/AI_PIPELINE.md`, `docs/CHUNKED_PIPELINE_*.md` | Khớp (minor: default provider)                                                                                                                                                                                              |
+| `docs/FINAL_FUNCTIONAL_AUDIT.md`                                              | Bản ghi lịch sử (base commit `6bc5d58`, test counts outdated)                                                                                                                                                               |
+| `DATABASE.md`                                                                 | **Outdated** — ghi "Schema current version 7" nhưng code có 8 migrations (v8 providers); thiếu bảng providers/provider_defaults; trỏ `SECURITY.md` không tồn tại                                                            |
+| `API.md`                                                                      | **Outdated** — thiếu ~11 worker routes + ~15 IPC commands (providers._, models._, media.probe, worker.*, system.hardware/reveal, settings.voices/ttsPreview, project.findBySourceVideo/rename/updateSettings, job.list_all) |
+| `deny.toml`                                                                   | Reference README "TODO" — README không tồn tại                                                                                                                                                                              |
+| `.prettierignore`                                                             | Liệt kê doc đã không còn tồn tại (MASTER_PLAN/ARCHITECTURE_DECISION/...)                                                                                                                                                    |
+| `AGENTS.md`                                                                   | Khớp hiện trạng (no EXE, local-only)                                                                                                                                                                                        |
 
 ---
 

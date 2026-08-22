@@ -34,8 +34,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
+import json as _json
+import time as _time
+
 from fastapi import APIRouter, Depends, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api.routes import require_bearer
@@ -922,10 +925,10 @@ def chunked_automation(request: ChunkedAutomationRequest) -> JSONResponse:
                 max_retries=request.max_retries,
                 duration_tolerance=request.duration_tolerance,
                 cancel=cancel,
-                on_progress=lambda fraction, stage, message: cancel.set_progress(
-                    fraction, stage, message
+                on_progress=lambda fraction, stage, message, **kw: cancel.set_progress(
+                    fraction, stage, message, **kw
                 ),
-                on_event=lambda level, message: cancel.set_progress(0.5, "chunk", message),
+                on_event=lambda level, message: cancel.set_event(level, message),
             )
     except CancelledError:
         return _error("E_CANCELLED", "Chunked automation was cancelled.", http=status.HTTP_409_CONFLICT)
@@ -1203,10 +1206,131 @@ def job_progress(job_id: str) -> JSONResponse:
     Returns ``progress: null`` when no stage for this job is currently
     registered — the caller treats that as "no progress available" and keeps
     its own stage anchors. Never exposes paths, tokens, or command lines.
+
+    The ``events`` array contains all log events enqueued since the last poll
+    (FIFO order).  The Rust poller drains this list on every poll so
+    intermediate chunk-started / chunk-assembled lines are never lost even
+    when multiple chunks fire events within a single poll interval.
+
+    ``tasks`` is the v2 orchestrator extension (Phase 3): per-task progress
+    for a pipeline job. Each entry is ``{task_id, task_type, progress, stage}``.
+    For single-stage jobs or pipeline jobs whose tasks use per-task job_ids,
+    this array is empty and the top-level progress remains the source of truth.
     """
     with _cancel_lock:
         token = _cancel_tokens.get(job_id)
+        # Collect per-task tokens for pipeline jobs (tasks use job_id = task.id)
+        task_entries: list[dict] = []
+        if token is not None:
+            # If this job_id looks like a pipeline job, gather its task children
+            # Tasks share the same project but have distinct job_ids (task.id).
+            # We scan for tokens whose job_id starts with f"{job_id}:".
+            prefix = f"{job_id}:"
+            for tid, ttok in _cancel_tokens.items():
+                if tid.startswith(prefix):
+                    tp, ts, _ = ttok.get_progress()
+                    # Derive task_type from task_id suffix (e.g. job_1:translate -> translate)
+                    ttype = tid.split(":", 1)[-1] if ":" in tid else tid
+                    task_entries.append({
+                        "task_id": tid,
+                        "task_type": ttype,
+                        "progress": tp,
+                        "stage": ts,
+                    })
     if token is None:
-        return JSONResponse({"job_id": job_id, "progress": None, "stage": None, "message": None})
+        return JSONResponse({"job_id": job_id, "progress": None, "stage": None, "message": None, "events": [], "tasks": task_entries})
     progress, stage, message = token.get_progress()
-    return JSONResponse({"job_id": job_id, "progress": progress, "stage": stage, "message": message})
+    events = token.drain_events()
+    return JSONResponse({
+        "job_id": job_id,
+        "progress": progress,
+        "stage": stage,
+        "message": message,
+        "events": [{"level": level, "message": msg} for level, msg in events],
+        "tasks": task_entries,
+    })
+
+
+# ---------------------------------------------------------------------------
+# SSE realtime event stream
+# ---------------------------------------------------------------------------
+
+_SSE_POLL_INTERVAL = 0.1  # seconds between polls for new events
+_SSE_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
+_SSE_MAX_CONNECTIONS = 10  # max concurrent SSE streams per worker
+_sse_semaphore = threading.Semaphore(_SSE_MAX_CONNECTIONS)
+
+
+@router.get("/v1/events/stream/{job_id}")
+def event_stream(job_id: str):
+    """Server-Sent Events stream for a job's structured events.
+
+    The generator polls ``CancellationToken.get_events_since(cursor)`` every
+    ``_SSE_POLL_INTERVAL`` seconds and emits each new event as an SSE ``data:``
+    line.  The stream ends when:
+
+    1. The token is cleaned up (scope exit -> removed from ``_cancel_tokens``).
+    2. The client disconnects.
+
+    For unknown ``job_id`` (no token registered), returns a JSON fallback
+    compatible with ``/v1/progress`` so the frontend can fall back to polling.
+    """
+
+    # Check if the job has a token; if not, return JSON fallback.
+    with _cancel_lock:
+        token = _cancel_tokens.get(job_id)
+
+    if token is None:
+        # Unknown job -- return progress-shaped JSON (frontend polls this).
+        return JSONResponse({"job_id": job_id, "progress": None, "stage": None, "message": None, "events": [], "tasks": []})
+
+    if not _sse_semaphore.acquire(blocking=False):
+        return JSONResponse(
+            {"error": {"code": "E_TOO_MANY_STREAMS", "message": "SSE connection limit reached", "recoverable": True}},
+            status_code=429,
+        )
+
+    def _generate():  # noqa: E501 — generator must be nested to capture token
+        cursor = 0
+        last_keepalive = _time.monotonic()
+        try:
+          while True:
+            # Always drain first — events may have arrived between the
+            # last poll and the token being removed (scope exit).
+            events = token.get_events_since(cursor)
+            for evt in events:
+                cursor = evt["event_id"]
+                yield f"data: {_json.dumps(evt)}\n\n"
+
+            # Now check if the token is still registered.
+            with _cancel_lock:
+                alive = job_id in _cancel_tokens
+            if not alive:
+                # Final drain: events emitted between our last drain and
+                # the token removal must not be lost.
+                events = token.get_events_since(cursor)
+                for evt in events:
+                    cursor = evt["event_id"]
+                    yield f"data: {_json.dumps(evt)}\n\n"
+                break
+
+            # Keepalive comment (prevents proxy/client timeouts).
+            now = _time.monotonic()
+            if now - last_keepalive >= _SSE_KEEPALIVE_INTERVAL:
+                yield ": keepalive\n\n"
+                last_keepalive = now
+
+            _time.sleep(_SSE_POLL_INTERVAL)
+        finally:
+            _sse_semaphore.release()
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+

@@ -34,7 +34,10 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::db::repo::job::JobRepo;
+use crate::db::repo::task::{self, Task, TaskStatus, TaskType};
 use crate::db::{is_valid_uuid_v4, utc_iso8601_now, Database, DbError, Job, JobStatus, JobType};
+use crate::services::cache_service::CacheService;
+use crate::services::task_runner::{NoopTaskSink, TaskEventSink};
 
 /// Default transient-failure policy (MASTER_PLAN §17.1 / TASK-010): 3 retries
 /// with backoff 1s → 5s → 30s.
@@ -133,9 +136,10 @@ pub trait JobEventSink: Send + Sync {
 struct Inner {
     /// Shared SQLite handle; open failures are captured so the service can
     /// still run and report clean errors (mirrors `ProjectService`).
-    db: Result<Database, DbError>,
+    db: Result<Arc<Database>, DbError>,
     runner: Arc<dyn JobRunner>,
     events: Arc<dyn JobEventSink>,
+    task_events: Mutex<Arc<dyn TaskEventSink>>,
     config: JobServiceConfig,
     /// FIFO of `queued` job ids awaiting a free worker slot.
     queue: Mutex<VecDeque<String>>,
@@ -160,7 +164,7 @@ impl JobService {
         events: Arc<dyn JobEventSink>,
         config: JobServiceConfig,
     ) -> Self {
-        let db = Database::open(&data_dir.join("app.db"));
+        let db = Database::open(&data_dir.join("app.db")).map(Arc::new);
         if let Err(e) = &db {
             log::error!("job database init failed: {e}");
         }
@@ -169,6 +173,7 @@ impl JobService {
                 db,
                 runner,
                 events,
+                task_events: Mutex::new(Arc::new(NoopTaskSink)),
                 config,
                 queue: Mutex::new(VecDeque::new()),
                 cv: Condvar::new(),
@@ -180,6 +185,14 @@ impl JobService {
         svc.resume();
         svc.spawn_worker();
         svc
+    }
+
+    pub fn set_task_sink(&self, sink: Arc<dyn TaskEventSink>) {
+        *self
+            .inner
+            .task_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = sink;
     }
 
     /// Submit a job: validate the project exists, persist a `queued` row, and
@@ -213,11 +226,12 @@ impl JobService {
         }
 
         let now = utc_iso8601_now();
+        let params_for_task = params.clone();
         let job = db.transaction(|conn| {
             let repo = JobRepo::new(conn);
             let id = repo.next_id()?;
             let job = Job {
-                id,
+                id: id.clone(),
                 project_id: project_id.clone(),
                 job_type,
                 status: JobStatus::Queued,
@@ -226,21 +240,272 @@ impl JobService {
                 error_code: None,
                 error_message: None,
                 error_log: None,
-                params,
+                params: params.clone(),
                 created_at: now.clone(),
-                updated_at: now,
+                updated_at: now.clone(),
                 started_at: None,
                 finished_at: None,
                 retry_count: 0,
                 cancel_requested: false,
             };
             repo.insert(&job)?;
+            // Feature flag: when orchestrator v2 is ON, mirror a task row atomically (same tx).
+            let orchestrator_on = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key='automation.orchestrator_v2'",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            if orchestrator_on {
+                if let Some(tt) = job_type_to_task_type(job_type) {
+                    let params_json = serde_json::to_string(&params_for_task)
+                        .map_err(|e| DbError::InvalidInput(e.to_string()))?;
+                    let fp = CacheService::sha256_hex(
+                        format!("{}:{}:{}", tt.as_str(), project_id, params_json).as_bytes(),
+                    );
+                    let task = Task {
+                        id: format!("{id}:task"),
+                        job_id: id.clone(),
+                        task_type: tt,
+                        stage: tt.as_str().to_string(),
+                        status: TaskStatus::Queued,
+                        progress: 0.0,
+                        depends_on: "[]".to_string(),
+                        params_json: Some(params_json),
+                        input_fingerprint: Some(fp),
+                        result_json: None,
+                        error_code: None,
+                        error_message: None,
+                        retry_count: 0,
+                        max_attempts: 3,
+                        cancel_requested: false,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                        started_at: None,
+                        finished_at: None,
+                    };
+                    task::create_task(conn, &task)?;
+                }
+            }
             Ok(job)
         })?;
 
         self.enqueue(&job.id);
         self.emit_status(&job);
         self.emit_log(&job.id, "info", &format!("job {} submitted", job.id));
+        Ok(job)
+    }
+
+    pub fn list_tasks(&self, job_id: &str) -> Result<Vec<Task>, DbError> {
+        let db = self.db()?;
+        let conn = db.conn();
+        task::get_tasks_by_job(&conn, job_id)
+    }
+
+    pub fn get_task(&self, id: &str) -> Result<Task, DbError> {
+        let db = self.db()?;
+        let conn = db.conn();
+        task::get_task(&conn, id)?
+            .ok_or_else(|| DbError::NotFound(format!("task {id} does not exist")))
+    }
+
+    /// Orchestrator v2: submit a pipeline job + DAG tasks atomically (Rust owns DAG).
+    pub fn submit_pipeline(
+        &self,
+        project_id: &str,
+        params: serde_json::Value,
+    ) -> Result<Job, DbError> {
+        let project_id = validate_project_id(project_id)?;
+        if !params.is_object() {
+            return Err(DbError::InvalidInput(
+                "pipeline params must be object".into(),
+            ));
+        }
+        let db = self.db()?;
+        if db
+            .conn()
+            .query_row("SELECT 1 FROM projects WHERE id=?1", [&project_id], |_| {
+                Ok(())
+            })
+            .optional_ok()?
+            .is_none()
+        {
+            return Err(DbError::NotFound(format!(
+                "project {project_id} does not exist"
+            )));
+        }
+        let dub_audio = params
+            .get("dubAudio")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let logo_enabled = params
+            .get("logoRemoval")
+            .and_then(|v| v.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let chunked = params
+            .get("chunked")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let now = utc_iso8601_now();
+        let params_str = serde_json::to_string(&params).unwrap_or_else(|_| "{}".to_string());
+        let job = db.transaction(|conn| {
+            let repo = JobRepo::new(conn);
+            let id = repo.next_id()?;
+            let job_type = if chunked {
+                JobType::Chunk
+            } else {
+                JobType::Transcribe
+            };
+            let job = Job {
+                id: id.clone(),
+                project_id: project_id.clone(),
+                job_type,
+                status: JobStatus::Queued,
+                progress: 0.0,
+                stage: "queued".into(),
+                error_code: None,
+                error_message: None,
+                error_log: None,
+                params: params.clone(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+                started_at: None,
+                finished_at: None,
+                retry_count: 0,
+                cancel_requested: false,
+            };
+            repo.insert(&job)?;
+
+            // Custom workflow: if steps array present, build linear DAG from steps
+            let custom_steps: Option<Vec<String>> =
+                params.get("steps").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                });
+            if let Some(steps) = custom_steps.filter(|s| !s.is_empty()) {
+                let mut prev: Option<String> = None;
+                for step_str in steps {
+                    let tt = TaskType::from_db_str(&step_str).unwrap_or(TaskType::Audio);
+                    let deps = prev.clone().map(|p| vec![p]).unwrap_or_default();
+                    let tid = format!("{id}:{step_str}");
+                    let fp = CacheService::sha256_hex(
+                        format!("{}:{}:{}", tt.as_str(), project_id, params_str).as_bytes(),
+                    );
+                    let t = Task {
+                        id: tid.clone(),
+                        job_id: id.clone(),
+                        task_type: tt,
+                        stage: step_str.clone(),
+                        status: TaskStatus::Queued,
+                        progress: 0.0,
+                        depends_on: serde_json::to_string(&deps)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        params_json: Some(params_str.clone()),
+                        input_fingerprint: Some(fp),
+                        result_json: None,
+                        error_code: None,
+                        error_message: None,
+                        retry_count: 0,
+                        max_attempts: 3,
+                        cancel_requested: false,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                        started_at: None,
+                        finished_at: None,
+                    };
+                    task::create_task(conn, &t)?;
+                    prev = Some(tid);
+                }
+            } else if chunked {
+                let fp = CacheService::sha256_hex(
+                    format!("chunk:{}:{}", project_id, params_str).as_bytes(),
+                );
+                let t = Task {
+                    id: format!("{id}:chunk"),
+                    job_id: id.clone(),
+                    task_type: TaskType::Chunk,
+                    stage: "chunk".to_string(),
+                    status: TaskStatus::Queued,
+                    progress: 0.0,
+                    depends_on: "[]".to_string(),
+                    params_json: Some(params_str.clone()),
+                    input_fingerprint: Some(fp),
+                    result_json: None,
+                    error_code: None,
+                    error_message: None,
+                    retry_count: 0,
+                    max_attempts: 3,
+                    cancel_requested: false,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                    started_at: None,
+                    finished_at: None,
+                };
+                task::create_task(conn, &t)?;
+            } else {
+                let mut tasks: Vec<(TaskType, Vec<String>)> = Vec::new();
+                tasks.push((TaskType::Transcribe, vec![]));
+                tasks.push((TaskType::Translate, vec![format!("{id}:transcribe")]));
+                tasks.push((TaskType::Subtitle, vec![format!("{id}:translate")]));
+                if dub_audio {
+                    tasks.push((TaskType::Tts, vec![format!("{id}:translate")]));
+                }
+                if logo_enabled {
+                    tasks.push((TaskType::Logo, vec![format!("{id}:translate")]));
+                }
+                // render depends on all enabled non-transcribe tasks
+                let mut render_deps: Vec<String> = Vec::new();
+                for (tt, _) in &tasks {
+                    if *tt != TaskType::Transcribe {
+                        render_deps.push(format!("{id}:{}", tt.as_str()));
+                    }
+                }
+                tasks.push((TaskType::Render, render_deps));
+                for (tt, deps) in tasks {
+                    let tid = format!("{id}:{}", tt.as_str());
+                    let fp = CacheService::sha256_hex(
+                        format!("{}:{}:{}", tt.as_str(), project_id, params_str).as_bytes(),
+                    );
+                    let t = Task {
+                        id: tid,
+                        job_id: id.clone(),
+                        task_type: tt,
+                        stage: tt.as_str().to_string(),
+                        status: TaskStatus::Queued,
+                        progress: 0.0,
+                        depends_on: serde_json::to_string(&deps)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        params_json: Some(params_str.clone()),
+                        input_fingerprint: Some(fp),
+                        result_json: None,
+                        error_code: None,
+                        error_message: None,
+                        retry_count: 0,
+                        max_attempts: 3,
+                        cancel_requested: false,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                        started_at: None,
+                        finished_at: None,
+                    };
+                    task::create_task(conn, &t)?;
+                }
+            }
+            Ok(job)
+        })?;
+
+        self.enqueue(&job.id);
+        self.emit_status(&job);
+        self.emit_log(
+            &job.id,
+            "info",
+            &format!("pipeline job {} submitted", job.id),
+        );
         Ok(job)
     }
 
@@ -286,6 +551,13 @@ impl JobService {
                 job.error_log = None;
                 job.finished_at = Some(utc_iso8601_now());
                 self.transition(&mut job, JobStatus::Cancelled)?;
+                if self.inner.has_tasks(id) {
+                    if let Ok(db) = self.db() {
+                        let conn = db.conn();
+                        let now = utc_iso8601_now();
+                        let _ = task::cancel_all_non_succeeded(&conn, id, &now);
+                    }
+                }
                 self.emit_log(id, "info", "job cancelled before start");
                 Ok(())
             }
@@ -355,7 +627,11 @@ impl JobService {
     }
 
     fn db(&self) -> Result<&Database, DbError> {
-        self.inner.db.as_ref().map_err(|e| e.clone())
+        self.inner
+            .db
+            .as_ref()
+            .map(|arc| arc.as_ref())
+            .map_err(|e| e.clone())
     }
 
     // ---- queue worker -----------------------------------------------------
@@ -471,8 +747,22 @@ impl JobService {
 }
 
 impl Inner {
-    fn db(&self) -> Result<&Database, DbError> {
+    fn db(&self) -> Result<&Arc<Database>, DbError> {
         self.db.as_ref().map_err(|e| e.clone())
+    }
+    fn has_tasks(&self, job_id: &str) -> bool {
+        let Ok(db) = self.db() else {
+            return false;
+        };
+        let conn = db.conn();
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE job_id=?1",
+                [job_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        cnt > 0
     }
 
     fn load(&self, id: &str) -> Result<Option<Job>, DbError> {
@@ -506,6 +796,59 @@ impl Inner {
             .insert(job_id.to_string(), cancel.clone());
 
         let _ = self.transition(&mut job, JobStatus::Running);
+
+        // Orchestrator v2 path: if tasks exist for this job, run via TaskRunner
+        if self.has_tasks(job_id) {
+            let db = match self.db() {
+                Ok(db) => db.clone(),
+                Err(_) => {
+                    let _ = self.finish_failed(job_id, "DB_ERROR", "database unavailable");
+                    self.cancel_flags.lock().unwrap().remove(job_id);
+                    return;
+                }
+            };
+            let executor = Arc::new(crate::services::pipeline_runner::PipelineTaskExecutor::new(
+                self.runner.clone(),
+                job.project_id.clone(),
+                job.params.clone(),
+            ));
+            let cancel_clone = cancel.clone();
+            let cancel_fn: Arc<dyn Fn() -> bool + Send + Sync> =
+                Arc::new(move || cancel_clone.load(Ordering::SeqCst));
+            let task_sink = self
+                .task_events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let runner = crate::services::task_runner::TaskRunner::new(
+                db,
+                job_id.to_string(),
+                crate::services::task_runner::ConcurrencyConfig::default(),
+                executor,
+                cancel_fn,
+                task_sink,
+            );
+            match runner.run() {
+                Ok(crate::services::task_runner::PipelineOutcome::Completed) => {
+                    let _ = self.finish(job_id, JobStatus::Succeeded);
+                }
+                Ok(crate::services::task_runner::PipelineOutcome::Failed {
+                    error_code,
+                    error_message,
+                }) => {
+                    let _ = self.finish_failed(job_id, &error_code, &error_message);
+                }
+                Ok(crate::services::task_runner::PipelineOutcome::Cancelled)
+                | Err(crate::services::task_runner::TaskRunnerError::Cancelled) => {
+                    let _ = self.finish_cancelled(job_id);
+                }
+                Err(e) => {
+                    let _ = self.finish_failed(job_id, "PIPELINE_ERROR", &e.to_string());
+                }
+            }
+            self.cancel_flags.lock().unwrap().remove(job_id);
+            return;
+        }
 
         let mut retries: u32 = 0;
         loop {
@@ -735,6 +1078,19 @@ fn job_status_event(job: &Job) -> JobStatusEvent {
         progress: job.progress,
         stage: job.stage.clone(),
         error,
+    }
+}
+
+fn job_type_to_task_type(jt: JobType) -> Option<TaskType> {
+    match jt {
+        JobType::Transcribe => Some(TaskType::Transcribe),
+        JobType::Translate => Some(TaskType::Translate),
+        JobType::Subtitle => Some(TaskType::Subtitle),
+        JobType::Tts => Some(TaskType::Tts),
+        JobType::Render => Some(TaskType::Render),
+        JobType::Logo => Some(TaskType::Logo),
+        JobType::Chunk => Some(TaskType::Chunk),
+        JobType::Audio => Some(TaskType::Audio),
     }
 }
 
@@ -1579,6 +1935,373 @@ mod tests {
         let svc = JobService::open(dir.clone(), runner.clone(), sink.clone(), fast_config(3));
         thread::sleep(Duration::from_millis(100));
         assert_eq!(runner.call_count(), 0, "terminal jobs are not re-run");
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn submit_pipeline_classic_dag() {
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_pipeline_classic_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_id = {
+            let db = Database::open(&dir.join("app.db")).expect("open db");
+            let pid = new_uuid_v4().expect("uuid");
+            let now = utc_iso8601_now();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) VALUES (?1,'p','v.mp4','draft',?2,?2)",
+                    params![pid, now],
+                )
+                .expect("seed project");
+            pid
+        };
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+        let params = serde_json::json!({"dubAudio": true, "logoRemoval": {"enabled": true}, "chunked": false, "sourceLanguage": "en", "targetLanguage": "vi", "provider": "free"});
+        let job = svc
+            .submit_pipeline(&project_id, params)
+            .expect("submit pipeline");
+        assert_eq!(job.project_id, project_id);
+        let tasks = svc.list_tasks(&job.id).expect("list tasks");
+        // transcribe, translate, subtitle, tts, logo, render = 6
+        assert_eq!(tasks.len(), 6, "classic + dub + logo should be 6 tasks");
+        let ids: std::collections::HashSet<String> = tasks.iter().map(|t| t.id.clone()).collect();
+        assert!(ids.contains(&format!("{}:transcribe", job.id)));
+        assert!(ids.contains(&format!("{}:render", job.id)));
+        let render = tasks
+            .iter()
+            .find(|t| t.task_type == crate::db::repo::task::TaskType::Render)
+            .unwrap();
+        let deps: Vec<String> = serde_json::from_str(&render.depends_on).unwrap();
+        assert!(deps.contains(&format!("{}:subtitle", job.id)));
+        assert!(deps.contains(&format!("{}:tts", job.id)));
+        assert!(deps.contains(&format!("{}:logo", job.id)));
+        assert!(deps.contains(&format!("{}:translate", job.id)));
+        assert_eq!(deps.len(), 4);
+        let logo = tasks
+            .iter()
+            .find(|t| t.task_type == crate::db::repo::task::TaskType::Logo)
+            .unwrap();
+        let logo_deps: Vec<String> = serde_json::from_str(&logo.depends_on).unwrap();
+        assert_eq!(
+            logo_deps,
+            vec![format!("{}:translate", job.id)],
+            "logo must depend on translate"
+        );
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn submit_pipeline_chunked_single_task() {
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_pipeline_chunked_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_id = {
+            let db = Database::open(&dir.join("app.db")).expect("open db");
+            let pid = new_uuid_v4().expect("uuid");
+            let now = utc_iso8601_now();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) VALUES (?1,'p','v.mp4','draft',?2,?2)",
+                    params![pid, now],
+                )
+                .expect("seed project");
+            pid
+        };
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+        let params = serde_json::json!({"chunked": true});
+        let job = svc
+            .submit_pipeline(&project_id, params)
+            .expect("submit chunked");
+        let tasks = svc.list_tasks(&job.id).expect("list tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_type, crate::db::repo::task::TaskType::Chunk);
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn submit_pipeline_custom_linear() {
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_pipeline_custom_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_id = {
+            let db = Database::open(&dir.join("app.db")).expect("open db");
+            let pid = new_uuid_v4().expect("uuid");
+            let now = utc_iso8601_now();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) VALUES (?1,'p','v.mp4','draft',?2,?2)",
+                    params![pid, now],
+                )
+                .expect("seed project");
+            pid
+        };
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+        let params = serde_json::json!({"steps": ["transcribe", "translate", "subtitle"]});
+        let job = svc
+            .submit_pipeline(&project_id, params)
+            .expect("submit custom");
+        let tasks = svc.list_tasks(&job.id).expect("list tasks");
+        assert_eq!(tasks.len(), 3);
+        let subtitle = tasks.iter().find(|t| t.id.ends_with(":subtitle")).unwrap();
+        let deps: Vec<String> = serde_json::from_str(&subtitle.depends_on).unwrap();
+        assert_eq!(deps, vec![format!("{}:translate", job.id)]);
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn submit_pipeline_invalid_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_pipeline_invalid_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+        let bad_id = new_uuid_v4().unwrap();
+        let params = serde_json::json!({"chunked": true});
+        let err = svc.submit_pipeline(&bad_id, params).unwrap_err();
+        assert!(matches!(err, DbError::NotFound(_)));
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn submit_pipeline_b_dub_no_logo() {
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_pipeline_b_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_id = {
+            let db = Database::open(&dir.join("app.db")).expect("open db");
+            let pid = new_uuid_v4().expect("uuid");
+            let now = utc_iso8601_now();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) VALUES (?1,'p','v.mp4','draft',?2,?2)",
+                    rusqlite::params![pid, now],
+                )
+                .expect("seed project");
+            pid
+        };
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+        let params = serde_json::json!({"dubAudio": true, "logoRemoval": {"enabled": false}, "chunked": false});
+        let job = svc.submit_pipeline(&project_id, params).expect("submit B");
+        let tasks = svc.list_tasks(&job.id).expect("list");
+        assert_eq!(
+            tasks.len(),
+            5,
+            "B: transcribe, translate, subtitle, tts, render"
+        );
+        let render = tasks
+            .iter()
+            .find(|x| x.task_type == crate::db::repo::task::TaskType::Render)
+            .unwrap();
+        let deps: Vec<String> = serde_json::from_str(&render.depends_on).unwrap();
+        assert!(deps.contains(&format!("{}:subtitle", job.id)));
+        assert!(deps.contains(&format!("{}:tts", job.id)));
+        assert!(!deps.contains(&format!("{}:logo", job.id)));
+        // tts should depend on translate
+        let tts = tasks
+            .iter()
+            .find(|x| x.task_type == crate::db::repo::task::TaskType::Tts)
+            .unwrap();
+        let tts_deps: Vec<String> = serde_json::from_str(&tts.depends_on).unwrap();
+        assert_eq!(tts_deps, vec![format!("{}:translate", job.id)]);
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn submit_pipeline_c_no_dub_no_logo() {
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_pipeline_c_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_id = {
+            let db = Database::open(&dir.join("app.db")).expect("open db");
+            let pid = new_uuid_v4().expect("uuid");
+            let now = utc_iso8601_now();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) VALUES (?1,'p','v.mp4','draft',?2,?2)",
+                    rusqlite::params![pid, now],
+                )
+                .expect("seed project");
+            pid
+        };
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+        let params = serde_json::json!({"dubAudio": false, "logoRemoval": {"enabled": false}, "chunked": false});
+        let job = svc.submit_pipeline(&project_id, params).expect("submit C");
+        let tasks = svc.list_tasks(&job.id).expect("list");
+        assert_eq!(tasks.len(), 4, "C: transcribe, translate, subtitle, render");
+        assert!(tasks
+            .iter()
+            .any(|x| x.task_type == crate::db::repo::task::TaskType::Transcribe));
+        assert!(tasks
+            .iter()
+            .any(|x| x.task_type == crate::db::repo::task::TaskType::Translate));
+        assert!(tasks
+            .iter()
+            .any(|x| x.task_type == crate::db::repo::task::TaskType::Subtitle));
+        assert!(tasks
+            .iter()
+            .any(|x| x.task_type == crate::db::repo::task::TaskType::Render));
+        assert!(!tasks
+            .iter()
+            .any(|x| x.task_type == crate::db::repo::task::TaskType::Tts));
+        assert!(!tasks
+            .iter()
+            .any(|x| x.task_type == crate::db::repo::task::TaskType::Logo));
+        svc.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn real_video_pipeline_dry_run_china_mp4() {
+        let video_path = r"D:\Downloads\CHina.mp4";
+        assert!(
+            std::path::Path::new(video_path).exists(),
+            "video not found at {}",
+            video_path
+        );
+        let meta = std::fs::metadata(video_path).expect("metadata");
+        println!("video_path: {}", video_path);
+        println!("file_size_bytes: {}", meta.len());
+        println!("file_size_mb: {:.2}", meta.len() as f64 / (1024.0 * 1024.0));
+
+        let dir = std::env::temp_dir().join(format!(
+            "tooltranslate_real_video_{}",
+            new_uuid_v4().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        // seed project with real video path
+        let project_id = {
+            let db = Database::open(&dir.join("app.db")).expect("open db");
+            let pid = new_uuid_v4().expect("uuid");
+            let now = utc_iso8601_now();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) VALUES (?1,'China Sample',?2,'draft',?3,?3)",
+                    rusqlite::params![pid, video_path, now],
+                )
+                .expect("seed project");
+            pid
+        };
+        let svc = JobService::open(
+            dir.clone(),
+            Arc::new(ScriptRunner::new(RunMode::Ok)),
+            Arc::new(RecordingSink::default()),
+            fast_config(3),
+        );
+
+        // classic pipeline (48min video, dubbed)
+        let params_classic = serde_json::json!({
+            "dubAudio": true,
+            "logoRemoval": {"enabled": false},
+            "chunked": false,
+            "sourceLanguage": "zh",
+            "targetLanguage": "vi",
+            "provider": "free"
+        });
+        let start = std::time::Instant::now();
+        let job = svc
+            .submit_pipeline(&project_id, params_classic)
+            .expect("submit classic");
+        let elapsed_submit = start.elapsed();
+        let tasks = svc.list_tasks(&job.id).expect("list tasks");
+        println!("classic job_id: {}", job.id);
+        println!("classic tasks count: {}", tasks.len());
+        for t in &tasks {
+            println!(
+                "  task id={} type={} stage={} deps={} fp={:.8}...",
+                t.id,
+                t.task_type.as_str(),
+                t.stage,
+                t.depends_on,
+                t.input_fingerprint.as_deref().unwrap_or("none")
+                    [..8.min(t.input_fingerprint.as_deref().unwrap_or("none").len())]
+                    .to_string()
+            );
+        }
+        println!("classic submit elapsed: {}ms", elapsed_submit.as_millis());
+        // chunked pipeline
+        let params_chunked = serde_json::json!({
+            "chunked": true,
+            "dubAudio": false,
+            "sourceLanguage": "zh",
+            "targetLanguage": "vi",
+            "provider": "free",
+            "chunk_duration": 30.0,
+            "overlap": 2.0,
+            "max_concurrency": 4
+        });
+        let job2 = svc
+            .submit_pipeline(&project_id, params_chunked)
+            .expect("submit chunked");
+        let tasks2 = svc.list_tasks(&job2.id).expect("list chunked tasks");
+        println!("chunked job_id: {}", job2.id);
+        println!("chunked tasks count: {}", tasks2.len());
+        for t in &tasks2 {
+            println!("  chunk task id={} deps={}", t.id, t.depends_on);
+        }
+        // estimate chunks for 2918s video
+        let duration_secs: f64 = 2918.266625;
+        let chunk_duration: f64 = 30.0;
+        let overlap: f64 = 2.0;
+        let step: f64 = chunk_duration - overlap;
+        let estimated_chunks = ((duration_secs - overlap) / step).ceil() as u32;
+        println!("video duration: {:.2}s", duration_secs);
+        println!(
+            "chunk_duration: {}, overlap: {}, step: {}",
+            chunk_duration, overlap, step
+        );
+        println!(
+            "estimated chunks (if per-chunk tasks): {}",
+            estimated_chunks
+        );
+        println!("tasks table is single source of truth, chunked job currently 1 task (chunk) that internally fans out to {} chunks via worker ThreadPool", estimated_chunks);
+
         svc.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

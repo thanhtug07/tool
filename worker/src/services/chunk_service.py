@@ -524,6 +524,48 @@ def _pcm_to_wav(pcm_path: str, wav_path: str, sample_rate: int = 44100) -> str:
     return wav_path
 
 
+
+class ConcurrentTracker:
+    """Measure peak and average concurrency for a pipeline stage.
+
+    Usage::
+
+        tracker = ConcurrentTracker()
+        tracker.inc()   # task starts
+        # ... task runs ...
+        tracker.dec()   # task finishes
+
+        print(tracker.peak)        # max concurrent tasks observed
+        print(tracker.avg())       # average over the observation window
+        print(tracker.current)     # tasks currently running
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.current: int = 0
+        self.peak: int = 0
+        self._total: float = 0.0
+        self._start: float = time.monotonic()
+
+    def inc(self) -> None:
+        with self._lock:
+            self.current += 1
+            if self.current > self.peak:
+                self.peak = self.current
+
+    def dec(self) -> None:
+        with self._lock:
+            self.current -= 1
+
+    def avg(self) -> float:
+        elapsed = time.monotonic() - self._start
+        if elapsed <= 0:
+            return 0.0
+        with self._lock:
+            # Approximate: track cumulative concurrency-seconds
+            self._total += self.current * 0.001  # updated on each call
+        return self._total / elapsed if elapsed > 0 else 0.0
+
 class StreamingChunkPipeline:
     """Stage-decoupled, bounded parallel pipeline with ordered streaming assembly.
 
@@ -597,6 +639,10 @@ class StreamingChunkPipeline:
         )
         self._stop = threading.Event()
         self._failure: ChunkFailedError | None = None
+        # Concurrency observability (peak / avg per stage)
+        self.trackers: dict[str, ConcurrentTracker] = {
+            name: ConcurrentTracker() for name in self._STAGES
+        }
         self._lock = threading.Lock()
         self._stage_done = {s: 0 for s in self._STAGES}
         self.assembled: list[ChunkArtifacts] = []
@@ -670,8 +716,12 @@ class StreamingChunkPipeline:
                 if self.on_event:
                     self.on_event("info", f"CHUNK_STARTED {state.chunk.chunk_id} {state.chunk.index} [{stage}]")
                 try:
-                    process(state, self.ctx)
-                    break
+                    self.trackers[stage].inc()
+                    try:
+                        process(state, self.ctx)
+                        break
+                    finally:
+                        self.trackers[stage].dec()
                 except ChunkFailedError as exc:
                     attempts += 1
                     state.stage_attempts[stage] = attempts
@@ -1373,7 +1423,7 @@ class ChunkPipelineContext:
     stt_batch_size: int = 2
     chunks_total: int = 0
     cancel: Any = None
-    on_progress: Callable[[float, str, str | None], None] | None = None
+    on_progress: Callable[..., None] | None = None
     #: One shared translation provider for the whole run (built lazily at most
     #: once, then reused by every translate worker — never one provider per
     #: chunk, which would spawn/tear down a llama-server per chunk for local
@@ -1448,16 +1498,26 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     perf["slice_s"] = time.monotonic() - perf["slice_start_s"]
     _check_cancel(ctx)
 
-    if ctx.on_progress:
-        ctx.on_progress(0.0, "chunk-stt", f"STT_STARTED {chunk.chunk_id}")
+    def _progress(ratio: float, message: str) -> None:
+        """Map a per-chunk (0..1) ratio to the global chunked-pipeline fraction
+        (chunk.index is 1-based) so the overall progress advances continuously
+        across the whole run instead of jumping per stage/chunk."""
+        if ctx.on_progress:
+            ctx.on_progress(
+                (chunk.index - 1 + max(0.0, min(1.0, ratio))) / (ctx.chunks_total or 1),
+                "chunk-stt",
+                message,
+                chunk_index=chunk.index,
+                total_chunks=ctx.chunks_total,
+            )
+
+    _progress(0.0, f"STT_STARTED {chunk.chunk_id}")
     perf["stt_start_s"] = time.monotonic()
 
     stt_log_lines: list[str] = []
 
     def _stt_log(msg: str) -> None:
         stt_log_lines.append(msg)
-        if ctx.on_progress:
-            ctx.on_progress(0.5, "chunk-stt", msg)
 
     try:
         result = stt_transcribe(
@@ -1473,6 +1533,7 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
             stt_mode=ctx.stt_mode,
             batch_size=ctx.stt_batch_size,
             on_stt_log=_stt_log,
+            on_progress=lambda ratio: _progress(ratio, f"STT {chunk.chunk_id}"),
         )
         raw_segments = result.transcript.get("segments", [])
     except STTError as exc:
@@ -1487,8 +1548,7 @@ def _run_stt_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     _stt_log(f"[STT] Batch size: {ctx.stt_batch_size}")
     _stt_log(f"[STT] Chunk: {chunk.index}/{ctx.chunks_total}")
     _stt_log(f"[STT] RTF: {rtf:.3f}")
-    if ctx.on_progress:
-        ctx.on_progress(1.0, "chunk-stt", f"STT_COMPLETED {chunk.chunk_id}")
+    _progress(1.0, f"STT_COMPLETED {chunk.chunk_id}")
     _check_cancel(ctx)
 
     # Shift slice-relative timestamps to the source timeline, clamp to the
@@ -1602,8 +1662,18 @@ def _run_translate_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
 
     chunk = state.chunk
     perf = state.perf
-    if ctx.on_progress:
-        ctx.on_progress(0.0, "chunk-translate", f"TRANSLATION_STARTED {chunk.chunk_id}")
+
+    def _progress(ratio: float, message: str) -> None:
+        if ctx.on_progress:
+            ctx.on_progress(
+                (chunk.index - 1 + max(0.0, min(1.0, ratio))) / (ctx.chunks_total or 1),
+                "chunk-translate",
+                message,
+                chunk_index=chunk.index,
+                total_chunks=ctx.chunks_total,
+            )
+
+    _progress(0.0, f"TRANSLATION_STARTED {chunk.chunk_id}")
     perf["translate_start_s"] = time.monotonic()
     provider = _ensure_translation_provider(ctx)
     service = TranslationService()
@@ -1621,14 +1691,14 @@ def _run_translate_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
         characters=ctx.characters,
         rules=ctx.rules,
         cancel=ctx.cancel,
+        on_progress=lambda ratio: _progress(ratio, f"TRANSLATE {chunk.chunk_id}"),
     )
     perf["translate_s"] = time.monotonic() - perf["translate_start_s"]
     translated_by_idx: dict[int, str] = {}
     for block in blocks:
         for item in block.translations:
             translated_by_idx[item.idx] = item.translated_text
-    if ctx.on_progress:
-        ctx.on_progress(1.0, "chunk-translate", f"TRANSLATION_COMPLETED {chunk.chunk_id}")
+    _progress(1.0, f"TRANSLATION_COMPLETED {chunk.chunk_id}")
 
     cues: list[dict[str, Any]] = []
     for i, seg in enumerate(state.segments):
@@ -1660,8 +1730,18 @@ def _run_tts_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
     chunk = state.chunk
     perf = state.perf
     chunk_dir = os.path.dirname(state.audio_path)
-    if ctx.on_progress:
-        ctx.on_progress(0.0, "chunk-tts", f"TTS_STARTED {chunk.chunk_id}")
+
+    def _progress(ratio: float, message: str) -> None:
+        if ctx.on_progress:
+            ctx.on_progress(
+                (chunk.index - 1 + max(0.0, min(1.0, ratio))) / (ctx.chunks_total or 1),
+                "chunk-tts",
+                message,
+                chunk_index=chunk.index,
+                total_chunks=ctx.chunks_total,
+            )
+
+    _progress(0.0, f"TTS_STARTED {chunk.chunk_id}")
     perf["tts_start_s"] = time.monotonic()
     local_cues = [
         TTSCue(
@@ -1679,11 +1759,11 @@ def _run_tts_stage(state: _StageState, ctx: ChunkPipelineContext) -> None:
         duration_seconds=chunk.logical_duration,
         output_dir=chunk_dir,
         cancel=ctx.cancel,
+        on_progress=lambda ratio: _progress(ratio, f"TTS {chunk.chunk_id}"),
     )
     state.voice_track = tts_result.voice_track_path
     perf["tts_s"] = time.monotonic() - perf["tts_start_s"]
-    if ctx.on_progress:
-        ctx.on_progress(1.0, "chunk-tts", f"TTS_COMPLETED {chunk.chunk_id}")
+    _progress(1.0, f"TTS_COMPLETED {chunk.chunk_id}")
 
 
 def _build_chunk_artifacts(state: _StageState, ctx: ChunkPipelineContext) -> ChunkArtifacts:

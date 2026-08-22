@@ -422,6 +422,19 @@ export function pipelineProgress(stages: DerivedStageRun[]): number {
   return total;
 }
 
+/** Weighted pipeline progress from tasks (v2 orchestrator): average task progress. */
+export function pipelineProgressFromTasks(tasks: { status: string; progress: number }[]): number {
+  if (tasks.length === 0) return 0;
+  const total = tasks.reduce((sum, t) => {
+    if (t.status === "succeeded") return sum + 1;
+    if (t.status === "running" || t.status === "ready" || t.status === "queued") {
+      return sum + Math.min(1, Math.max(0, t.progress));
+    }
+    return sum;
+  }, 0);
+  return total / tasks.length;
+}
+
 export type ChecklistLineState = {
   key: StageKey;
   label: string;

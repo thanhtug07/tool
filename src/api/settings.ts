@@ -13,7 +13,15 @@ export type SettingsKey =
   | "privacy.mode"
   | "privacy.telemetry"
   | "tts.engine"
-  | "tts.voice";
+  | "tts.voice"
+  | "automation.chunked"
+  | "automation.chunk_duration"
+  | "automation.chunk_overlap"
+  | "automation.chunk_concurrency"
+  | "automation.chunk_retries"
+  | "automation.stt_mode"
+  | "automation.stt_batch_size"
+  | "automation.orchestrator_v2";
 
 /** Typed snapshot of every known setting (stored value or built-in default). */
 export type SettingsSnapshot = {
@@ -29,6 +37,7 @@ export type SettingsSnapshot = {
   "privacy.telemetry": boolean;
   "tts.engine": "edge" | "piper";
   "tts.voice": string;
+  "automation.orchestrator_v2": boolean;
 };
 
 /** Providers that can hold an API key in the OS credential vault. */

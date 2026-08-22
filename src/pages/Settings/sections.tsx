@@ -220,6 +220,7 @@ export function ProcessingSection({
   onSaveGpu,
   onRestartWorker,
   restarting,
+  onSaveOrchestrator,
 }: {
   settings: SettingsSnapshot;
   worker: WorkerStateInfo | null;
@@ -229,6 +230,7 @@ export function ProcessingSection({
   onSaveGpu: (value: string) => void;
   onRestartWorker: () => void;
   restarting: boolean;
+  onSaveOrchestrator: (value: boolean) => void;
 }) {
   const status = workerStateLabel(worker?.state ?? "stopped");
   return (
@@ -309,6 +311,17 @@ export function ProcessingSection({
         </select>
       </ControlRow>
       <InfoRow label="Parallel jobs" value="1 at a time (single worker, FIFO)" />
+      <ControlRow label="Orchestrator v2 (experimental)">
+        <input
+          data-role="automation-orchestrator-v2"
+          type="checkbox"
+          checked={Boolean(settings["automation.orchestrator_v2"])}
+          onChange={(e) => onSaveOrchestrator(e.target.checked)}
+        />
+        <span className="text-xs text-muted-foreground">
+          Rust owns DAG, intra-job parallel (global 3)
+        </span>
+      </ControlRow>
     </SettingsSection>
   );
 }

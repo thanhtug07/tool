@@ -1,4 +1,46 @@
 @import "tailwindcss";
+
+/* Typography Scale */
+--text-2xs: 0.625rem;
+--text-xs: 0.75rem;
+--text-sm: 0.8125rem;
+--text-base: 0.875rem;
+--text-lg: 1rem;
+--text-xl: 1.25rem;
+--text-2xl: 1.5rem;
+
+/* Spacing Scale */
+--space-0: 0px;
+--space-1: 4px;
+--space-2: 8px;
+--space-3: 12px;
+--space-4: 16px;
+--space-5: 20px;
+--space-6: 24px;
+--space-8: 32px;
+--space-10: 40px;
+--space-12: 48px;
+
+/* Shadow & Elevation */
+--shadow-xs: 0 1px 2px oklch(0 0 0 / 15%);
+--shadow-sm: 0 1px 3px oklch(0 0 0 / 20%), 0 1px 2px oklch(0 0 0 / 15%);
+--shadow-md: 0 4px 6px oklch(0 0 0 / 20%), 0 2px 4px oklch(0 0 0 / 15%);
+--shadow-lg: 0 10px 15px oklch(0 0 0 / 25%), 0 4px 6px oklch(0 0 0 / 15%);
+--shadow-xl: 0 20px 25px oklch(0 0 0 / 30%), 0 8px 10px oklch(0 0 0 / 15%);
+--shadow-glow: 0 0 20px oklch(0.8 0.13 86 / 25%);
+
+/* Border Radius */
+--radius-sm: calc(var(--radius) - 2px);
+--radius-md: var(--radius);
+--radius-lg: calc(var(--radius) + 2px);
+--radius-xl: calc(var(--radius) + 6px);
+--radius-2xl: calc(var(--radius) + 10px);
+
+/* Transition Durations */
+--duration-fast: 100ms;
+--duration-normal: 150ms;
+--duration-slow: 200ms;
+
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -28,6 +70,23 @@
   --gold: oklch(0.8 0.13 86);
   --gold-foreground: oklch(0.22 0.045 70);
   --gold-soft: oklch(0.8 0.13 86 / 12%);
+  --gold-hover: oklch(0.82 0.14 86);
+
+  /* Semantic: Status Colors */
+  --success: oklch(0.72 0.19 162);
+  --success-soft: oklch(0.72 0.19 162 / 12%);
+  --warning: oklch(0.82 0.17 84);
+  --warning-soft: oklch(0.82 0.17 84 / 12%);
+  --info: oklch(0.7 0.14 245);
+  --info-soft: oklch(0.7 0.14 245 / 12%);
+  --destructive-soft: oklch(0.704 0.191 22.216 / 12%);
+
+  /* Border / Input */
+  --border-strong: oklch(1 0 0 / 18%);
+
+  /* Surface Elevation */
+  --surface-elevated: oklch(0.21 0.02 258);
+  --surface-sunken: oklch(0.12 0.01 258);
   --sidebar: oklch(0.16 0.013 258);
   --sidebar-foreground: oklch(0.945 0.01 258);
   --sidebar-accent: oklch(0.24 0.018 258);
@@ -90,6 +149,16 @@
   --color-gold: var(--gold);
   --color-gold-foreground: var(--gold-foreground);
   --color-gold-soft: var(--gold-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-border-strong: var(--border-strong);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -101,10 +170,141 @@
   --radius-xl: calc(var(--radius) + 6px);
 }
 
+/* Animation Primitives */
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes slide-in-up {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes slide-in-down {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes scale-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+@keyframes toast-progress {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 200ms ease-out;
+}
+.animate-slide-in-left {
+  animation: slide-in-left 200ms ease-out;
+}
+.animate-slide-in-up {
+  animation: slide-in-up 150ms ease-out;
+}
+.animate-slide-in-down {
+  animation: slide-in-down 150ms ease-out;
+}
+.animate-fade-in {
+  animation: fade-in 150ms ease-out;
+}
+.animate-fade-out {
+  animation: fade-out 150ms ease-out;
+}
+.animate-scale-in {
+  animation: scale-in 150ms ease-out;
+}
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent 25%, oklch(1 0 0 / 8%) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite linear;
+}
+.animate-pulse-ring {
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
+  /* Smooth scrolling for the app */
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family:
@@ -114,9 +314,56 @@
       Roboto,
       "Helvetica Neue",
       sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Thin, unobtrusive scrollbars for the dense editor chrome. */
+  /* Custom selection color */
+  ::selection {
+    background: oklch(0.8 0.13 86 / 30%);
+    color: var(--foreground);
+  }
+
+  /* Consistent focus-visible ring for keyboard navigation */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Focus ring for interactive elements */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius);
+  }
+
+  /* Smooth transitions for interactive elements */
+  button,
+  a,
+  [role="button"] {
+    transition:
+      color 150ms ease,
+      background-color 150ms ease,
+      border-color 150ms ease,
+      box-shadow 150ms ease,
+      opacity 150ms ease;
+  }
+
+  /* Input transitions */
+  input,
+  select,
+  textarea {
+    transition:
+      border-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  /* Thin, unobtrusive scrollbars */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -136,7 +383,24 @@
     background-clip: padding-box;
   }
 
+  /* Range input styling */
   input[type="range"] {
     accent-color: var(--gold);
   }
 }
+
+/* Reduced motion: disable animations for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* Responsive utility classes */

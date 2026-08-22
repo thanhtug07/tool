@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::db::repo::task::{Task, TaskStatus, TaskType};
 use crate::db::{utc_iso8601_now, DbError, Job, JobType, SubtitleCue};
 use crate::security::secret_store::SecretStore;
 use crate::services::dictionary_service::DictionaryService;
@@ -44,9 +45,10 @@ use crate::services::project_service::ProjectService;
 use crate::services::provider_service::ProviderService;
 use crate::services::settings_service::SettingsService;
 use crate::services::subtitle_service::{CueInput, SubtitleService};
+use crate::services::task_runner;
 use crate::services::worker_client::{
     AudioProcessRequest, ChunkedAutomationRequest, ChunkedFinalizeRequest, ExtractAudioRequest,
-    HttpError, LogoRemoveRequest, LogoRegion, RenderRequest, RenderSubtitleCue,
+    HttpError, LogoRegion, LogoRemoveRequest, RenderRequest, RenderSubtitleCue,
     RenderSubtitleStyle, SubtitleRequest, TranscribeRequest, Transcript, TranslateRequest,
     Translation, TtsCue, TtsRequest, WorkerClient,
 };
@@ -326,6 +328,12 @@ impl PipelineRunner {
                                 last_message = Some(message.clone());
                                 (ctx.log)("info", &message);
                             }
+                        }
+                        // Drain the worker's event queue — parallel chunk
+                        // pipelines enqueue multiple events per poll interval;
+                        // each must reach the frontend live log exactly once.
+                        for evt in &progress.events {
+                            (ctx.log)(&evt.level, &evt.message);
                         }
                     }
                 }
@@ -716,10 +724,12 @@ impl PipelineRunner {
                 "model": model,
                 "glossary_ver": glossary_ver,
             }),
-            || self.run_stage_retryable(&client, job, ctx, (0.1, 1.0), "translation", move || {
-                let request = request.clone();
-                move |c| c.translate(request)
-            }),
+            || {
+                self.run_stage_retryable(&client, job, ctx, (0.1, 1.0), "translation", move || {
+                    let request = request.clone();
+                    move |c| c.translate(request)
+                })
+            },
         )?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
@@ -823,17 +833,51 @@ impl PipelineRunner {
         let p = &job.params;
         let project_dir = self.project_dir(&job.project_id)?;
         // Cues come from the persisted subtitle cue table (subtitle stage ran
-        // before tts). Only well-formed, non-empty cues are spoken.
+        // before tts). Only well-formed, non-empty cues with valid timing are
+        // spoken. [H-01] Validate timestamps to prevent TTS from generating
+        // audio at wrong positions (negative times, end-before-start, or
+        // severely out-of-order cues).
         let stored = self.subtitles.list(&job.project_id).map_err(map_db)?;
+        let mut prev_end: f64 = 0.0;
+        let mut cue_warnings: Vec<String> = Vec::new();
         let cues: Vec<TtsCue> = stored
             .iter()
-            .filter(|c| c.end > c.start && !c.text.trim().is_empty())
+            .filter(|c| {
+                // Basic shape: end must exceed start and text must be non-empty.
+                if c.end <= c.start || c.text.trim().is_empty() {
+                    return false;
+                }
+                // [H-01] Reject cues with negative timestamps — these indicate
+                // corrupted subtitle data and would generate audio at invalid
+                // positions.
+                if c.start < 0.0 || c.end < 0.0 {
+                    cue_warnings.push(format!(
+                        "dropped cue {}: negative timestamp ({:.2}s–{:.2}s)",
+                        c.cue_number, c.start, c.end
+                    ));
+                    return false;
+                }
+                // [H-01] Warn on out-of-order cues (end < previous end) — not
+                // dropped because TTS can still synthesize them, but the
+                // timeline may produce overlapping speech.
+                if c.end < prev_end {
+                    cue_warnings.push(format!(
+                        "cue {}: end ({:.2}s) precedes previous end ({:.2}s) — possible overlap",
+                        c.cue_number, c.end, prev_end
+                    ));
+                }
+                prev_end = prev_end.max(c.end);
+                true
+            })
             .map(|c| TtsCue {
                 start: c.start,
                 end: c.end,
                 text: c.text.clone(),
             })
             .collect();
+        for w in &cue_warnings {
+            (ctx.log)("warn", w);
+        }
         if cues.is_empty() {
             return Err(permanent(
                 "E_ARTIFACT_MISSING",
@@ -873,21 +917,29 @@ impl PipelineRunner {
             output_dir,
             job_id: Some(job_id),
         };
-        let response =
-            profile_stage(
-                &project_dir,
-                "tts",
-                Some(cue_count),
-                serde_json::json!({
-                    "engine": engine_label,
-                    "target_language": target_language,
-                    "duration_seconds": duration_seconds,
-                }),
-                || self.run_stage_retryable(&client, job, ctx, (0.1, 1.0), "voice dubbing", move || {
-                let request = request.clone();
-                move |c| c.tts_synthesize(request)
+        let response = profile_stage(
+            &project_dir,
+            "tts",
+            Some(cue_count),
+            serde_json::json!({
+                "engine": engine_label,
+                "target_language": target_language,
+                "duration_seconds": duration_seconds,
             }),
-            )?;
+            || {
+                self.run_stage_retryable(
+                    &client,
+                    job,
+                    ctx,
+                    (0.1, 1.0),
+                    "voice dubbing",
+                    move || {
+                        let request = request.clone();
+                        move |c| c.tts_synthesize(request)
+                    },
+                )
+            },
+        )?;
         if (ctx.is_cancelled)() {
             return Err(JobRunError::Cancelled);
         }
@@ -1158,7 +1210,10 @@ impl PipelineRunner {
                 .to_string(),
             custom_x: o.get("custom_x").and_then(|v| v.as_f64()),
             custom_y: o.get("custom_y").and_then(|v| v.as_f64()),
-            language: o.get("language").and_then(|v| v.as_str()).map(str::to_string),
+            language: o
+                .get("language")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
         });
 
         let client = self.client()?;
@@ -1287,12 +1342,11 @@ impl PipelineRunner {
             .providers
             .resolve_translation(provider_param.as_deref())
             .map_err(map_db)?;
-        let target_language = param_str(p, "target_language").ok_or_else(|| {
-            permanent(
-                "E_PARAMS_INVALID",
-                "chunk job is missing `target_language`",
-            )
-        })?;
+        let target_language = param_str(p, "target_language")
+            .or_else(|| param_str(p, "targetLanguage"))
+            .ok_or_else(|| {
+                permanent("E_PARAMS_INVALID", "chunk job is missing `target_language`")
+            })?;
         let model = param_str(p, "model")
             .filter(|v| !v.trim().is_empty())
             .or_else(|| resolved.model.clone().filter(|m| !m.trim().is_empty()))
@@ -1353,12 +1407,20 @@ impl PipelineRunner {
         let max_retries = self.setting_u32("automation.chunk_retries", 2);
 
         // 4) per-request options from the run (dub / voice / burn / watermark)
-        let dub = param_str(p, "dub").map(|v| v == "true").unwrap_or(false);
+        // Read params supporting both snake_case (v1) and camelCase (v2 pipeline.submit).
+        let dub = param_str(p, "dub")
+            .or_else(|| param_str(p, "dubAudio"))
+            .map(|v| v == "true" || v == "True")
+            .or_else(|| p.get("dubAudio").and_then(|v| v.as_bool()))
+            .unwrap_or(false);
         let voice = param_str(p, "voice").filter(|v| !v.trim().is_empty());
         let engine = param_str(p, "engine")
+            .or_else(|| param_str(p, "ttsEngine"))
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "edge".to_string());
-        let source_language = param_str(p, "source_language").filter(|v| !v.trim().is_empty());
+        let source_language = param_str(p, "source_language")
+            .or_else(|| param_str(p, "sourceLanguage"))
+            .filter(|v| !v.trim().is_empty());
         let stt_model = self.setting_or(p, "model", "ai.model", "large-v3")?;
         let stt_device = self.setting_or(p, "device", "ai.device", "auto")?;
         let stt_mode = self.setting_str("automation.stt_mode", "auto");
@@ -1416,10 +1478,17 @@ impl PipelineRunner {
                 "max_retries": max_retries,
             }),
             || {
-                self.run_stage_retryable(&client, job, ctx, (0.05, 0.9), "chunked pipeline", move || {
-                    let request = request.clone();
-                    move |c| c.automation_chunked(request)
-                })
+                self.run_stage_retryable(
+                    &client,
+                    job,
+                    ctx,
+                    (0.05, 0.9),
+                    "chunked pipeline",
+                    move || {
+                        let request = request.clone();
+                        move |c| c.automation_chunked(request)
+                    },
+                )
             },
         )?;
         if (ctx.is_cancelled)() {
@@ -1460,10 +1529,19 @@ impl PipelineRunner {
             None
         };
         let voice_track_path = if dub {
+            // [H-02] Validate both existence AND non-empty: a 0-byte file from
+            // a failed PCM assembly would pass the is_file() check but produce
+            // silent output when mixed by the renderer.
             if !paths.voice_track.is_file() {
                 return Err(permanent(
                     "E_ARTIFACT_MISSING",
                     "chunked pipeline: missing `cache/voice_track.wav` from the merged assembly",
+                ));
+            }
+            if paths.voice_track.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+                return Err(permanent(
+                    "E_ARTIFACT_MISSING",
+                    "chunked pipeline: voice track file is empty (0 bytes) — TTS assembly may have failed",
                 ));
             }
             Some(paths.voice_track.display().to_string())
@@ -1479,7 +1557,10 @@ impl PipelineRunner {
                 .to_string(),
             custom_x: o.get("custom_x").and_then(|v| v.as_f64()),
             custom_y: o.get("custom_y").and_then(|v| v.as_f64()),
-            language: o.get("language").and_then(|v| v.as_str()).map(str::to_string),
+            language: o
+                .get("language")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
         });
         let output_path = paths.rendered_video.clone();
         if let Some(parent) = output_path.parent() {
@@ -1594,6 +1675,114 @@ impl JobRunner for PipelineRunner {
     }
 }
 
+/// Wraps a `JobRunner` with real project context so tasks execute with correct
+/// `project_id` and merged params (base job params + task overrides).
+pub struct PipelineTaskExecutor {
+    runner: Arc<dyn JobRunner>,
+    project_id: String,
+    base_params: Value,
+}
+
+impl PipelineTaskExecutor {
+    pub fn new(runner: Arc<dyn JobRunner>, project_id: String, base_params: Value) -> Self {
+        Self {
+            runner,
+            project_id,
+            base_params,
+        }
+    }
+}
+
+impl task_runner::TaskExecutor for PipelineTaskExecutor {
+    fn execute_task(
+        &self,
+        task: &Task,
+        cancel_check: &dyn Fn() -> bool,
+        progress_fn: &dyn Fn(f64, &str),
+        log_fn: &dyn Fn(&str, &str),
+    ) -> Result<task_runner::TaskResult, task_runner::TaskRunnerError> {
+        let ctx = JobRunContext {
+            progress: progress_fn,
+            log: log_fn,
+            is_cancelled: cancel_check,
+        };
+
+        let job_type = match task.task_type {
+            TaskType::Transcribe => JobType::Transcribe,
+            TaskType::Translate => JobType::Translate,
+            TaskType::Subtitle => JobType::Subtitle,
+            TaskType::Tts => JobType::Tts,
+            TaskType::Render => JobType::Render,
+            TaskType::Logo => JobType::Logo,
+            TaskType::Chunk => JobType::Chunk,
+            TaskType::Audio => JobType::Audio,
+        };
+
+        let mut params = self.base_params.clone();
+        if let Some(s) = &task.params_json {
+            if let Ok(v) = serde_json::from_str::<Value>(s) {
+                if let (Some(base), Some(over)) = (params.as_object_mut(), v.as_object()) {
+                    for (k, val) in over {
+                        base.insert(k.clone(), val.clone());
+                    }
+                } else if v.is_object() {
+                    params = v;
+                }
+            }
+        }
+
+        let job = Job {
+            id: task.id.clone(),
+            project_id: self.project_id.clone(),
+            job_type,
+            status: crate::db::JobStatus::Running,
+            progress: 0.0,
+            stage: task.stage.clone(),
+            params,
+            error_code: None,
+            error_message: None,
+            retry_count: 0,
+            cancel_requested: false,
+            created_at: task.created_at.clone(),
+            updated_at: task.updated_at.clone(),
+            started_at: task.started_at.clone(),
+            finished_at: None,
+            error_log: None,
+        };
+
+        match self.runner.run(&job, &ctx) {
+            Ok(()) => Ok(task_runner::TaskResult {
+                task_id: task.id.clone(),
+                status: TaskStatus::Succeeded,
+                error_code: None,
+                error_message: None,
+                result_json: None,
+            }),
+            Err(JobRunError::Transient { code, message }) => Ok(task_runner::TaskResult {
+                task_id: task.id.clone(),
+                status: TaskStatus::Failed,
+                error_code: Some(code),
+                error_message: Some(message),
+                result_json: None,
+            }),
+            Err(JobRunError::Permanent { code, message }) => Ok(task_runner::TaskResult {
+                task_id: task.id.clone(),
+                status: TaskStatus::Failed,
+                error_code: Some(code),
+                error_message: Some(message),
+                result_json: None,
+            }),
+            Err(JobRunError::Cancelled) => Ok(task_runner::TaskResult {
+                task_id: task.id.clone(),
+                status: TaskStatus::Cancelled,
+                error_code: Some("CANCELLED".to_string()),
+                error_message: Some("task cancelled".to_string()),
+                result_json: None,
+            }),
+        }
+    }
+}
+
 /// Match regenerated cues against the editor's existing rows so a pipeline
 /// re-run does not clobber user edits.
 ///
@@ -1610,7 +1799,8 @@ fn merge_subtitle_cues(existing: &[SubtitleCue], fresh: &[CueInput]) -> Vec<CueI
     let mut out: Vec<CueInput> = Vec::with_capacity(fresh.len());
     for cue in fresh {
         let matched = existing.iter().enumerate().find(|(i, e)| {
-            !used[*i] && (e.start - cue.start).abs() <= MATCH_TOLERANCE_S
+            !used[*i]
+                && (e.start - cue.start).abs() <= MATCH_TOLERANCE_S
                 && (e.end - cue.end).abs() <= MATCH_TOLERANCE_S
         });
         match matched {
@@ -1689,7 +1879,7 @@ where
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .unwrap_or_else(|| serde_json::json!({ "stages": [] }));
-    if !report.get("stages").and_then(|v| v.as_array()).is_some() {
+    if report.get("stages").and_then(|v| v.as_array()).is_none() {
         report["stages"] = serde_json::json!([]);
     }
     let stages = report["stages"].as_array_mut().expect("fresh array");
@@ -1697,7 +1887,10 @@ where
     if let Some(parent) = report_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&report_path, serde_json::to_string_pretty(&report).unwrap_or_default());
+    let _ = std::fs::write(
+        &report_path,
+        serde_json::to_string_pretty(&report).unwrap_or_default(),
+    );
     log::info!("stage {stage} completed in {elapsed_ms}ms ({outcome})");
     result
 }
@@ -1872,7 +2065,10 @@ mod tests {
 
     #[test]
     fn merge_appends_new_cues_and_drops_stale_rows() {
-        let existing = vec![cue(1, 0.91, 3.56, "A", "draft"), cue(2, 4.0, 5.0, "B", "draft")];
+        let existing = vec![
+            cue(1, 0.91, 3.56, "A", "draft"),
+            cue(2, 4.0, 5.0, "B", "draft"),
+        ];
         let fresh = vec![fresh(1, 0.90, 3.55, "A"), fresh(3, 6.0, 7.0, "C")];
         let merged = merge_subtitle_cues(&existing, &fresh);
         assert_eq!(merged.len(), 2);

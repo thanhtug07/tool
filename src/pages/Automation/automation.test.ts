@@ -440,6 +440,34 @@ describe("pipeline plan + derivation", () => {
     const stages = deriveStages(plan, jobs({ job_9999: { status: "succeeded", progress: 1 } }));
     expect(stages.every((s) => s.status === "pending")).toBe(true);
   });
+
+  it("derivePhase returns failed even when startedAt is set (stale plan)", () => {
+    // Regression: a stale plan with startedAt from a previous run must not
+    // make derivePhase return 'running' when all stages are actually failed.
+    // This was the root cause of Elapsed 1527m / ETA 29016:45.
+    let plan = initialPipelinePlan();
+    plan = markStageSubmitted(plan, "transcribe", "job_0001");
+    // Simulate stale startedAt (e.g. from a failed run 25 hours ago)
+    plan = { ...plan, startedAt: Date.now() - 25 * 60 * 60 * 1000 };
+    const stages = deriveStages(plan, jobs({ job_0001: { status: "failed", progress: 0.3 } }));
+    expect(derivePhase(stages, plan.startedAt)).toBe("failed");
+    // Must NOT be 'running' despite startedAt being non-null
+    expect(derivePhase(stages, plan.startedAt)).not.toBe("running");
+  });
+
+  it("derivePhase returns cancelled even with stale startedAt", () => {
+    let plan = initialPipelinePlan();
+    plan = markStageSubmitted(plan, "transcribe", "job_0001");
+    plan = { ...plan, startedAt: Date.now() - 999_000 };
+    const stages = deriveStages(plan, jobs({ job_0001: { status: "cancelled", progress: 0.1 } }));
+    expect(derivePhase(stages, plan.startedAt)).toBe("cancelled");
+  });
+
+  it("pipelineProgress is 0 when all stages are pending (no stale progress)", () => {
+    const plan = initialPipelinePlan();
+    const stages = deriveStages(plan, []);
+    expect(pipelineProgress(stages)).toBe(0);
+  });
 });
 
 describe("languageLabel", () => {

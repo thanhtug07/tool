@@ -19,3 +19,10 @@ export type ArtifactPaths = {
 export function getArtifactPaths(projectId: string): Promise<ArtifactPaths> {
   return safeInvoke("pipeline.artifact_paths", { projectId });
 }
+
+export function submitPipeline(
+  projectId: string,
+  params: Record<string, unknown>,
+): Promise<import("./job").Job> {
+  return safeInvoke("pipeline.submit", { projectId, params });
+}

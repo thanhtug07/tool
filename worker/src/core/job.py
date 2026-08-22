@@ -53,35 +53,76 @@ class ProcessSpawnError(Exception):
 class CancellationToken:
     """A thread-safe cancellation flag shared between the service and a job.
 
-    Besides the cancellation flag it also carries a best-effort ``progress``
-    (0..1 within the current stage) and a ``stage`` label so the Rust
-    orchestrator can poll live stage progress while a long operation runs.
-    Updates are guarded by a lock because the same token is read by the
-    ``/v1/progress`` route and written by the stage's ``on_progress`` callback
-    from different worker threads.
+    Besides the cancellation flag it also carries:
+
+    * A best-effort ``progress`` (0..1) and ``stage`` label for the Rust
+      orchestrator's progress poller.
+    * A FIFO queue of ``(level, message)`` tuples for the chunked pipeline's
+      parallel event stream (``set_event`` / ``drain_events``).
+    * A structured event log with monotonic ``event_id`` values, typed
+      ``event_type`` (progress/cancelled), optional ``chunk_index`` /
+      ``total_chunks``, and ISO-8601 timestamps — queried via
+      ``get_events_since(cursor)``.
+
+    Jitter collapsing: consecutive calls with the same *stage + message*
+    within the same ``set_progress`` invocation update the last event in
+    place rather than appending a duplicate.
     """
+
+    EVENT_BUFFER_SIZE: int = 500
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._closed = threading.Event()
         self._lock = threading.Lock()
         self._progress = 0.0
         self._stage = ""
         self._message: str | None = None
+        self._events: list[tuple[str, str]] = []  # legacy (level, msg) queue
+        # Structured event log
+        self._structured: list[dict] = []
+        self._next_event_id: int = 1
+        # Waiters that should be woken on new events / cancel / close
+        self._waiters: list[threading.Event] = []
+
+    # -- lifecycle ---------------------------------------------------------
 
     def cancel(self) -> None:
-        """Request cancellation. Idempotent."""
-        self._event.set()
+        """Request cancellation. Idempotent. Records a terminal event."""
+        with self._lock:
+            already = self._event.is_set()
+            self._event.set()
+            if not already:
+                self._append_event("cancelled", "", 0.0, message="cancelled")
+        self._wake_all()
+
+    def close(self) -> None:
+        """Mark the token as closed (graceful shutdown). Idempotent."""
+        with self._lock:
+            self._closed.set()
+        self._wake_all()
 
     def is_cancelled(self) -> bool:
         return self._event.is_set()
 
-    def set_progress(self, progress: float, stage: str = "", message: str | None = None) -> None:
+    def is_closed(self) -> bool:
+        return self._closed.is_set()
+
+    # -- progress ----------------------------------------------------------
+
+    def set_progress(
+        self,
+        progress: float,
+        stage: str = "",
+        message: str | None = None,
+        *,
+        chunk_index: int | None = None,
+        total_chunks: int | None = None,
+    ) -> None:
         """Record stage progress (clamped to 0..1) plus optional labels.
 
-        ``message`` carries a short human-readable detail line (e.g. ``segment
-        81/127``, ``63% encoded``) that the Rust orchestrator forwards to the
-        frontend live log. It is always derived from real stage state — never
-        fabricated numbers.
+        ``chunk_index`` / ``total_chunks`` are forwarded to the structured
+        event log so the frontend can render per-chunk progress bars.
         """
         with self._lock:
             self._progress = max(0.0, min(1.0, float(progress)))
@@ -89,11 +130,132 @@ class CancellationToken:
                 self._stage = stage
             if message is not None:
                 self._message = message
+            self._append_event(
+                "progress",
+                stage or self._stage,
+                self._progress,
+                message=message,
+                chunk_index=chunk_index,
+                total_chunks=total_chunks,
+            )
 
     def get_progress(self) -> tuple[float, str, str | None]:
         """Return ``(progress, stage, message)`` as last reported."""
         with self._lock:
             return self._progress, self._stage, self._message
+
+    # -- structured event log ----------------------------------------------
+
+    def _append_event(
+        self,
+        event_type: str,
+        stage: str,
+        progress: float,
+        message: str | None = None,
+        chunk_index: int | None = None,
+        total_chunks: int | None = None,
+    ) -> None:
+        """Append a structured event (caller must hold ``_lock``)."""
+        # Normalize message for comparison (None and "" are equivalent).
+        norm_msg = message or ""
+        # Jitter collapsing: if the last event has the same stage+message,
+        # update it in place rather than appending.
+        if (
+            event_type == "progress"
+            and self._structured
+            and self._structured[-1]["event_type"] == "progress"
+            and self._structured[-1]["stage"] == stage
+            and self._structured[-1]["message"] == norm_msg
+        ):
+            self._structured[-1]["progress"] = progress
+            return
+        eid = self._next_event_id
+        self._next_event_id += 1
+        self._structured.append({
+            "event_id": eid,
+            "event_type": event_type,
+            "stage": stage,
+            "progress": progress,
+            "message": norm_msg,
+            "chunk_index": chunk_index,
+            "total_chunks": total_chunks,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+        })
+        # Enforce buffer size
+        if len(self._structured) > self.EVENT_BUFFER_SIZE:
+            self._structured = self._structured[-self.EVENT_BUFFER_SIZE :]
+
+    def get_events_since(self, cursor: int) -> list[dict]:
+        """Return structured events with ``event_id > cursor``.
+
+        ``cursor`` is the ``event_id`` of the last event the caller has
+        already seen.  Returns an empty list when there are no new events.
+        """
+        with self._lock:
+            return [e for e in self._structured if e["event_id"] > cursor]
+
+    def last_event_id(self) -> int:
+        """Highest ``event_id`` currently in the log (0 if empty)."""
+        with self._lock:
+            if not self._structured:
+                return 0
+            return self._structured[-1]["event_id"]
+
+    # -- wait / wakeup -----------------------------------------------------
+
+    def wait_for_event(self, timeout: float | None = None) -> bool:
+        """Block until a new event is recorded, cancelled, or closed.
+
+        Returns ``True`` if woken (event / cancel / close), ``False`` on
+        timeout.
+        """
+        evt = threading.Event()
+        with self._lock:
+            self._waiters.append(evt)
+        try:
+            return evt.wait(timeout=timeout)
+        finally:
+            with self._lock:
+                try:
+                    self._waiters.remove(evt)
+                except ValueError:
+                    pass
+
+    def _wake_all(self) -> None:
+        """Wake all threads blocked in ``wait_for_event``.
+
+        Copies the waiter list under the lock then signals outside it to
+        avoid holding the lock while唤醒 potentially re-registering threads.
+        """
+        with self._lock:
+            waiters = self._waiters[:]
+        for w in waiters:
+            w.set()
+
+    # -- legacy chunked-pipeline event queue -------------------------------
+
+    def set_event(self, level: str, message: str) -> None:
+        """Enqueue a log event for the chunked pipeline's parallel event stream.
+
+        Unlike ``set_progress`` which overwrites the single ``_message``,
+        events accumulate in a FIFO queue so the Rust poller can drain them
+        all without losing intermediate chunk-started / chunk-assembled lines.
+        """
+        with self._lock:
+            self._events.append((level, message))
+        self._wake_all()
+
+    def drain_events(self) -> list[tuple[str, str]]:
+        """Return and clear all pending events (thread-safe).
+
+        The Rust ``/v1/progress`` poller calls this to collect every event
+        that was enqueued since the last drain.  Returns an empty list when
+        no new events are pending.
+        """
+        with self._lock:
+            events = self._events[:]
+            self._events.clear()
+            return events
 
 
 def run_process(

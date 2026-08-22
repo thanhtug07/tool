@@ -45,6 +45,7 @@ pub const SETTINGS_KEYS: &[&str] = &[
     "automation.chunk_retries",
     "automation.stt_mode",
     "automation.stt_batch_size",
+    "automation.orchestrator_v2",
 ];
 
 /// Built-in defaults for keys that have never been written.
@@ -69,6 +70,7 @@ fn defaults() -> BTreeMap<&'static str, String> {
     map.insert("automation.chunk_retries", "2".to_string());
     map.insert("automation.stt_mode", "auto".to_string());
     map.insert("automation.stt_batch_size", "2".to_string());
+    map.insert("automation.orchestrator_v2", "false".to_string());
     map
 }
 
@@ -172,6 +174,13 @@ pub fn validate_setting(key: &str, value: &str) -> Result<String, DbError> {
             if !matches!(v, 1 | 2 | 4) {
                 return Err(DbError::InvalidInput(
                     "automation.stt_batch_size must be one of 1/2/4".into(),
+                ));
+            }
+        }
+        "automation.orchestrator_v2" => {
+            if !matches!(value, "true" | "false") {
+                return Err(DbError::InvalidInput(
+                    "automation.orchestrator_v2 must be true or false".into(),
                 ));
             }
         }

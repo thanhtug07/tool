@@ -9,3 +9,4 @@ pub mod glossary;
 pub mod job;
 pub mod project;
 pub mod subtitle;
+pub mod task;

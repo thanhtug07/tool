@@ -28,6 +28,7 @@ use services::project_service::ProjectService;
 use services::provider_service::ProviderService;
 use services::settings_service::SettingsService;
 use services::subtitle_service::SubtitleService;
+use services::task_runner::{TaskEvent, TaskEventSink};
 use services::worker_manager::{WorkerManager, WorkerManagerConfig};
 
 /// Forwards `JobEvent`s to the frontend as Tauri events (`job:status`,
@@ -41,6 +42,20 @@ impl JobEventSink for AppEventSink {
         let _ = match event {
             JobEvent::Status(payload) => self.app.emit("job:status", payload),
             JobEvent::Log(payload) => self.app.emit("job:log", payload),
+        };
+    }
+}
+
+struct AppTaskSink {
+    app: tauri::AppHandle,
+}
+
+impl TaskEventSink for AppTaskSink {
+    fn emit(&self, event: TaskEvent) {
+        let _ = match event {
+            TaskEvent::Status(p) => self.app.emit("task:status", p),
+            TaskEvent::Progress(p) => self.app.emit("task:progress", p),
+            TaskEvent::Log(p) => self.app.emit("task:log", p),
         };
     }
 }
@@ -76,6 +91,9 @@ pub fn run() {
             commands::job::list_all,
             commands::job::cancel,
             commands::job::retry,
+            commands::task::task_list,
+            commands::task::task_get,
+            commands::pipeline::pipeline_submit,
             commands::dictionary::glossary_list,
             commands::dictionary::glossary_upsert,
             commands::dictionary::glossary_delete,
@@ -161,7 +179,7 @@ pub fn run() {
             // connections). RELEASE-P0-003 wires the real pipeline executor:
             // each job type dispatches to the Python worker stages through the
             // loopback HTTP API, with per-project artifacts.
-            app.manage(JobService::open(
+            let job_service = JobService::open(
                 data_dir.clone(),
                 Arc::new(PipelineRunner::new(
                     Arc::new(app.state::<WorkerManager>().inner().clone()),
@@ -176,7 +194,11 @@ pub fn run() {
                     app: app.handle().clone(),
                 }),
                 JobServiceConfig::default(),
-            ));
+            );
+            job_service.set_task_sink(Arc::new(AppTaskSink {
+                app: app.handle().clone(),
+            }));
+            app.manage(job_service);
 
             app.manage(projects);
             app.manage(settings);

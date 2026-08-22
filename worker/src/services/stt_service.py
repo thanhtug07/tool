@@ -283,6 +283,29 @@ def _load_whisper_model(
             raise STTError(E_STT_FAILED, "Failed to load the STT model.") from exc
 
 
+def gpu_worker_budget(device: str, vram_mb: float | None = None, requested_workers: int = 4) -> int:
+    """Return a safe number of STT workers based on GPU VRAM.
+
+    On CPU the full ``requested_workers`` budget is returned.  On CUDA the
+    budget is capped so that multiple workers don't exceed VRAM:
+
+    - >=8 GB  -> up to 2 workers (safe for large-v3 batched)
+    - >=4 GB  -> 1 worker (tight but workable)
+    - <4 GB   -> fall back to CPU (1 worker)
+
+    Returns at least 1 so the pipeline never stalls.
+    """
+    if device != "cuda":
+        return max(1, requested_workers)
+    if vram_mb is None:
+        return 1  # conservative when VRAM unknown
+    if vram_mb >= 8000:
+        return min(requested_workers, 2)
+    if vram_mb >= 4000:
+        return 1
+    return 1  # low VRAM -- single worker, caller should prefer CPU
+
+
 def resolve_stt_mode(
     requested: str,
     *,
@@ -311,9 +334,9 @@ def resolve_stt_mode(
         return STT_MODE_BATCHED, "explicit batched"
     # --- auto --------------------------------------------------------------
     if device != "cuda":
-        return STT_MODE_REGULAR, f"auto → regular (device={device} not cuda)"
+        return STT_MODE_REGULAR, f"auto -> regular (device={device} not cuda)"
     if vram_mb is None:
-        return STT_MODE_REGULAR, "auto → regular (free VRAM unknown)"
+        return STT_MODE_REGULAR, "auto -> regular (free VRAM unknown)"
     required = MODEL_VRAM_REQUIREMENTS_MB.get(
         model_name, MODEL_VRAM_REQUIREMENTS_MB["large-v3"]
     )
@@ -321,9 +344,9 @@ def resolve_stt_mode(
     if vram_mb < headroom:
         return (
             STT_MODE_REGULAR,
-            f"auto → regular (VRAM {vram_mb:.0f}MB < required {required:.0f}MB + margin {BATCHED_VRAM_MARGIN_MB:.0f}MB)",
+            f"auto -> regular (VRAM {vram_mb:.0f}MB < required {required:.0f}MB + margin {BATCHED_VRAM_MARGIN_MB:.0f}MB)",
         )
-    return STT_MODE_BATCHED, "auto → batched (cuda + VRAM safe)"
+    return STT_MODE_BATCHED, "auto -> batched (cuda + VRAM safe)"
 
 
 def validate_segment_timestamps(

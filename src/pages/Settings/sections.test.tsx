@@ -20,6 +20,7 @@ const SETTINGS: SettingsSnapshot = {
   "privacy.telemetry": false,
   "tts.engine": "edge",
   "tts.voice": "vi-VN-HoaiMyNeural",
+  "automation.orchestrator_v2": false,
 };
 
 describe("ProcessingSection", () => {
@@ -34,6 +35,7 @@ describe("ProcessingSection", () => {
         onSaveGpu={() => {}}
         onRestartWorker={() => {}}
         restarting={false}
+        onSaveOrchestrator={() => {}}
       />,
     );
     expect(html).toContain("STT model");

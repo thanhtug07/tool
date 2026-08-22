@@ -11,7 +11,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
-use crate::db::DbError;
+use crate::db::{DbError, Job};
+use crate::services::job_service::JobService;
 use crate::services::pipeline_runner::artifact_paths;
 use crate::services::project_service::ProjectService;
 
@@ -46,6 +47,18 @@ pub fn artifact_paths_command(
         subtitle_ass: paths.subtitle_ass.display().to_string(),
         rendered_video: paths.rendered_video.display().to_string(),
     })
+}
+
+/// `pipeline.submit(project_id, params) → Job` (orchestrator v2, Rust owns DAG)
+#[tauri::command(rename = "pipeline.submit")]
+pub fn pipeline_submit(
+    job_service: State<'_, JobService>,
+    project_id: String,
+    params: serde_json::Value,
+) -> Result<Job, String> {
+    job_service
+        .submit_pipeline(&project_id, params)
+        .map_err(|e| e.to_string())
 }
 
 fn err_to_string(e: DbError) -> String {
