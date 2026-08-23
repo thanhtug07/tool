@@ -1,7 +1,7 @@
-"""Media & Artifact Serving Routes (Phase 9 & 10).
+"""Media & Artifact Serving Routes.
 
 Provides range-request capable file serving for videos, audio tracks, and previews,
-replacing raw OS file paths and Tauri asset protocol with backend HTTP URLs.
+plus ffprobe metadata, replacing raw OS file paths with backend HTTP URLs.
 """
 
 import logging
@@ -11,25 +11,73 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Header, status
 from fastapi.responses import FileResponse, StreamingResponse
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
-@router.get("/stream")
-def stream_media(path: str, range_header: Optional[str] = Header(None, alias="Range")):
-    """Stream a local media file with HTTP 206 Partial Content range support for video/audio seeking.
 
-    The worker runs on localhost only (127.0.0.1) so arbitrary path access is
-    acceptable - there is no remote attack surface.
+def _resolve_media_path(raw: str) -> Path:
+    """Resolve a media path that may be relative, a bare filename, or absolute.
+
+    Search order:
+    1. If the path is absolute and exists -> return it
+    2. If the path is relative, try CWD first
+    3. Try common video locations (Downloads, Documents, Desktop, D:\, etc.)
     """
-    file_path = Path(path).resolve()
+    p = Path(raw)
 
-    if not file_path.exists() or not file_path.is_file():
+    # Already absolute and exists
+    if p.is_absolute() and p.is_file():
+        return p
+
+    # Try CWD
+    cwd_resolved = Path.cwd() / p
+    if cwd_resolved.is_file():
+        return cwd_resolved
+
+    # Try common locations
+    home = Path.home()
+    search_roots = [
+        home / "Downloads",
+        home / "Documents",
+        home / "Desktop",
+        Path("D:\\"),
+        Path("E:\\"),
+        Path("C:\\"),
+    ]
+    for root in search_roots:
+        if not root.exists():
+            continue
+        candidate = root / p
+        if candidate.is_file():
+            return candidate
+        for match in root.glob("**/" + p.name):
+            if match.is_file():
+                return match
+
+    # Not found - return resolved so caller gets a clean 404
+    return p.resolve()
+
+
+def _check_file(file_path: Path, raw: str) -> None:
+    """Raise 404 if the resolved path is not a file."""
+    if not file_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Media file not found: {path}",
+            detail=f"Media file not found: {raw} (resolved: {file_path})",
         )
+
+
+# ---------------------------------------------------------------------------
+# Stream endpoint (HTTP 206 range support for video seeking)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/stream")
+def stream_media(path: str, range_header: Optional[str] = Header(None, alias="Range")):
+    """Stream a local media file with HTTP 206 Partial Content range support."""
+    file_path = _resolve_media_path(path)
+    _check_file(file_path, path)
 
     file_size = file_path.stat().st_size
     content_type = "video/mp4"
@@ -89,23 +137,19 @@ def stream_media(path: str, range_header: Optional[str] = Header(None, alias="Ra
         return FileResponse(file_path, media_type=content_type)
 
 
+# ---------------------------------------------------------------------------
+# Probe endpoint (ffprobe metadata)
+# ---------------------------------------------------------------------------
+
 
 @router.get("/probe")
 def probe_media(path: str) -> dict:
-    """Run ffprobe on a local media file and return structured metadata.
-
-    Returns the same shape the frontend MediaProbe type expects:
-    duration, width, height, fps, audioTracks, videoCodec, container.
-    """
+    """Run ffprobe on a local media file and return structured metadata."""
     import json as _json
     import subprocess
 
-    file_path = Path(path).resolve()
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Media file not found: {path}",
-        )
+    file_path = _resolve_media_path(path)
+    _check_file(file_path, path)
 
     try:
         result = subprocess.run(
