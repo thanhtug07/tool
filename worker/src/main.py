@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from src import __version__
 from src.api.pipeline import router as pipeline_router
 from src.api.project_routes import router as project_router
+from src.api.provider_routes import router as provider_router
 from src.api.settings_routes import router as settings_router
 from src.api.routes import configure_auth_token, router
 from src.core.cuda_libs import ensure_cuda_libraries
@@ -163,6 +164,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(pipeline_router)
     app.include_router(project_router)
+    app.include_router(provider_router)
     app.include_router(settings_router)
     app.include_router(web_router)
     app.include_router(media_router)
