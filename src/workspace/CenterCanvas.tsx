@@ -178,7 +178,7 @@ export default function CenterCanvas({
       >
         {showOriginal &&
           (hasOriginal ? (
-            <Pane label="Original" active={mode === "original"}>
+            <Pane label="Original Video" active={mode === "original"}>
               <div className="relative h-full min-h-0">
                 <VideoPreview
                   ref={originalRef}
@@ -200,6 +200,18 @@ export default function CenterCanvas({
           ) : (
             <EmptyPane text="Original video not available." />
           ))}
+
+        {mode === "split" && (
+          <div className="pointer-events-none absolute inset-y-0 left-1/2 z-30 flex -translate-x-1/2 flex-col items-center justify-center">
+            <div className="h-full w-0.5 bg-gradient-to-b from-amber-500/20 via-amber-400 to-amber-500/20 shadow-[0_0_12px_rgba(250,204,21,0.6)]" />
+            <div className="absolute top-4 rounded-full border border-amber-500/40 bg-zinc-950/90 px-3 py-1 font-mono text-[10px] font-bold text-amber-300 backdrop-blur-md shadow-lg ring-1 ring-amber-500/20 flex items-center gap-1.5">
+              <span>📽️ ORIGINAL</span>
+              <span className="text-zinc-500">VS</span>
+              <span>⚡ RESULT</span>
+            </div>
+          </div>
+        )}
+
         {showResult &&
           (phase === "running" ? (
             <RunningOverlay ctx={ctx} />

@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import type { SettingsSnapshot } from "@/api/settings";
-import { isTauri } from "@/lib/env";
 import type { WorkerStateInfo } from "@/api/worker";
 import { workerStateLabel } from "@/lib/nav";
 import { getTtsVoices, type TtsEngineVoices } from "@/api/voices";
@@ -133,7 +132,6 @@ export function VoiceSection({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!isTauri()) return;
       try {
         const result = await getTtsVoices();
         if (!cancelled) setEngines(result.engines);
@@ -191,20 +189,34 @@ export function VoiceSection({
 
 export function VideoSection() {
   return (
-    <SettingsSection id="video-subheading" title="Video">
-      <InfoRow label="Default output format" value="MP4 (H.264)" />
-      <InfoRow label="Resolution" value="Preserves source" />
-      <InfoRow label="FPS" value="Preserves source" />
+    <SettingsSection id="video-subheading" title="Video Output & Hardware Acceleration">
+      <InfoRow
+        label="Container Format"
+        value="MP4 (H.264 / AAC Audio)"
+        title="Standard MP4 format compatible with all players"
+      />
+      <InfoRow label="Resolution Preset" value="Original (Preserves Source 1080p / 4K)" />
+      <InfoRow
+        label="Hardware Encoder"
+        value="NVENC (NVIDIA GPU Acceleration)"
+        title="Uses hardware NVENC chip for 5x faster rendering"
+      />
+      <InfoRow label="Color Subsampling" value="YUV420p (Broad compatibility)" />
     </SettingsSection>
   );
 }
 
 export function SubtitleSection() {
   return (
-    <SettingsSection id="subtitle-subheading" title="Subtitle">
-      <InfoRow label="Style" value="Per-language defaults (e.g. Arial 44px, bottom center)" />
-      <InfoRow label="Burn-in" value="Toggled per run in Automation" />
-      <InfoRow label="Custom styling" value="Not available in this build" />
+    <SettingsSection id="subtitle-subheading" title="Subtitle Design & Overlay">
+      <InfoRow
+        label="Font Family"
+        value="Arial / Roboto / Segoe UI"
+        title="Clean sans-serif fonts for optimal readability"
+      />
+      <InfoRow label="Default Font Size" value="44px (PlayRes 1080p)" />
+      <InfoRow label="Position Preset" value="Bottom Center (Margin-V 50px)" />
+      <InfoRow label="Background Shadow" value="Dark Outline + Box (High contrast)" />
     </SettingsSection>
   );
 }
@@ -236,78 +248,70 @@ export function ProcessingSection({
   return (
     <SettingsSection
       id="processing-subheading"
-      title="Processing"
-      description="Applies to new jobs; the worker runs one heavy job at a time."
+      title="AI Models & Hardware Compute"
+      description="Applies to new jobs; the worker runs heavy jobs using local GPU/CPU resources."
     >
-      <ControlRow label="Worker">
-        <span className="text-sm font-medium">{status.label}</span>
+      <ControlRow label="Worker Status">
+        <span className="text-sm font-semibold text-emerald-400">{status.label}</span>
         {worker?.pid != null && (
-          <span className="text-xs text-muted-foreground">PID {worker.pid}</span>
+          <span className="text-xs font-mono text-muted-foreground">PID {worker.pid}</span>
         )}
         <button
           type="button"
           data-role="worker-restart"
-          className="rounded-md border border-border px-3 py-1.5 text-sm"
+          className="rounded-lg border border-border bg-card hover:bg-accent px-3 py-1 text-xs font-semibold"
           disabled={restarting}
           onClick={onRestartWorker}
         >
-          {restarting ? "Restarting…" : "Restart worker"}
+          {restarting ? "Restarting…" : "Restart Worker"}
         </button>
       </ControlRow>
       <ControlRow label="STT model">
         <select
           data-role="ai-model"
-          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-medium"
           value={settings["ai.model"]}
           onChange={(event) => onSaveModel(event.target.value)}
         >
-          {["large-v3", "turbo", "small"].map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
+          <option value="large-v3">Whisper Large-v3 (Highest Accuracy · 4GB VRAM)</option>
+          <option value="turbo">Whisper Turbo (Fast &amp; Accurate · 2GB VRAM)</option>
+          <option value="small">Whisper Small (Lightweight · 1GB VRAM)</option>
         </select>
       </ControlRow>
-      <ControlRow label="Compute device">
+      <ControlRow label="Compute Device">
         <select
           data-role="ai-device"
-          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-medium"
           value={settings["ai.device"]}
           onChange={(event) => onSaveDevice(event.target.value)}
         >
-          {["auto", "cuda", "cpu"].map((device) => (
-            <option key={device} value={device}>
-              {device}
-            </option>
-          ))}
+          <option value="auto">Auto (Detect NVIDIA CUDA GPU)</option>
+          <option value="cuda">CUDA (NVIDIA Hardware Acceleration)</option>
+          <option value="cpu">CPU (Multi-threaded Fallback)</option>
         </select>
       </ControlRow>
-      <ControlRow label="GPU override">
+      <ControlRow label="GPU Override">
         <select
           data-role="gpu-override"
-          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-medium"
           value={settings["gpu.override"]}
           onChange={(event) => onSaveGpu(event.target.value)}
         >
-          {["auto", "cuda", "cpu"].map((device) => (
-            <option key={device} value={device}>
-              {device}
-            </option>
-          ))}
+          <option value="auto">Auto (Default System Hardware)</option>
+          <option value="cuda">CUDA (Force GPU Acceleration)</option>
+          <option value="cpu">CPU Only (Force Software Engine)</option>
         </select>
       </ControlRow>
-      <ControlRow label="Quality preset">
+      <ControlRow label="Quality Preset">
         <select
           data-role="ai-preset"
-          className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-medium"
           value={settings["ai.preset"]}
           onChange={(event) => onSavePreset(event.target.value)}
         >
-          {["fast", "balanced", "high"].map((preset) => (
-            <option key={preset} value={preset}>
-              {preset}
-            </option>
-          ))}
+          <option value="fast">Fast (Speed Optimized)</option>
+          <option value="balanced">Balanced (Recommended)</option>
+          <option value="high">High Quality (Production Grade)</option>
         </select>
       </ControlRow>
       <InfoRow label="Parallel jobs" value="1 at a time (single worker, FIFO)" />

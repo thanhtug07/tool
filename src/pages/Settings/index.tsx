@@ -16,7 +16,6 @@ import { getSettings, setSetting, type SettingsKey, type SettingsSnapshot } from
 import { useToast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
-import { isTauri } from "@/lib/env";
 import { useWorker, restartWorker as restartWorkerStore } from "@/stores/worker";
 import {
   GeneralSection,
@@ -85,7 +84,6 @@ export default function SettingsPage({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!isTauri()) return;
       try {
         const snapshot = await getSettings();
         if (!cancelled) setSettings(snapshot);

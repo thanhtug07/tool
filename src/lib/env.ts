@@ -1,5 +1,6 @@
 /**
- * Always returns false in web-only mode (Vite localhost environment).
+ * Web-only mode — no desktop IPC.
+ * Always returns false (Tauri has been removed).
  */
 export function isTauri(): boolean {
   return false;

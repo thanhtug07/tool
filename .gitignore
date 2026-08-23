@@ -26,8 +26,6 @@ build/
 target/
 worker-dist/
 worker-dist-build.log
-src-tauri/gen/
-src-tauri/target/
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -62,7 +60,6 @@ vendor/llama/
 .ohmyagent/
 .kimchi/
 pnpm-lock.yaml
-src-tauri/_patch_*.py
 
 # Test fixtures (generated media, not committed)
 test_assets/

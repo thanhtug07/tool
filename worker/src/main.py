@@ -23,6 +23,8 @@ from fastapi import FastAPI
 
 from src import __version__
 from src.api.pipeline import router as pipeline_router
+from src.api.project_routes import router as project_router
+from src.api.settings_routes import router as settings_router
 from src.api.routes import configure_auth_token, router
 from src.core.cuda_libs import ensure_cuda_libraries
 from src.core.logging import setup_logging
@@ -114,6 +116,18 @@ def _start_stdin_watcher(server: uvicorn.Server) -> None:
 def _make_lifespan():
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # Automatically run SQLite schema migrations (v1..v9) on startup
+        from src.db.connection import get_connection  # noqa: PLC0415
+        from src.db.migrations import run_migrations  # noqa: PLC0415
+        try:
+            conn = get_connection()
+            try:
+                run_migrations(conn)
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.error("Failed to run SQLite database migrations on startup: %s", exc)
+
         _announce_ready(_session_token)
         yield
 
@@ -121,14 +135,37 @@ def _make_lifespan():
 
 
 def create_app() -> FastAPI:
-    """Build the FastAPI application (no CORS, loopback-only service)."""
+    """Build the FastAPI application (includes legacy routes + web foundation)."""
     app = FastAPI(
-        title="AI Video Localization Worker",
+        title="AI Video Localization Studio Backend",
         version=__version__,
         lifespan=_make_lifespan(),
     )
+
+    # Enable CORS for local web development
+    from fastapi.middleware.cors import CORSMiddleware  # noqa: PLC0415
+    from src.api.web_routes import router as web_router  # noqa: PLC0415
+    from src.api.media_routes import router as media_router  # noqa: PLC0415
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:1420",
+            "http://127.0.0.1:1420",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.include_router(router)
     app.include_router(pipeline_router)
+    app.include_router(project_router)
+    app.include_router(settings_router)
+    app.include_router(web_router)
+    app.include_router(media_router)
     return app
 
 

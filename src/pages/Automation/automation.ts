@@ -3,26 +3,28 @@ import type { WatermarkConfig } from "@/components/WatermarkConfig";
 
 /** Real source-language options (worker accepts any ISO-2 code; auto = detect). */
 export const SOURCE_LANGUAGES = [
-  { code: "", label: "Auto Detect" },
-  { code: "zh", label: "Chinese" },
-  { code: "en", label: "English" },
-  { code: "ja", label: "Japanese" },
-  { code: "ko", label: "Korean" },
-  { code: "vi", label: "Vietnamese" },
+  { code: "", label: "Auto Detect (Tự động nhận diện)" },
+  { code: "zh", label: "Chinese (Mandarin - 中文)" },
+  { code: "en", label: "English (US / Global)" },
+  { code: "ja", label: "Japanese (Nihongo - 日本語)" },
+  { code: "ko", label: "Korean (Hangul - 한국어)" },
+  { code: "vi", label: "Vietnamese (Tiếng Việt)" },
 ] as const;
 
 /** Real target-language options (translation provider translates to any code). */
 export const TARGET_LANGUAGES = [
-  { code: "vi", label: "Vietnamese" },
-  { code: "en", label: "English" },
-  { code: "zh", label: "Chinese" },
-  { code: "ja", label: "Japanese" },
-  { code: "ko", label: "Korean" },
+  { code: "vi", label: "Vietnamese (Tiếng Việt)" },
+  { code: "en", label: "English (US / Global)" },
+  { code: "zh", label: "Chinese (Mandarin - 中文)" },
+  { code: "ja", label: "Japanese (Nihongo - 日本語)" },
+  { code: "ko", label: "Korean (Hangul - 한국어)" },
 ] as const;
 
 export function languageLabel(code: string): string {
   const all = [...SOURCE_LANGUAGES, ...TARGET_LANGUAGES];
-  return all.find((l) => l.code === code)?.label ?? code;
+  const label = all.find((l) => l.code === code)?.label ?? code;
+  // Return simple English label without parentheses for UI consistency
+  return label.replace(/\s*\(.*\)$/, "");
 }
 
 /** Ordered pipeline stages (job types the backend actually runs). */

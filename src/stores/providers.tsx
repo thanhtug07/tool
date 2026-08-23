@@ -9,7 +9,6 @@ import {
 } from "react";
 
 import { listProviders, type ProviderCapability, type ProviderView } from "@/api/provider";
-import { isTauri } from "@/lib/env";
 
 export type ProvidersContextValue = {
   /** Every registered provider (enabled + disabled), FREE first. */
@@ -112,7 +111,6 @@ export function ProvidersProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!isTauri()) return;
     try {
       const data = await listProviders();
       setProviders(data.providers);

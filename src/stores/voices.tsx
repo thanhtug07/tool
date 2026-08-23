@@ -11,7 +11,6 @@ import {
 
 import { getTtsVoices, ttsPreview } from "@/api/voices";
 import { toMediaUrl } from "@/api/media";
-import { isTauri } from "@/lib/env";
 import {
   EMPTY_VOICE_FILTERS,
   filterOptions,
@@ -85,7 +84,6 @@ export function VoicesProvider({ children }: { children: ReactNode }) {
   const [recent, setRecent] = useState<string[]>(() => readList(RECENT_KEY));
 
   const reload = useCallback(async () => {
-    if (!isTauri()) return;
     try {
       const result = await getTtsVoices();
       setEngines(result.engines);
