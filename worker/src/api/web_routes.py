@@ -7,6 +7,7 @@ Exposes minimal, read-only foundation endpoints:
 """
 
 import logging
+import os
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -238,3 +239,79 @@ def get_job(job_id: str) -> JobWithTasksModel:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get job {job_id}",
         ) from exc
+
+
+
+@router.get("/system/hardware")
+def system_hardware() -> dict:
+    """Hardware profile: GPU, RAM, FFmpeg encoders."""
+    import subprocess
+    import os
+
+    gpu_name = None
+    gpu_vendor = None
+    vram_mb = None
+
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            parts = r.stdout.strip().split(",")
+            gpu_name = parts[0].strip()
+            gpu_vendor = "nvidia"
+            vram_mb = int(parts[1].strip()) if len(parts) > 1 else None
+    except Exception:
+        pass
+
+    # RAM
+    ram_mb = 0
+    try:
+        import psutil
+        ram_mb = psutil.virtual_memory().total // (1024 * 1024)
+    except ImportError:
+        try:
+            r = subprocess.run(["wmic", "os", "get", "TotalVisibleMemorySize"],
+                             capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    ram_mb = int(line) // 1024
+                    break
+        except Exception:
+            pass
+
+    # FFmpeg encoders
+    ffmpeg_encoders = []
+    try:
+        r = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, timeout=5)
+        for line in r.stdout.splitlines():
+            for enc in ("nvenc", "qsv", "amf", "libx264", "libx265"):
+                if enc in line.lower():
+                    ffmpeg_encoders.append(enc)
+        ffmpeg_encoders = sorted(set(ffmpeg_encoders))
+    except Exception:
+        pass
+
+    return {
+        "gpu_vendor": gpu_vendor,
+        "gpu_name": gpu_name,
+        "vram_mb": vram_mb,
+        "ram_mb": ram_mb,
+        "ffmpeg_encoders": ffmpeg_encoders,
+    }
+
+
+@router.get("/worker/state")
+def worker_state() -> dict:
+    """Worker lifecycle state - always 'ready' when the HTTP server responds."""
+    return {
+        "state": "ready",
+        "pid": os.getpid(),
+        "port": 8765,
+        "restarts": 0,
+        "last_error": None,
+    }
+
+
