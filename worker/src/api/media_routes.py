@@ -87,3 +87,93 @@ def stream_media(path: str, range_header: Optional[str] = Header(None, alias="Ra
     except Exception as exc:
         logger.error("Failed to parse Range header or stream file %s: %s", path, exc)
         return FileResponse(file_path, media_type=content_type)
+
+
+
+@router.get("/probe")
+def probe_media(path: str) -> dict:
+    """Run ffprobe on a local media file and return structured metadata.
+
+    Returns the same shape the frontend MediaProbe type expects:
+    duration, width, height, fps, audioTracks, videoCodec, container.
+    """
+    import json as _json
+    import subprocess
+
+    file_path = Path(path).resolve()
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Media file not found: {path}",
+        )
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                "-show_streams",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"ffprobe failed: {result.stderr[:200]}",
+            )
+        data = _json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ffprobe timed out",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"ffprobe error: {exc}",
+        )
+
+    fmt = data.get("format", {})
+    streams = data.get("streams", [])
+
+    duration = float(fmt.get("duration", 0))
+    container = fmt.get("format_name")
+
+    video_streams = [s for s in streams if s.get("codec_type") == "video"]
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+
+    width = video_streams[0].get("width") if video_streams else None
+    height = video_streams[0].get("height") if video_streams else None
+    video_codec = video_streams[0].get("codec_name") if video_streams else None
+
+    fps = None
+    if video_streams:
+        r_frame_rate = video_streams[0].get("r_frame_rate", "0/1")
+        if "/" in r_frame_rate:
+            num, den = r_frame_rate.split("/", 1)
+            try:
+                fps = round(int(num) / int(den), 2) if int(den) else None
+            except (ValueError, ZeroDivisionError):
+                fps = None
+        else:
+            try:
+                fps = float(r_frame_rate)
+            except ValueError:
+                fps = None
+
+    return {
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "audioTracks": len(audio_streams),
+        "videoCodec": video_codec,
+        "container": container,
+    }
